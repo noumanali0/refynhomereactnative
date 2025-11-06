@@ -143,24 +143,6 @@ export default function LiveOffersScreen() {
     //     return () => clearInterval(interval);
     // }, [acceptedOffer, userLocation]);
 
-    useEffect(() => {
-        const updateLiveRoute = async () => {
-            if (!acceptedOffer || !userLocation) return;
-
-            const newRoute = await fetchRoute(userLocation, acceptedOffer.coordinates);
-            setRouteCoords(newRoute);
-
-            mapRef.current?.fitToCoordinates(newRoute, {
-                edgePadding: { top: 100, right: 100, bottom: 400, left: 100 },
-                animated: true,
-            });
-        };
-
-        updateLiveRoute();
-    }, [acceptedOffer?.coordinates, userLocation]);
-
-
-
     /** 🎯 On Mount — Fetch Location */
     useEffect(() => {
         getUserLocation();
