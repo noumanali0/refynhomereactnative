@@ -9,7 +9,8 @@ export default function MyBookings() {
   const { vendors } = useAppSelector((state) => state.vendor);
   const { user } = useAppSelector((state) => state.auth);
 
-  const myBookings = bookings.filter((b) => b.customerId === user?.id);
+  const myBookings = bookings;
+  // const myBookings = bookings.filter((b) => b.customerId === user?.id);
 
   const getVendorName = (vendorId: string) => {
     return vendors.find((v) => v.id === vendorId)?.name || 'Unknown Vendor';

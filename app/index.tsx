@@ -10,14 +10,28 @@ export default function Index() {
   useEffect(() => {
     setTimeout(() => {
       if (!isAuthenticated) {
-        router.replace('/auth/otp-login' as any);
+        router.replace("/customer/create");
+        // router.replace('/auth/otp-login');
       } else if (user?.role === 'customer') {
-        router.replace('/customer/home' as any);
+        router.replace('/customer');
       } else if (user?.role === 'vendor') {
-        router.replace('/vendor/dashboard' as any);
+        router.replace('/vendor');
       }
     }, 1000);
   }, [isAuthenticated, user]);
+
+
+  // useEffect(() => {
+  //   setTimeout(() => {
+  //     if (!isAuthenticated) {
+  //       router.replace('/auth/otp-login' as any);
+  //     } else if (user?.role === 'customer') {
+  //       router.replace('/customer/home' as any);
+  //     } else if (user?.role === 'vendor') {
+  //       router.replace('/vendor/dashboard' as any);
+  //     }
+  //   }, 1000);
+  // }, [isAuthenticated, user]);
 
   return (
     <View className="flex-1 bg-primary items-center justify-center">

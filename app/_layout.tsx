@@ -1,3 +1,4 @@
+import 'react-native-gesture-handler';
 import '../global.css';
 import { Stack } from 'expo-router';
 import { Provider } from 'react-redux';
@@ -18,6 +19,9 @@ export default function RootLayout() {
             }}
           >
             <Stack.Screen name="index" />
+            <Stack.Screen name="customer/live-offers" />
+            <Stack.Screen name="customer/services" />
+            <Stack.Screen name="customer/create" />
             <Stack.Screen name="auth/otp-login" />
             <Stack.Screen name="auth/role-selection" />
             <Stack.Screen name="auth/customer-setup" />

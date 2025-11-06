@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 
 interface HeaderProps {
   title: string;
@@ -15,18 +16,18 @@ export const Header: React.FC<HeaderProps> = ({ title, showBack = false, rightAc
   const router = useRouter();
 
   return (
-    <View className="bg-primary py-4 px-4 flex-row items-center justify-between">
+    <View className="bg-white py-4 px-4 flex-row items-center justify-between h-20" >
       <View className="flex-row items-center flex-1">
         {showBack && (
           <TouchableOpacity onPress={() => router.back()} className="mr-3">
-            <Text className="text-white text-xl">←</Text>
+            <Ionicons name="arrow-back" size={24} color="black" />
           </TouchableOpacity>
         )}
-        <Text className="text-white text-xl font-bold">{title}</Text>
+        <Text className="text-black text-xl font-bold">{title}</Text>
       </View>
       {rightAction && (
         <TouchableOpacity onPress={rightAction.onPress}>
-          <Text className="text-white font-medium">{rightAction.text}</Text>
+          <Text className="text-black font-medium">{rightAction.text}</Text>
         </TouchableOpacity>
       )}
     </View>

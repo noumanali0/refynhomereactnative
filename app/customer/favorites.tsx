@@ -6,11 +6,12 @@ import { VendorCard } from '../../src/components/common/VendorCard';
 
 export default function Favorites() {
   const { vendors, favoriteVendorIds } = useAppSelector((state) => state.vendor);
-  const favoriteVendors = vendors.filter((v) => favoriteVendorIds.includes(v.id));
+  const favoriteVendors = vendors;
+  // const favoriteVendors = vendors.filter((v) => favoriteVendorIds.includes(v.id));
 
   return (
-    <SafeAreaView className="flex-1 bg-gray-50">
-      <Header title="Favorite Vendors" showBack />
+    <View className="flex-1 bg-gray-50">
+      <Header title="❤️ Favorite Vendors" showBack />
       <View className="px-4 pt-4 flex-1">
         {favoriteVendors.length > 0 ? (
           <FlatList
@@ -27,6 +28,6 @@ export default function Favorites() {
           </View>
         )}
       </View>
-    </SafeAreaView>
+    </View>
   );
 }

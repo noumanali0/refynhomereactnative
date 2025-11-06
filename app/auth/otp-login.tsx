@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { View, Text, SafeAreaView, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, Text, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { useRouter } from 'expo-router';
 import { AppButton } from '../../src/components/common/AppButton';
 import { InputField } from '../../src/components/common/InputField';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function OTPLogin() {
   const router = useRouter();

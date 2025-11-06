@@ -8,6 +8,7 @@ import { SearchBar } from '../../src/components/common/SearchBar';
 import { VendorCard } from '../../src/components/common/VendorCard';
 import { SERVICE_CATEGORIES } from '../../src/constants/serviceCategories';
 import { ServiceCategory } from '../../src/types';
+import CategoryChips from '../../src/components/customer/CategoryChips';
 
 export default function CustomerHome() {
   const router = useRouter();
@@ -33,6 +34,8 @@ export default function CustomerHome() {
     router.replace('/auth/otp-login' as any);
   };
 
+
+
   return (
     <View className="flex-1 bg-gray-50">
       <View className="bg-primary px-4 pt-4 pb-6">
@@ -51,8 +54,36 @@ export default function CustomerHome() {
           placeholder="Search for services..."
         />
       </View>
+      <CategoryChips
+        categories={SERVICE_CATEGORIES}
+        selectedCategory={selectedCategory}
+        onSelect={handleCategorySelect}
+      />
+      {/* <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        className="px-4 py-2 bg-white border-b border-gray-200"
+        contentContainerStyle={{ alignItems: 'center' }} // keep chips vertically centered
+      >
+        {SERVICE_CATEGORIES.map((category) => (
+          <TouchableOpacity
+            key={category}
+            className={`px-4 py-1.5 rounded-full mr-2 ${selectedCategory === category ? 'bg-primary' : 'bg-gray-100'
+              }`}
+            onPress={() => handleCategorySelect(category)}
+            activeOpacity={0.7}
+          >
+            <Text
+              className={`text-sm font-medium ${selectedCategory === category ? 'text-white' : 'text-gray-700'
+                }`}
+            >
+              {category}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView> */}
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} className="px-4 py-3 bg-white border-b border-gray-200">
+      {/* <ScrollView horizontal showsHorizontalScrollIndicator={false} className="px-4 py-2 bg-white border-b border-gray-200">
         {SERVICE_CATEGORIES.map((category) => (
           <TouchableOpacity
             key={category}
@@ -68,7 +99,7 @@ export default function CustomerHome() {
             </Text>
           </TouchableOpacity>
         ))}
-      </ScrollView>
+      </ScrollView> */}
 
       <View className="flex-row px-4 py-3 bg-white mb-2">
         <TouchableOpacity
