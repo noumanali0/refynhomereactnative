@@ -12,7 +12,15 @@ export interface VendorOffer {
     };
     rating: number;
     avatarUrl?: string;
+    createdAt: number; // timestamp
+    expiryTime: number; // timestamp in ms
 }
+
+export interface Coordinate {
+    longitude: number;
+    latitude: number;
+}
+
 
 interface OffersState {
     offers: VendorOffer[];
@@ -39,11 +47,12 @@ const offersSlice = createSlice({
             state.requestCanceled = false;
         },
 
-        addOffer: (state, action: PayloadAction<VendorOffer>) => {
-            if (state.isReceivingOffers && !state.acceptedOffer) {
-                state.offers.push(action.payload);
-            }
+        addOffer: (state, action) => {
+            if (!state.isReceivingOffers || state.acceptedOffer) return;
+            if (state.offers.length >= 3) return; // limit offers
+            state.offers.push(action.payload);
         },
+
 
         acceptOffer: (state, action: PayloadAction<VendorOffer>) => {
             state.acceptedOffer = action.payload;
@@ -52,10 +61,13 @@ const offersSlice = createSlice({
 
         updateVendorLocation: (
             state,
-            action: PayloadAction<{ id: string; coordinates: { latitude: number; longitude: number } }>
+            action: PayloadAction<{ id: string; coordinates: { latitude: number; longitude: number }; distance: number | string; eta: number }>
         ) => {
+            console.log("checking accepted offers:", state.acceptedOffer)
             if (state.acceptedOffer && state.acceptedOffer.id === action.payload.id) {
                 state.acceptedOffer.coordinates = action.payload.coordinates;
+                state.acceptedOffer.distance = Number(action.payload.distance);
+                state.acceptedOffer.eta = action.payload.eta
             }
         },
 
@@ -64,6 +76,22 @@ const offersSlice = createSlice({
             state.isReceivingOffers = false;
             state.offers = [];
             state.acceptedOffer = null;
+        },
+
+        removeOffersByIds: (state, action: PayloadAction<string>) => {
+            // const idsToRemove = new Set(action.payload);
+            state.offers = state.offers.filter((o) => o.id !== action.payload);
+        },
+
+        removeOutOfRangeOffers: (state, action) => {
+            const idsToRemove = action.payload;
+            state.offers = state.offers.filter(o => !idsToRemove.includes(o.id));
+        },
+
+
+        // fallback to fully reset if needed
+        clearAllOffers: (state) => {
+            state.offers = [];
         },
 
         resetOffers: (state) => {
@@ -79,6 +107,9 @@ export const {
     updateVendorLocation,
     cancelRequest,
     resetOffers,
+    removeOffersByIds,
+    clearAllOffers,
+    removeOutOfRangeOffers
 } = offersSlice.actions;
 
 export default offersSlice.reducer;

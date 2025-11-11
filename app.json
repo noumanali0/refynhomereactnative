@@ -28,7 +28,12 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "useNextNotificationsApi": true
+    },
+    "notification": {
+      "icon": "./assets/adaptive-icon.png",
+      "color": "#FF0000"
     },
     "web": {
       "favicon": "./assets/favicon.png"
