@@ -1,7 +1,10 @@
 import React, { memo, useEffect, useMemo, useRef } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, Linking, Platform, Alert, Animated, Easing } from "react-native";
+import { View, StyleSheet, TouchableOpacity, Linking, Platform, Alert, Animated, Easing } from "react-native";
 import { User, MapPin, Clock, Star, MessageCircle, Phone } from "lucide-react-native";
 import { VendorOffer } from "../../store/slices/offersSlice";
+import { LinearGradient } from "expo-linear-gradient";
+import Text from "../common/Text";
+import { moderateScale } from "react-native-size-matters";
 
 interface VendorOfferCardProps {
     offer: VendorOffer;
@@ -9,9 +12,10 @@ interface VendorOfferCardProps {
     isAccepted?: boolean;
     timeLeft?: number; // new,
     totalTime?: number; // new
+    notFromMap?: boolean
 }
 
-export const VendorOfferCard = memo(({ offer, onAccept, isAccepted = false, timeLeft = 0, totalTime = 20 }: VendorOfferCardProps) => {
+export const VendorOfferCard = memo(({ offer, onAccept, isAccepted = false, timeLeft = 0, totalTime = 20, notFromMap = false }: VendorOfferCardProps) => {
     const phoneNumber = offer?.phone || "+971501234567";
     const whatsappLink = `https://wa.me/${phoneNumber.replace("+", "")}`;
 
@@ -58,11 +62,11 @@ export const VendorOfferCard = memo(({ offer, onAccept, isAccepted = false, time
             <View style={styles.detailsRow}>
                 <View style={styles.detailItem}>
                     <MapPin size={16} color="#666" />
-                    <Text style={styles.detailText}>{offer?.distance} km away</Text>
+                    <Text type="body" >{offer?.distance} km away</Text>
                 </View>
                 <View style={styles.detailItem}>
                     <Clock size={16} color="#666" />
-                    <Text style={styles.detailText}>ETA {offer?.eta} min</Text>
+                    <Text type="body" >ETA {offer?.eta} min</Text>
                 </View>
             </View>
         ),
@@ -74,27 +78,36 @@ export const VendorOfferCard = memo(({ offer, onAccept, isAccepted = false, time
         timeLeft > 10 ? "#22c55e" : timeLeft > 5 ? "#f59e0b" : "#ef4444";
 
     return (
-        <View style={styles.card}>
+        <View style={[notFromMap ? styles.card1 : styles.card]}>
             <View style={styles.header}>
-                <View style={styles.avatarContainer}>
-                    <User size={24} color="#fff" />
-                </View>
+                <LinearGradient
+                    colors={["#2563EB", "#F97316"]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={[styles.avatarContainer, notFromMap && { height: moderateScale(32), width: moderateScale(32), borderRadius: 16 }]}
+                >
+                    <User size={notFromMap ? 16 : 24} color="#fff" />
+                </LinearGradient>
 
                 <View style={styles.vendorInfo}>
-                    <Text style={styles.vendorName}>{offer?.name}</Text>
+                    <Text type={notFromMap ? "body2" : "bodySemiBold"} >{offer?.name || "Masood Ahmed"}</Text>
                     <View style={styles.ratingContainer}>
                         <Star size={14} color="#FFA500" fill="#FFA500" />
-                        <Text style={styles.ratingText}>{offer?.rating}</Text>
+                        <Text type="body">{offer?.rating || 4.5}</Text>
                     </View>
                 </View>
 
-                <View style={styles.priceContainer}>
-                    <Text style={styles.priceLabel}>Quote</Text>
-                    <Text style={styles.priceValue}>AED {offer?.price}</Text>
-                </View>
+                {
+                    !notFromMap && (
+                        <View style={styles.priceContainer}>
+                            <Text type="body">Quote</Text>
+                            <Text type="body" style={styles.priceValue}>AED {offer?.price}</Text>
+                        </View>
+                    )
+                }
             </View>
 
-            {details}
+            {!notFromMap ? details : null}
 
             {!isAccepted &&
                 <>
@@ -120,24 +133,37 @@ export const VendorOfferCard = memo(({ offer, onAccept, isAccepted = false, time
             }
             {/* <Text style={styles.timerText}>{timeLeft}s left</Text> */}
 
-            {isAccepted ? (
+            {isAccepted || notFromMap ? (
                 <View style={styles.actionRow}>
-                    <TouchableOpacity
-                        style={[styles.actionButton, { backgroundColor: "#F97316" }]}
-                        onPress={handleCall}
-                    >
-                        <Phone size={18} color="#fff" />
-                        <Text style={styles.actionText}>Call</Text>
+                    <TouchableOpacity onPress={handleCall} style={styles.flexButton}>
+                        <LinearGradient
+                            colors={["#2563EB", "#F97316"]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={styles.gradientBorder}
+                        >
+                            <View style={styles.outlineInner}>
+                                <Phone size={15} color="#F97316" />
+                                <Text type="body2" style={styles.outlineText}>Call</Text>
+                            </View>
+                        </LinearGradient>
                     </TouchableOpacity>
 
-                    <TouchableOpacity
-                        style={[styles.actionButton, { backgroundColor: "#25D366" }]}
-                        onPress={handleWhatsApp}
-                    >
-                        <MessageCircle size={18} color="#fff" />
-                        <Text style={styles.actionText}>WhatsApp</Text>
+                    <TouchableOpacity onPress={handleWhatsApp} style={styles.flexButton}>
+                        <LinearGradient
+                            colors={["#2563EB", "#F97316"]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={styles.gradientBorder}
+                        >
+                            <View style={styles.outlineInner}>
+                                <MessageCircle size={15} color="#F97316" />
+                                <Text type="body2" style={styles.outlineText}>WhatsApp</Text>
+                            </View>
+                        </LinearGradient>
                     </TouchableOpacity>
                 </View>
+
             ) : (
                 <TouchableOpacity
                     style={styles.acceptButton}
@@ -163,12 +189,23 @@ const styles = StyleSheet.create({
         shadowRadius: 4,
         elevation: 3,
     },
+    card1: {
+        backgroundColor: "#fff",
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 12,
+        // shadowColor: "#000",
+        // shadowOffset: { width: 0, height: 2 },
+        // shadowOpacity: 0.1,
+        // shadowRadius: 4,
+        // elevation: 3,
+    },
     header: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
     avatarContainer: {
         width: 48,
         height: 48,
         borderRadius: 24,
-        backgroundColor: "#007AFF",
+        // backgroundColor: "#007AFF",
         justifyContent: "center",
         alignItems: "center",
     },
@@ -203,7 +240,6 @@ const styles = StyleSheet.create({
         alignItems: "center",
     },
     acceptButtonText: { fontSize: 16, fontWeight: "600", color: "#fff" },
-    actionRow: { flexDirection: "row", justifyContent: "space-between", gap: 10 },
     actionButton: {
         flex: 1,
         flexDirection: "row",
@@ -213,6 +249,40 @@ const styles = StyleSheet.create({
         borderRadius: 8,
         gap: 6,
     },
+    actionRow: {
+        flexDirection: "row",
+        gap: 10,
+        alignItems: "stretch", // ⭐ ensures both children stretch vertically & horizontally
+    },
+
+    flexButton: {
+        flex: 1, // ⭐ forces both buttons equal width
+    },
+
+    gradientBorder: {
+        flex: 1,
+        height: moderateScale(48),
+        padding: moderateScale(2),
+        borderRadius: 10,
+    },
+
+    outlineInner: {
+        flex: 1, // ⭐ fill available space
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        paddingVertical: 10,
+        borderRadius: 8,
+        backgroundColor: "#fff",
+        gap: 6,
+    },
+
+    outlineText: {
+        // fontSize: 14,
+        fontWeight: "600",
+        color: "#F97316",
+    },
+
     actionText: { color: "#fff", fontWeight: "600", fontSize: 15 },
     // timerBar: {
     //     height: "10%",

@@ -27,20 +27,24 @@ export interface Vendor extends User {
   subscriptionTier?: 'basic' | 'premium';
 }
 
-export type ServiceCategory = 
-  | 'AC Repair' 
-  | 'Refrigerator Repair' 
-  | 'Plumbing' 
-  | 'Electrical' 
-  | 'Washing Machine' 
-  | 'Water Heater'
-  | 'Microwave'
-  | 'Other';
+export type ServiceCategory = {
+  id: string;
+  label: string;
+  icon: string;
+}
+// | 'AC Repair' 
+// | 'Refrigerator Repair' 
+// | 'Plumbing' 
+// | 'Electrical' 
+// | 'Washing Machine' 
+// | 'Water Heater'
+// | 'Microwave'
+// | 'Other';
 
-export type BookingStatus = 
-  | 'pending' 
-  | 'confirmed' 
-  | 'completed' 
+export type BookingStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'completed'
   | 'cancelled';
 
 export interface Booking {

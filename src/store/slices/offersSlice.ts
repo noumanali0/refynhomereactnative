@@ -6,6 +6,7 @@ export interface VendorOffer {
     distance: number;
     eta: number;
     price: number;
+    phone: number;
     coordinates: {
         latitude: number;
         longitude: number;

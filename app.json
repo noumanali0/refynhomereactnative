@@ -15,13 +15,15 @@
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "RefynHome needs your location to show nearby service vendors and provide accurate arrival times."
+        "NSLocationWhenInUseUsageDescription": "RefynHome needs your location to show nearby service vendors and provide accurate arrival times.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location to provide real-time service tracking."
       }
     },
     "android": {
       "permissions": [
+        "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION"
+        "FOREGROUND_SERVICE"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -31,6 +33,24 @@
       "predictiveBackGestureEnabled": false,
       "useNextNotificationsApi": true
     },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow ServiceApp to use your location for tracking services."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#FF0000"
+        }
+      ],
+      "expo-font",
+      "expo-image-picker"
+    ],
     "notification": {
       "icon": "./assets/adaptive-icon.png",
       "color": "#FF0000"

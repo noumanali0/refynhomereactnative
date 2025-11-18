@@ -57,12 +57,12 @@ export const VendorCard: React.FC<VendorCardProps> = ({ vendor, onPress }) => {
               </View>
             )}
           </View>
-          {vendor.isOnline && (
+          {/* {vendor.isOnline && (
             <View className="flex-row items-center mt-2">
               <View className="w-2 h-2 bg-success rounded-full mr-1" />
               <Text className="text-xs text-success font-medium">Online</Text>
             </View>
-          )}
+          )} */}
         </View>
       </View>
     </TouchableOpacity>

@@ -5,13 +5,13 @@ export const COLORS = {
   primary500: '#2563EB',
   primary600: '#1D4ED8',
   primary700: '#1E40AF',
-  
+
   accent: '#F97316',
   accent50: '#FFF7ED',
   accent100: '#FFEDD5',
   accent500: '#F97316',
   accent600: '#EA580C',
-  
+
   white: '#FFFFFF',
   black: '#000000',
   gray50: '#F9FAFB',
@@ -24,9 +24,11 @@ export const COLORS = {
   gray700: '#374151',
   gray800: '#1F2937',
   gray900: '#111827',
-  
+
   success: '#10B981',
   warning: '#F59E0B',
   error: '#EF4444',
   info: '#3B82F6',
+  light: '#F3F4F6',
+  dark: '#1F2937',
 };

@@ -7,18 +7,18 @@ export default function Index() {
   const router = useRouter();
   const { isAuthenticated, user } = useAppSelector((state) => state.auth);
 
-  useEffect(() => {
-    setTimeout(() => {
-      if (!isAuthenticated) {
-        router.replace("/customer/create");
-        // router.replace('/auth/otp-login');
-      } else if (user?.role === 'customer') {
-        router.replace('/customer');
-      } else if (user?.role === 'vendor') {
-        router.replace('/vendor');
-      }
-    }, 1000);
-  }, [isAuthenticated, user]);
+  // useEffect(() => {
+  //   setTimeout(() => {
+  //     if (!isAuthenticated) {
+  //       router.replace("/(auth)/otp-login");
+  //       // router.replace('/auth/otp-login');
+  //     } else if (user?.role === 'customer') {
+  //       router.replace('/customer');
+  //     } else if (user?.role === 'vendor') {
+  //       router.replace('/vendor');
+  //     }
+  //   }, 1000);
+  // }, [isAuthenticated, user]);
 
 
   // useEffect(() => {
