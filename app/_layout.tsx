@@ -38,7 +38,7 @@ function RootLayoutNav() {
     // if (loaded) {
     let redirectTimeout: NodeJS.Timeout;
     redirectTimeout = setTimeout(() => {
-      if (!isAuthenticated && !inAuth) router.replace("/(auth)/login");
+      if (!isAuthenticated && !inAuth) router.replace("/(customer)/(home)/live-offers");
       else if (isAuthenticated && inAuth) {
         console.log("isAuth and inAuth")
         if (role === "customer") router.replace("/(customer)/(home)");
