@@ -9,8 +9,8 @@ export default function VendorDashboardLayout() {
                 // headerTitleAlign: "center",
             }}
         >
-            <Stack.Screen name="index" options={{ title: "Home" }} />
-            {/* <Stack.Screen name="request-details" options={{ title: "Request Detail" }} /> */}
+            <Stack.Screen name="index" options={{ title: "Service Requests" }} />
+            <Stack.Screen name="request-details" options={{ title: "Request Detail" }} />
             {/* <Stack.Screen name="live-offers" options={{ title: "Live Offers" }} /> */}
             {/* <Stack.Screen name="tracking" options={{ title: "Track Vendor" }} /> */}
         </Stack>

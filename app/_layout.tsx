@@ -34,25 +34,27 @@ function RootLayoutNav() {
     const inAuth = segments[0] === "(auth)";
     const inCustomer = segments[0] === "(customer)";
     const inVendor = segments[0] === "(vendor)";
-
+    // router.replace({ pathname: "/(customer)/(home)/live-offers" })
+    router.replace({ pathname: "/(vendor)/(servicerequests)" })
     // if (loaded) {
     let redirectTimeout: NodeJS.Timeout;
-    redirectTimeout = setTimeout(() => {
-      if (!isAuthenticated && !inAuth) router.replace("/(customer)/(home)/live-offers");
-      else if (isAuthenticated && inAuth) {
-        console.log("isAuth and inAuth")
-        if (role === "customer") router.replace("/(customer)/(home)");
-        else if (role === "vendor") router.replace("/(vendor)/(dashboard)");
-      } else if (isAuthenticated && role) {
-        console.log("isAuth and role")
-        if (role === "customer" && inVendor) router.replace("/(customer)/(home)");
-        else if (role === "vendor" && inCustomer) router.replace("/(vendor)/(dashboard)");
-      }
-      // clearTimeout(redirectTimeout);
-    }, 100);
-    return () => clearTimeout(redirectTimeout);
+    // redirectTimeout = setTimeout(() => {
+    //   if (!isAuthenticated && !inAuth) router.replace({ pathname: "/(vendor)/(servicerequests)/request-details", params: { id: 'req_1763638546365_4867' } });
+    //   else if (isAuthenticated && inAuth) {
+    //     console.log("isAuth and inAuth")
+    //     if (role === "customer") router.replace("/(customer)/(home)");
+    //     else if (role === "vendor") router.replace("/(vendor)/(dashboard)");
+    //   } else if (isAuthenticated && role) {
+    //     console.log("isAuth and role")
+    //     if (role === "customer" && inVendor) router.replace("/(customer)/(home)");
+    //     else if (role === "vendor" && inCustomer) router.replace("/(vendor)/(dashboard)");
+    //   }
+    //   // clearTimeout(redirectTimeout);
+    // }, 100);
+    // return () => clearTimeout(redirectTimeout);
     // }
-  }, [isAuthenticated, role, segments, isLoading]);
+  }, []);
+  // }, [isAuthenticated, role, segments, isLoading]);
 
   // useEffect(() => {
   //   if (isAuthenticated && userId && role) {
