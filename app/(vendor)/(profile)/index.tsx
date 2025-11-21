@@ -6,7 +6,7 @@
  * services, and recent reviews. Main hub for vendor information.
  */
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
     View,
     ScrollView,
@@ -28,6 +28,8 @@ import { ReviewCard } from '@/components/vendor/ReviewCard';
 import { DashboardStatTile } from '@/components/vendor/DashboardStatTile';
 import { ProfileOption } from '@/components/common/ProfileOption';
 import { COLORS } from '@/constants/colors';
+import { useAppDispatch } from '@/hooks/useAppDispatch';
+import { logoutUser } from '@/store/slices/authSlice';
 
 // ============================================================================
 // Component
@@ -35,6 +37,8 @@ import { COLORS } from '@/constants/colors';
 
 export default function VendorProfileScreen() {
     const router = useRouter();
+    const dispatch = useAppDispatch();
+    const [isLoggingOut, setIsLoggingOut] = useState(false);
 
     // Get current vendor from auth
     const currentUser = useSelector((state: RootState) => state.auth.user);
@@ -117,9 +121,19 @@ export default function VendorProfileScreen() {
             [
                 { text: 'Cancel', style: 'cancel' },
                 {
-                    text: 'Logout', style: 'destructive', onPress: () => {
-                        // TODO: Implement logout logic
-                        console.log('Logout');
+                    text: 'Logout',
+                    style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            setIsLoggingOut(true);
+                            await dispatch(logoutUser()).unwrap();
+                            // Navigation will be handled by _layout.tsx automatically
+                            router.replace('/(auth)/login');
+                        } catch (error: any) {
+                            Alert.alert('Logout Failed', error.message || 'Failed to logout');
+                        } finally {
+                            setIsLoggingOut(false);
+                        }
                     }
                 },
             ]
@@ -323,9 +337,10 @@ export default function VendorProfileScreen() {
                     />
                     <ProfileOption
                         icon="log-out-outline"
-                        label="Logout"
+                        label={isLoggingOut ? "Logging out..." : "Logout"}
                         onPress={handleLogout}
                         danger
+                        disabled={isLoggingOut}
                     />
                 </View>
             </View>

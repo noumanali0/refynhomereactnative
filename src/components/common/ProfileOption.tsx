@@ -12,6 +12,7 @@ interface Props {
     onPress: () => void;
     gradient?: boolean;
     danger?: boolean;
+    disabled?: boolean;
 }
 
 export const ProfileOption: React.FC<Props> = ({
@@ -20,6 +21,7 @@ export const ProfileOption: React.FC<Props> = ({
     onPress,
     gradient = false,
     danger = false,
+    disabled = false,
 }) => {
     return (
         <TouchableOpacity
@@ -27,9 +29,11 @@ export const ProfileOption: React.FC<Props> = ({
                 styles.row,
                 gradient && styles.rowGradient,
                 danger && styles.rowDanger,
+                disabled && styles.rowDisabled,
             ]}
             onPress={onPress}
             activeOpacity={0.7}
+            disabled={disabled}
         >
             {gradient && (
                 <LinearGradient
@@ -40,11 +44,11 @@ export const ProfileOption: React.FC<Props> = ({
                 />
             )}
 
-            <View style={[styles.iconBox, danger && styles.iconBoxDanger]}>
+            <View style={[styles.iconBox, danger && styles.iconBoxDanger, disabled && styles.iconBoxDisabled]}>
                 {icon}
             </View>
-            <Text type="body2" style={[styles.label, danger && styles.dangerText]}>{label}</Text>
-            <Ionicons name="chevron-forward" size={20} color="#d1d5db" />
+            <Text type="body2" style={[styles.label, danger && styles.dangerText, disabled && styles.labelDisabled]}>{label}</Text>
+            <Ionicons name="chevron-forward" size={20} color={disabled ? "#d1d5db80" : "#d1d5db"} />
         </TouchableOpacity>
     );
 };
@@ -74,6 +78,9 @@ const styles = StyleSheet.create({
     rowDanger: {
         borderColor: "rgba(239, 68, 68, 0.1)",
     },
+    rowDisabled: {
+        opacity: 0.5,
+    },
     gradientBg: {
         position: "absolute",
         top: 0,
@@ -93,6 +100,9 @@ const styles = StyleSheet.create({
     iconBoxDanger: {
         backgroundColor: "#fee2e2",
     },
+    iconBoxDisabled: {
+        backgroundColor: "#f3f4f6",
+    },
     label: {
         flex: 1,
         fontSize: moderateScale(16),
@@ -102,6 +112,9 @@ const styles = StyleSheet.create({
     },
     dangerText: {
         color: "#ef4444",
+    },
+    labelDisabled: {
+        color: "#9ca3af",
     },
 });
 

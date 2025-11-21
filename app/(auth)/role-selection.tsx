@@ -60,7 +60,7 @@ export default function RoleSelection() {
     if (selectedRole === 'customer') {
       router.replace('/(auth)/customer-setup');
     } else {
-      // router.replace('/(vendor)/(dashboard)');
+      // router.replace('/(vendor)/(servicerequests)');
       router.replace('/(auth)/vendor-setup');
     }
   };

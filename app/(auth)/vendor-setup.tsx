@@ -257,7 +257,7 @@ export default function VendorProfileSetup() {
 
       setIsLoading(false);
       // Navigate to vendor dashboard
-      router.replace('/(vendor)/(dashboard)');
+      router.replace('/(vendor)/(servicerequests)');
     }, 1500);
   };
 
@@ -1221,7 +1221,7 @@ const styles = StyleSheet.create({
 
 //       setIsLoading(false);
 //       // Navigate to vendor dashboard
-//       router.replace('/(vendor)/(dashboard)');
+//       router.replace('/(vendor)/(servicerequests)');
 //     }, 1500);
 //   };
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     KeyboardAvoidingView,
@@ -8,6 +8,7 @@ import {
     TouchableOpacity,
     Animated,
     TextInput,
+    Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -16,20 +17,34 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { InputField } from '@/components/common/InputField';
 import { moderateScale } from 'react-native-size-matters';
 import Text from '@/components/common/Text';
+import { useAppDispatch, useAppSelector } from '@/hooks/useAppDispatch';
+import { sendSignupOTP, verifyOTP, resendOTP, clearError } from '@/store/slices/authSlice';
+import { UserRole } from '@/types';
+
+type Role = 'customer' | 'vendor' | null;
 
 export default function Signup() {
     const router = useRouter();
+    const dispatch = useAppDispatch();
+
+    // Redux state
+    const { isLoading, error, otpSent: reduxOtpSent, isAuthenticated, user } = useAppSelector(
+        (state) => state.auth
+    );
+
+    // Local state
     const [formData, setFormData] = useState({
         name: '',
         phoneNumber: '',
         email: '',
         otp: '',
     });
-    const [otpSent, setOtpSent] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
+    const [selectedRole, setSelectedRole] = useState<Role>(null);
+    const [resendTimer, setResendTimer] = useState(0);
     const [fadeAnim] = useState(new Animated.Value(0));
 
-    React.useEffect(() => {
+    // Animation on mount
+    useEffect(() => {
         Animated.timing(fadeAnim, {
             toValue: 1,
             duration: 800,
@@ -37,28 +52,96 @@ export default function Signup() {
         }).start();
     }, []);
 
-    const handleSendOTP = () => {
-        if (!formData.name || !formData.phoneNumber || !formData.email) {
-            alert('Please fill all fields');
+    // Countdown timer for resend OTP
+    useEffect(() => {
+        let interval: NodeJS.Timeout;
+        if (resendTimer > 0) {
+            interval = setInterval(() => {
+                setResendTimer((prev) => prev - 1);
+            }, 1000);
+        }
+        return () => clearInterval(interval);
+    }, [resendTimer]);
+
+    // Navigate after authentication
+    useEffect(() => {
+        if (isAuthenticated && user) {
+            if (user.role === 'customer') {
+                router.replace('/(customer)/(home)');
+            } else if (user.role === 'vendor') {
+                router.replace('/(vendor)/(servicerequests)');
+            }
+        }
+    }, [isAuthenticated, user]);
+
+    // Handle errors
+    useEffect(() => {
+        if (error) {
+            Alert.alert('Error', error, [
+                { text: 'OK', onPress: () => dispatch(clearError()) },
+            ]);
+        }
+    }, [error]);
+
+    const handleSendOTP = async () => {
+        if (!formData.name || !formData.phoneNumber) {
+            Alert.alert('Error', 'Please fill all required fields');
             return;
         }
 
-        setIsLoading(true);
-        setTimeout(() => {
-            setOtpSent(true);
-            setIsLoading(false);
-        }, 1500);
+        if (!selectedRole) {
+            Alert.alert('Error', 'Please select your role');
+            return;
+        }
+
+        try {
+            await dispatch(
+                sendSignupOTP({
+                    name: formData.name,
+                    phoneNumber: formData.phoneNumber,
+                    email: formData.email,
+                    role: selectedRole as UserRole,
+                })
+            ).unwrap();
+            setResendTimer(60); // Start 60-second countdown
+        } catch (err) {
+            // Error handled by useEffect above
+        }
     };
 
-    const handleVerifyOTP = () => {
-        if (formData.otp.length !== 6) return;
+    const handleVerifyOTP = async () => {
+        if (formData.otp.length !== 6) {
+            Alert.alert('Error', 'Please enter a valid 6-digit OTP');
+            return;
+        }
 
-        setIsLoading(true);
-        setTimeout(() => {
-            setIsLoading(false);
-            // Navigate to role selection after signup
-            router.push('/(auth)/role-selection');
-        }, 1500);
+        try {
+            await dispatch(
+                verifyOTP({
+                    phoneNumber: formData.phoneNumber,
+                    otp: formData.otp,
+                    type: 'signup',
+                })
+            ).unwrap();
+            // Navigation handled by useEffect above
+        } catch (err) {
+            // Error handled by useEffect above
+        }
+    };
+
+    const handleResendOTP = async () => {
+        if (resendTimer > 0) {
+            Alert.alert('Please Wait', `You can resend OTP in ${resendTimer} seconds`);
+            return;
+        }
+
+        try {
+            await dispatch(resendOTP(formData.phoneNumber)).unwrap();
+            setResendTimer(60); // Restart countdown
+            Alert.alert('Success', 'OTP has been resent to your phone');
+        } catch (err) {
+            // Error handled by useEffect above
+        }
     };
 
     return (
@@ -103,17 +186,108 @@ export default function Signup() {
                         {/* Welcome Text */}
                         <View style={styles.welcomeSection}>
                             <Text type='bodySemiBold' style={styles.welcomeTitle}>
-                                {otpSent ? 'Verify OTP' : 'Sign Up'}
+                                {reduxOtpSent ? 'Verify OTP' : 'Sign Up'}
                             </Text>
                             <Text type='body2' style={styles.welcomeSubtitle}>
-                                {otpSent
+                                {reduxOtpSent
                                     ? `Enter the code sent to ${formData.phoneNumber}`
                                     : 'Create your account to get started'}
                             </Text>
                         </View>
 
-                        {!otpSent ? (
+                        {!reduxOtpSent ? (
                             <>
+                                {/* Role Selection Cards */}
+                                <View style={styles.roleSelectionSection}>
+                                    <Text type='bodySemiBold' style={styles.roleSectionTitle}>I am a...</Text>
+
+                                    <View style={styles.roleCardsContainer}>
+                                        {/* Customer Role Card */}
+                                        <TouchableOpacity
+                                            activeOpacity={0.8}
+                                            onPress={() => setSelectedRole('customer')}
+                                            style={[
+                                                styles.roleCard,
+                                                selectedRole === 'customer' && styles.roleCardSelected,
+                                            ]}
+                                        >
+                                            {selectedRole === 'customer' && (
+                                                <View style={styles.selectedCheckmark}>
+                                                    <Ionicons name="checkmark-circle" size={20} color="#2563EB" />
+                                                </View>
+                                            )}
+                                            <LinearGradient
+                                                colors={
+                                                    selectedRole === 'customer'
+                                                        ? ['#2563EB', '#3b82f6']
+                                                        : ['#dbeafe', '#bfdbfe']
+                                                }
+                                                style={styles.roleIconCircle}
+                                            >
+                                                <Ionicons
+                                                    name="person"
+                                                    size={24}
+                                                    color={selectedRole === 'customer' ? '#fff' : '#2563EB'}
+                                                />
+                                            </LinearGradient>
+                                            <Text
+                                                type="bodySemiBold"
+                                                style={[
+                                                    styles.roleCardTitle,
+                                                    selectedRole === 'customer' && styles.roleCardTitleSelected,
+                                                ]}
+                                            >
+                                                Customer
+                                            </Text>
+                                            <Text type="body" style={styles.roleCardDesc}>
+                                                Find services
+                                            </Text>
+                                        </TouchableOpacity>
+
+                                        {/* Vendor Role Card */}
+                                        <TouchableOpacity
+                                            activeOpacity={0.8}
+                                            onPress={() => setSelectedRole('vendor')}
+                                            style={[
+                                                styles.roleCard,
+                                                selectedRole === 'vendor' && styles.roleCardSelected,
+                                            ]}
+                                        >
+                                            {selectedRole === 'vendor' && (
+                                                <View style={styles.selectedCheckmark}>
+                                                    <Ionicons name="checkmark-circle" size={20} color="#F97316" />
+                                                </View>
+                                            )}
+                                            <LinearGradient
+                                                colors={
+                                                    selectedRole === 'vendor'
+                                                        ? ['#F97316', '#fb923c']
+                                                        : ['#fed7aa', '#fdba74']
+                                                }
+                                                style={styles.roleIconCircle}
+                                            >
+                                                <Ionicons
+                                                    name="construct"
+                                                    size={24}
+                                                    color={selectedRole === 'vendor' ? '#fff' : '#F97316'}
+                                                />
+                                            </LinearGradient>
+                                            <Text
+                                                type="bodySemiBold"
+                                                style={[
+                                                    styles.roleCardTitle,
+                                                    selectedRole === 'vendor' && styles.roleCardTitleSelected,
+                                                ]}
+                                            >
+                                                Vendor
+                                            </Text>
+                                            <Text type="body" style={styles.roleCardDesc}>
+                                                Offer services
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                </View>
+
                                 {/* Name Input */}
                                 <View style={styles.inputContainer}>
                                     <Text type='body2' style={styles.inputLabel}>Full Name</Text>
@@ -200,16 +374,26 @@ export default function Signup() {
                                         keyboardType="number-pad"
                                         maxLength={6}
                                         style={styles.input}
+                                        autoFocus
                                     />
                                 </View>
 
                                 <TouchableOpacity
-                                    onPress={handleSendOTP}
+                                    onPress={handleResendOTP}
+                                    disabled={resendTimer > 0}
                                     style={styles.resendContainer}
                                 >
                                     <Text type='body2' style={styles.resendText}>
                                         Didn't receive code?{' '}
-                                        <Text type='bodySemiBold' style={styles.resendLink}>Resend</Text>
+                                        <Text
+                                            type='bodySemiBold'
+                                            style={[
+                                                styles.resendLink,
+                                                resendTimer > 0 && styles.resendLinkDisabled
+                                            ]}
+                                        >
+                                            {resendTimer > 0 ? `Resend in ${resendTimer}s` : 'Resend'}
+                                        </Text>
                                     </Text>
                                 </TouchableOpacity>
                             </View>
@@ -218,7 +402,7 @@ export default function Signup() {
                         {/* Action Button */}
                         <View style={styles.buttonContainer}>
                             <TouchableOpacity
-                                onPress={otpSent ? handleVerifyOTP : handleSendOTP}
+                                onPress={reduxOtpSent ? handleVerifyOTP : handleSendOTP}
                                 disabled={isLoading}
                                 activeOpacity={0.8}
                                 style={styles.gradientButton}
@@ -233,7 +417,7 @@ export default function Signup() {
                                         <Ionicons name="hourglass-outline" size={20} color="#fff" />
                                     ) : (
                                         <Ionicons
-                                            name={otpSent ? "checkmark-circle-outline" : "paper-plane-outline"}
+                                            name={reduxOtpSent ? "checkmark-circle-outline" : "paper-plane-outline"}
                                             size={20}
                                             color="#fff"
                                         />
@@ -241,7 +425,7 @@ export default function Signup() {
                                     <Text type='body2' style={styles.buttonText}>
                                         {isLoading
                                             ? 'Processing...'
-                                            : otpSent
+                                            : reduxOtpSent
                                                 ? 'Verify & Continue'
                                                 : 'Send OTP'}
                                     </Text>
@@ -395,6 +579,9 @@ const styles = StyleSheet.create({
         fontSize: moderateScale(14),
         fontWeight: '600',
     },
+    resendLinkDisabled: {
+        color: '#94a3b8',
+    },
     buttonContainer: {
         marginTop: moderateScale(8),
     },
@@ -443,5 +630,63 @@ const styles = StyleSheet.create({
     termsLink: {
         color: '#2563EB',
         fontWeight: '600',
+    },
+    // Role Selection Styles
+    roleSelectionSection: {
+        marginBottom: moderateScale(20),
+    },
+    roleSectionTitle: {
+        fontSize: moderateScale(16),
+        color: '#334155',
+        marginBottom: moderateScale(12),
+    },
+    roleCardsContainer: {
+        flexDirection: 'row',
+        gap: moderateScale(12),
+    },
+    roleCard: {
+        flex: 1,
+        backgroundColor: '#fff',
+        borderRadius: 16,
+        padding: moderateScale(16),
+        alignItems: 'center',
+        borderWidth: 2,
+        borderColor: '#e2e8f0',
+        position: 'relative',
+    },
+    roleCardSelected: {
+        borderColor: '#2563EB',
+        shadowColor: '#2563EB',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 4,
+    },
+    selectedCheckmark: {
+        position: 'absolute',
+        top: 8,
+        right: 8,
+        zIndex: 10,
+    },
+    roleIconCircle: {
+        width: moderateScale(56),
+        height: moderateScale(56),
+        borderRadius: moderateScale(28),
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: moderateScale(8),
+    },
+    roleCardTitle: {
+        fontSize: moderateScale(15),
+        color: '#1e293b',
+        marginBottom: 4,
+    },
+    roleCardTitleSelected: {
+        color: '#2563EB',
+    },
+    roleCardDesc: {
+        fontSize: moderateScale(11),
+        color: '#64748b',
+        textAlign: 'center',
     },
 });

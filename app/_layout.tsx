@@ -1,18 +1,19 @@
 import 'react-native-gesture-handler';
 import '../global.css';
 import { Slot, useRouter, useSegments } from "expo-router";
-import { useEffect } from "react";
-import { Provider } from "react-redux";
+import { useEffect, useState } from "react";
+import { Provider, useDispatch } from "react-redux";
 // import { PersistGate } from "redux-persist/integration/react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { store } from "@/store";
-import { useAppSelector } from '@/hooks/useAppDispatch';
+import { useAppSelector, useAppDispatch } from '@/hooks/useAppDispatch';
 import { StyleSheet } from 'react-native';
 import { useFonts } from "expo-font";
 import { FONTS } from '@/constants/fonts';
 import * as SplashScreen from "expo-splash-screen";
+import { restoreSession } from '@/store/slices/authSlice';
 SplashScreen.preventAutoHideAsync();
 // import { useAppSelector } from "@/store/hooks";
 // import LoadingSpinner from "@/components/common/LoadingSpinner";
@@ -21,41 +22,73 @@ SplashScreen.preventAutoHideAsync();
 function RootLayoutNav() {
   const segments = useSegments();
   const router = useRouter();
+  const dispatch = useAppDispatch();
 
   const { isAuthenticated, user, isLoading } = useAppSelector((s) => s.auth);
-  console.log("🚀 ~ RootLayoutNav ~ user:", isAuthenticated, user)
+  const [isInitialized, setIsInitialized] = useState(false);
 
   const role = user?.role;
   const userId = user?.id;
 
-
+  // Restore session on mount
   useEffect(() => {
-    if (isLoading) return;
+    const initializeAuth = async () => {
+      try {
+        await dispatch(restoreSession()).unwrap();
+      } catch (error) {
+        // No session to restore, user needs to login
+        console.log('No session to restore');
+      } finally {
+        setIsInitialized(true);
+      }
+    };
+
+    initializeAuth();
+  }, []);
+
+  // Handle navigation based on auth state
+  useEffect(() => {
+    // Wait for initialization and loading to complete
+    if (!isInitialized || isLoading) return;
+
     const inAuth = segments[0] === "(auth)";
     const inCustomer = segments[0] === "(customer)";
     const inVendor = segments[0] === "(vendor)";
-    router.replace({ pathname: "/(customer)" })
-    // router.replace({ pathname: "/(vendor)/(servicerequests)" })
-    // if (loaded) {
-    let redirectTimeout: NodeJS.Timeout;
-    // redirectTimeout = setTimeout(() => {
-    //   if (!isAuthenticated && !inAuth) router.replace({ pathname: "/(vendor)/(servicerequests)/request-details", params: { id: 'req_1763638546365_4867' } });
-    //   else if (isAuthenticated && inAuth) {
-    //     console.log("isAuth and inAuth")
-    //     if (role === "customer") router.replace("/(customer)/(home)");
-    //     else if (role === "vendor") router.replace("/(vendor)/(dashboard)");
-    //   } else if (isAuthenticated && role) {
-    //     console.log("isAuth and role")
-    //     if (role === "customer" && inVendor) router.replace("/(customer)/(home)");
-    //     else if (role === "vendor" && inCustomer) router.replace("/(vendor)/(dashboard)");
-    //   }
-    //   // clearTimeout(redirectTimeout);
-    // }, 100);
-    // return () => clearTimeout(redirectTimeout);
-    // }
-  }, []);
-  // }, [isAuthenticated, role, segments, isLoading]);
 
+    // Add a small delay to prevent navigation conflicts
+    const redirectTimeout = setTimeout(() => {
+      if (!isAuthenticated && !inAuth) {
+        // Not authenticated and not on auth screen -> redirect to login
+        router.replace("/(auth)/login");
+      } else if (isAuthenticated && inAuth) {
+        // Authenticated but still on auth screen -> redirect to appropriate home
+        if (role === "customer") {
+          router.replace("/(customer)/(home)");
+        } else if (role === "vendor") {
+          router.replace("/(vendor)/(servicerequests)");
+        }
+      } else if (isAuthenticated && role && !inAuth && !inCustomer && !inVendor) {
+        // Authenticated but not in any valid segment (e.g., on root after session restore)
+        // This handles the case when app restarts and segments[0] is undefined
+        if (role === "customer") {
+          router.replace("/(customer)/(home)");
+        } else if (role === "vendor") {
+          router.replace("/(vendor)/(servicerequests)");
+        }
+      } else if (isAuthenticated && role) {
+        // Authenticated but in wrong module -> redirect to correct module
+        if (role === "customer" && inVendor) {
+          router.replace("/(customer)/(home)");
+        } else if (role === "vendor" && inCustomer) {
+          router.replace("/(vendor)/(servicerequests)");
+        }
+      }
+    }, 100);
+
+    return () => clearTimeout(redirectTimeout);
+  }, [isAuthenticated, role, segments, isLoading, isInitialized]);
+
+  // TODO: Uncomment when socket implementation is ready
   // useEffect(() => {
   //   if (isAuthenticated && userId && role) {
   //     const socket = SocketManager.getInstance();

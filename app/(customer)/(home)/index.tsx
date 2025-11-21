@@ -145,44 +145,22 @@ export default function CustomerHomeScreen() {
             <Text>Loading...</Text>
           </View>
         )
-          : mockActiveServices && mockActiveServices.length > 0 ? (
-            mockActiveServices.slice(0, 3).map((item) => (
-              // <View style={styles.historyCard}>
-              <ServiceCard service={item} vendorOffer={{}} />
-              // </View>
-              // <TouchableOpacity
-              //   key={item.id}
-              //   style={styles.historyCard}
-              //   onPress={() =>
-              //     router.push({
-              //       pathname: '/(customer)/(history)/service-details',
-              //       params: { serviceId: item.id },
-              //     })
-              //   }
-              // >
-              //   <View style={styles.historyInfo}>
-              //     <Text style={styles.historyService}>{item.serviceType}</Text>
-              //     <Text style={styles.historyVendor}>{item.vendorName}</Text>
-              //     <Text style={styles.historyDate}>{item.date}</Text>
-              //   </View>
-              //   <View style={styles.historyStatus}>
-              //     <Text style={[styles.statusBadge, { color: getStatusColor(item.status) }]}>
-              //       {item.status}
-              //     </Text>
-              //     <Ionicons name="chevron-forward" size={20} color="#8E8E93" />
-              //   </View>
-              // </TouchableOpacity>
-            ))
-          )
-            : (
-              <View style={styles.emptyState}>
-                <Ionicons name="folder-open-outline" size={64} color="#8E8E93" />
-                <Text style={styles.emptyText}>No service history yet</Text>
-                <Text style={styles.emptySubtext}>
-                  Request your first service to get started
-                </Text>
-              </View>
-            )}
+          // : mockActiveServices && mockActiveServices.length > 0 ? (
+          //   mockActiveServices.slice(0, 3).map((item) => (
+          //     // <View style={styles.historyCard}>
+          //     <ServiceCard service={item} vendorOffer={{}} />
+
+          //   ))
+          // )
+          : (
+            <View style={styles.emptyState}>
+              <Ionicons name="folder-open-outline" size={64} color="#8E8E93" />
+              <Text style={styles.emptyText}>No service history yet</Text>
+              <Text style={styles.emptySubtext}>
+                Request your first service to get started
+              </Text>
+            </View>
+          )}
       </ScrollView>
     </View>
   );

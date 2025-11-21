@@ -92,7 +92,7 @@ export default function HistoryScreen() {
                 </View>
                 <View style={styles.filterTextContainer}>
 
-                    {/* <Text type="subtitle2" style={[styles.filterLabel, isActive && { color }]}>{label}</Text> */}
+                    <Text type="subtitle2" style={[styles.filterLabel, isActive && { color }]}>{label}</Text>
                     <Text type="body2" style={[styles.filterCount, isActive && { color }]}>({count})</Text>
                 </View>
             </TouchableOpacity>
@@ -238,7 +238,7 @@ const styles = StyleSheet.create({
     statTextContainer: { alignItems: 'center', gap: verticalScale(2) },
     statValue: { fontSize: moderateScale(16), color: COLORS.white, marginBottom: verticalScale(2) },
     statLabel: { fontSize: moderateScale(10), color: 'rgba(255, 255, 255, 0.8)' },
-    filterTabsContainer: { maxHeight: verticalScale(70) },
+    filterTabsContainer: { minHeight: verticalScale(90) },
     filterTabs: { paddingHorizontal: scale(16), paddingVertical: verticalScale(16), gap: scale(10) },
     filterTab: {
         flexDirection: 'row',

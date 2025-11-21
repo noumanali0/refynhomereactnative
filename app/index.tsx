@@ -1,11 +1,7 @@
 import React, { useEffect } from 'react';
 import { View, Text } from 'react-native';
-import { useRouter } from 'expo-router';
-import { useAppSelector } from '../src/hooks/useAppDispatch';
 
 export default function Index() {
-  const router = useRouter();
-  const { isAuthenticated, user } = useAppSelector((state) => state.auth);
 
   // useEffect(() => {
   //   setTimeout(() => {

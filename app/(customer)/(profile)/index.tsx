@@ -7,6 +7,7 @@ import {
     TouchableOpacity,
     Modal,
     ScrollView,
+    Alert,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -17,15 +18,43 @@ import useImagePicker from "@/hooks/useImagePicker";
 import { moderateScale } from "react-native-size-matters";
 import AppHeader from "@/components/common/AppHeader";
 import Text from "@/components/common/Text";
+import { useAppDispatch } from "@/hooks/useAppDispatch";
+import { logoutUser } from "@/store/slices/authSlice";
 
 export default function ProfileScreen() {
     const router = useRouter();
+    const dispatch = useAppDispatch();
     const { imageUri, pickImage } = useImagePicker();
     const [deleteModal, setDeleteModal] = useState(false);
+    const [isLoggingOut, setIsLoggingOut] = useState(false);
 
     const handleLogout = () => {
-        // Add your logout logic here
-        console.log("Logout");
+        Alert.alert(
+            "Logout",
+            "Are you sure you want to logout?",
+            [
+                {
+                    text: "Cancel",
+                    style: "cancel"
+                },
+                {
+                    text: "Logout",
+                    style: "destructive",
+                    onPress: async () => {
+                        try {
+                            setIsLoggingOut(true);
+                            await dispatch(logoutUser()).unwrap();
+                            // Navigation will be handled by _layout.tsx automatically
+                            router.replace("/(auth)/login");
+                        } catch (error: any) {
+                            Alert.alert("Logout Failed", error.message || "Failed to logout");
+                        } finally {
+                            setIsLoggingOut(false);
+                        }
+                    }
+                }
+            ]
+        );
     };
 
     const handleDeleteAccount = () => {
@@ -103,9 +132,10 @@ export default function ProfileScreen() {
                     <Text type="body2" style={styles.sectionLabel}>Account</Text>
 
                     <ProfileOption
-                        label="Logout"
+                        label={isLoggingOut ? "Logging out..." : "Logout"}
                         icon={<Ionicons name="log-out-outline" size={22} color="#f59e0b" />}
                         onPress={handleLogout}
+                        disabled={isLoggingOut}
                     />
 
                     <ProfileOption

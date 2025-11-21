@@ -8,27 +8,27 @@ import { router } from "expo-router";
 export default function App() {
 
 
-  useEffect(() => {
-    const foregroundListener = Notifications.addNotificationReceivedListener(notification => {
-      console.log('📩 Foreground notification received:', notification);
-      // Optionally show custom UI inside app
-      // showToast(notification.request.content.body)
-    });
+  // useEffect(() => {
+  //   const foregroundListener = Notifications.addNotificationReceivedListener(notification => {
+  //     console.log('📩 Foreground notification received:', notification);
+  //     // Optionally show custom UI inside app
+  //     // showToast(notification.request.content.body)
+  //   });
 
-    const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
-      console.log('📲 User interacted with notification:', response);
-      // Navigate user to relevant screen, e.g., LiveOffer
-      const offerId = response.notification.request.content.data?.offerId;
-      if (offerId) {
-        router.replace('LiveOffer', { offerId });
-      }
-    });
+  //   const responseListener = Notifications.addNotificationResponseReceivedListener(response => {
+  //     console.log('📲 User interacted with notification:', response);
+  //     // Navigate user to relevant screen, e.g., LiveOffer
+  //     const offerId = response.notification.request.content.data?.offerId;
+  //     if (offerId) {
+  //       router.replace('LiveOffer', { offerId });
+  //     }
+  //   });
 
-    return () => {
-      foregroundListener.remove();
-      responseListener.remove();
-    };
-  }, []);
+  //   return () => {
+  //     foregroundListener.remove();
+  //     responseListener.remove();
+  //   };
+  // }, []);
 
 
 

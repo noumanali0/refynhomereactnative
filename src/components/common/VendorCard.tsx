@@ -1,15 +1,35 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, Image } from 'react-native';
-import { Vendor } from '../../types';
+// src/components/common/VendorCard.tsx
+/**
+ * Vendor Card Component
+ *
+ * Displays vendor information including profile photo, name, rating,
+ * location, and service categories in a card format.
+ */
+
+import React, { memo } from 'react';
+import { View, TouchableOpacity, Image, StyleSheet } from 'react-native';
+import Text from '@/components/common/Text';
+import { Ionicons } from '@expo/vector-icons';
+import { moderateScale, scale, verticalScale } from 'react-native-size-matters';
 import { RatingStars } from './RatingStars';
+import { COLORS } from '@/constants/colors';
 import { useRouter } from 'expo-router';
+import type { Vendor } from '@/types';
+
+// ============================================================================
+// Types
+// ============================================================================
 
 interface VendorCardProps {
   vendor: Vendor;
   onPress?: () => void;
 }
 
-export const VendorCard: React.FC<VendorCardProps> = ({ vendor, onPress }) => {
+// ============================================================================
+// Component
+// ============================================================================
+
+const VendorCardComponent: React.FC<VendorCardProps> = ({ vendor, onPress }) => {
   const router = useRouter();
 
   const handlePress = () => {
@@ -22,45 +42,66 @@ export const VendorCard: React.FC<VendorCardProps> = ({ vendor, onPress }) => {
 
   return (
     <TouchableOpacity
-      className="bg-white rounded-xl p-4 mb-3 shadow-sm border border-gray-100"
+      style={styles.card}
       onPress={handlePress}
       activeOpacity={0.7}
     >
-      <View className="flex-row">
+      <View style={styles.container}>
+        {/* Vendor Avatar */}
         <Image
           source={{ uri: vendor.profilePhoto || 'https://i.pravatar.cc/150?img=1' }}
-          className="w-20 h-20 rounded-full mr-4"
+          style={styles.avatar}
         />
-        <View className="flex-1">
-          <View className="flex-row items-center mb-1">
-            <Text className="text-lg font-bold text-gray-900 mr-2">{vendor.name}</Text>
-            {vendor.verified && <Text className="text-sm">✅</Text>}
+
+        {/* Vendor Info */}
+        <View style={styles.infoContainer}>
+          {/* Name and Verified Badge */}
+          <View style={styles.nameRow}>
+            <Text type="bodySemiBold" style={styles.vendorName} numberOfLines={1}>
+              {vendor.name}
+            </Text>
+            {vendor.verified && (
+              <Ionicons name="checkmark-circle" size={18} color={COLORS.success} />
+            )}
           </View>
-          <View className="flex-row items-center mb-2">
+
+          {/* Rating and Reviews */}
+          <View style={styles.ratingRow}>
             <RatingStars rating={vendor.rating} size="small" />
-            <Text className="text-sm text-gray-600 ml-2">
+            <Text type="body2" style={styles.reviewText}>
               ({vendor.totalReviews} reviews)
             </Text>
           </View>
-          <Text className="text-sm text-gray-600 mb-2">📍 {vendor.city}</Text>
-          <View className="flex-row flex-wrap">
+
+          {/* Location */}
+          <View style={styles.locationRow}>
+            <Ionicons name="location" size={14} color={COLORS.gray500} />
+            <Text type="body2" style={styles.locationText} numberOfLines={1}>
+              {vendor.city}
+            </Text>
+          </View>
+
+          {/* Service Categories */}
+          <View style={styles.categoriesRow}>
             {vendor.serviceCategories.slice(0, 2).map((category, index) => (
-              <View key={index} className="bg-primary-50 px-2 py-1 rounded mr-2 mb-1">
-                <Text className="text-xs text-primary font-medium">{category}</Text>
+              <View key={index} style={styles.categoryBadge}>
+                <Text type="caption" style={styles.categoryText}>{category.label}</Text>
               </View>
             ))}
             {vendor.serviceCategories.length > 2 && (
-              <View className="bg-gray-100 px-2 py-1 rounded">
-                <Text className="text-xs text-gray-600">
+              <View style={styles.moreBadge}>
+                <Text type="caption" style={styles.moreText}>
                   +{vendor.serviceCategories.length - 2}
                 </Text>
               </View>
             )}
           </View>
+
+          {/* Online Status (if needed in future) */}
           {/* {vendor.isOnline && (
-            <View className="flex-row items-center mt-2">
-              <View className="w-2 h-2 bg-success rounded-full mr-1" />
-              <Text className="text-xs text-success font-medium">Online</Text>
+            <View style={styles.onlineRow}>
+              <View style={styles.onlineDot} />
+              <Text type="caption" style={styles.onlineText}>Online</Text>
             </View>
           )} */}
         </View>
@@ -68,3 +109,111 @@ export const VendorCard: React.FC<VendorCardProps> = ({ vendor, onPress }) => {
     </TouchableOpacity>
   );
 };
+
+// ============================================================================
+// Memoization
+// ============================================================================
+
+export const VendorCard = memo(VendorCardComponent);
+
+// ============================================================================
+// Styles
+// ============================================================================
+
+const styles = StyleSheet.create({
+  card: {
+    backgroundColor: COLORS.white,
+    borderRadius: moderateScale(12),
+    padding: scale(16),
+    marginBottom: verticalScale(12),
+    shadowColor: COLORS.black,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+    borderWidth: 1,
+    borderColor: COLORS.gray100,
+  },
+  container: {
+    flexDirection: 'row',
+    gap: scale(12),
+  },
+  avatar: {
+    width: moderateScale(80),
+    height: moderateScale(80),
+    borderRadius: moderateScale(40),
+    backgroundColor: COLORS.gray100,
+  },
+  infoContainer: {
+    flex: 1,
+    gap: verticalScale(6),
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(6),
+  },
+  vendorName: {
+    flex: 1,
+    fontSize: moderateScale(16),
+    color: COLORS.gray900,
+  },
+  ratingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(6),
+  },
+  reviewText: {
+    color: COLORS.gray600,
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(4),
+  },
+  locationText: {
+    flex: 1,
+    color: COLORS.gray600,
+  },
+  categoriesRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: scale(6),
+  },
+  categoryBadge: {
+    backgroundColor: COLORS.primary50,
+    paddingHorizontal: scale(8),
+    paddingVertical: verticalScale(4),
+    borderRadius: moderateScale(6),
+  },
+  categoryText: {
+    fontSize: moderateScale(11),
+    color: COLORS.primary,
+  },
+  moreBadge: {
+    backgroundColor: COLORS.gray100,
+    paddingHorizontal: scale(8),
+    paddingVertical: verticalScale(4),
+    borderRadius: moderateScale(6),
+  },
+  moreText: {
+    fontSize: moderateScale(11),
+    color: COLORS.gray600,
+  },
+  // Online status styles (for future use)
+  // onlineRow: {
+  //   flexDirection: 'row',
+  //   alignItems: 'center',
+  //   gap: scale(4),
+  // },
+  // onlineDot: {
+  //   width: moderateScale(8),
+  //   height: moderateScale(8),
+  //   borderRadius: moderateScale(4),
+  //   backgroundColor: COLORS.success,
+  // },
+  // onlineText: {
+  //   fontSize: moderateScale(11),
+  //   color: COLORS.success,
+  // },
+});

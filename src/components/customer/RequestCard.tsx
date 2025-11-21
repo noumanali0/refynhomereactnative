@@ -1,6 +1,21 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { Clock, MapPin, DollarSign } from 'lucide-react-native';
+// src/components/customer/RequestCard.tsx
+/**
+ * Request Card Component
+ *
+ * Displays customer service request with status, date, location,
+ * and proposal count information.
+ */
+
+import React, { memo } from 'react';
+import { View, TouchableOpacity, StyleSheet } from 'react-native';
+import Text from '@/components/common/Text';
+import { Ionicons } from '@expo/vector-icons';
+import { moderateScale, scale, verticalScale } from 'react-native-size-matters';
+import { COLORS } from '@/constants/colors';
+
+// ============================================================================
+// Types
+// ============================================================================
 
 interface RequestCardProps {
     request: {
@@ -18,19 +33,23 @@ interface RequestCardProps {
     onPress: () => void;
 }
 
-export const RequestCard: React.FC<RequestCardProps> = ({ request, onPress }) => {
+// ============================================================================
+// Component
+// ============================================================================
+
+const RequestCardComponent: React.FC<RequestCardProps> = ({ request, onPress }) => {
     const getStatusColor = (status: string) => {
         switch (status) {
             case 'awaiting_proposals':
-                return '#F59E0B';
+                return COLORS.warning;
             case 'proposals_received':
-                return '#2563EB';
+                return COLORS.info;
             case 'in_progress':
-                return '#8B5CF6';
+                return COLORS.accent;
             case 'completed':
-                return '#10B981';
+                return COLORS.success;
             default:
-                return '#6B7280';
+                return COLORS.gray500;
         }
     };
 
@@ -38,45 +57,47 @@ export const RequestCard: React.FC<RequestCardProps> = ({ request, onPress }) =>
         return status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
     };
 
+    const statusColor = getStatusColor(request.status);
+
     return (
         <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.7}>
             <View style={styles.header}>
                 <View style={styles.titleRow}>
-                    <Text style={styles.title} numberOfLines={1}>
+                    <Text type="bodySemiBold" style={styles.title} numberOfLines={1}>
                         {request.title}
                     </Text>
-                    <View style={[styles.statusBadge, { backgroundColor: `${getStatusColor(request.status)}20` }]}>
-                        <View style={[styles.statusDot, { backgroundColor: getStatusColor(request.status) }]} />
-                        <Text style={[styles.statusText, { color: getStatusColor(request.status) }]}>
+                    <View style={[styles.statusBadge, { backgroundColor: statusColor + '15' }]}>
+                        <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
+                        <Text type="caption" style={[styles.statusText, { color: statusColor }]}>
                             {getStatusText(request.status)}
                         </Text>
                     </View>
                 </View>
-                <Text style={styles.serviceType}>{request.serviceType}</Text>
+                <Text type="body2" style={styles.serviceType}>{request.serviceType}</Text>
             </View>
 
             <View style={styles.details}>
                 <View style={styles.detailRow}>
-                    <Clock size={14} color="#6B7280" />
-                    <Text style={styles.detailText}>
+                    <Ionicons name="time-outline" size={14} color={COLORS.gray500} />
+                    <Text type="body2" style={styles.detailText}>
                         {new Date(request.preferredDate).toLocaleDateString()}
                     </Text>
                 </View>
                 <View style={styles.detailRow}>
-                    <MapPin size={14} color="#6B7280" />
-                    <Text style={styles.detailText}>{request.address.city}</Text>
+                    <Ionicons name="location-outline" size={14} color={COLORS.gray500} />
+                    <Text type="body2" style={styles.detailText}>{request.address.city}</Text>
                 </View>
                 {request.estimatedBudget && (
                     <View style={styles.detailRow}>
-                        <DollarSign size={14} color="#6B7280" />
-                        <Text style={styles.detailText}>${request.estimatedBudget}</Text>
+                        <Ionicons name="cash-outline" size={14} color={COLORS.gray500} />
+                        <Text type="body2" style={styles.detailText}>Rs. {request.estimatedBudget}</Text>
                     </View>
                 )}
             </View>
 
             {request.proposalCount !== undefined && request.proposalCount > 0 && (
                 <View style={styles.footer}>
-                    <Text style={styles.proposalCount}>
+                    <Text type="bodySemiBold" style={styles.proposalCount}>
                         {request.proposalCount} proposal{request.proposalCount !== 1 ? 's' : ''} received
                     </Text>
                 </View>
@@ -85,78 +106,83 @@ export const RequestCard: React.FC<RequestCardProps> = ({ request, onPress }) =>
     );
 };
 
+// ============================================================================
+// Memoization
+// ============================================================================
+
+export const RequestCard = memo(RequestCardComponent);
+
+// ============================================================================
+// Styles
+// ============================================================================
+
 const styles = StyleSheet.create({
     card: {
-        backgroundColor: '#FFFFFF',
-        borderRadius: 16,
-        padding: 16,
-        marginBottom: 12,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.06,
+        backgroundColor: COLORS.white,
+        borderRadius: moderateScale(12),
+        padding: scale(16),
+        marginBottom: verticalScale(12),
+        shadowColor: COLORS.black,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
         shadowRadius: 8,
         elevation: 2,
+        borderWidth: 1,
+        borderColor: COLORS.gray100,
     },
     header: {
-        marginBottom: 12,
+        marginBottom: verticalScale(12),
     },
     titleRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
-        marginBottom: 4,
+        marginBottom: verticalScale(4),
     },
     title: {
         flex: 1,
-        fontSize: 16,
-        fontWeight: '600',
-        color: '#111827',
-        marginRight: 8,
+        color: COLORS.gray900,
+        marginRight: scale(8),
     },
     statusBadge: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 12,
+        paddingHorizontal: scale(8),
+        paddingVertical: verticalScale(4),
+        borderRadius: moderateScale(12),
     },
     statusDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        marginRight: 4,
+        width: moderateScale(6),
+        height: moderateScale(6),
+        borderRadius: moderateScale(3),
+        marginRight: scale(4),
     },
     statusText: {
-        fontSize: 11,
-        fontWeight: '600',
+        fontSize: moderateScale(11),
     },
     serviceType: {
-        fontSize: 13,
-        color: '#6B7280',
+        color: COLORS.gray600,
     },
     details: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 12,
+        gap: scale(12),
     },
     detailRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
+        gap: scale(4),
     },
     detailText: {
-        fontSize: 13,
-        color: '#6B7280',
+        color: COLORS.gray600,
     },
     footer: {
-        marginTop: 12,
-        paddingTop: 12,
-        borderTopWidth: 1,
-        borderTopColor: '#F3F4F6',
+        marginTop: verticalScale(12),
+        paddingTop: verticalScale(12),
+        borderTopWidth: StyleSheet.hairlineWidth,
+        borderTopColor: COLORS.gray200,
     },
     proposalCount: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: '#2563EB',
+        color: COLORS.info,
     },
 });

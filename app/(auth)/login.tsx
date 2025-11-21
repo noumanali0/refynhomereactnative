@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     KeyboardAvoidingView,
@@ -8,24 +8,31 @@ import {
     TouchableOpacity,
     Animated,
     TextInput,
+    Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { useAppDispatch } from '@/hooks/useAppDispatch';
+import { useAppDispatch, useAppSelector } from '@/hooks/useAppDispatch';
+import { sendLoginOTP, verifyOTP, resendOTP, clearError } from '@/store/slices/authSlice';
 import { moderateScale } from 'react-native-size-matters';
 import Text from '@/components/common/Text';
 
 export default function Login() {
     const router = useRouter();
     const dispatch = useAppDispatch();
+
+    // Redux state
+    const { isLoading, error, otpSent: reduxOtpSent, isAuthenticated, user } = useAppSelector((state) => state.auth);
+
+    // Local state
     const [phoneNumber, setPhoneNumber] = useState('');
     const [otp, setOtp] = useState('');
-    const [otpSent, setOtpSent] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
     const [fadeAnim] = useState(new Animated.Value(0));
+    const [resendTimer, setResendTimer] = useState(0);
 
-    React.useEffect(() => {
+    // Animation
+    useEffect(() => {
         Animated.timing(fadeAnim, {
             toValue: 1,
             duration: 800,
@@ -33,33 +40,82 @@ export default function Login() {
         }).start();
     }, []);
 
-    const handleSendOTP = () => {
-        if (phoneNumber.length < 10) return;
+    // Resend timer countdown
+    useEffect(() => {
+        let interval: NodeJS.Timeout;
+        if (resendTimer > 0) {
+            interval = setInterval(() => {
+                setResendTimer((prev) => prev - 1);
+            }, 1000);
+        }
+        return () => clearInterval(interval);
+    }, [resendTimer]);
 
-        setIsLoading(true);
-        setTimeout(() => {
-            setOtpSent(true);
-            setIsLoading(false);
-        }, 1500);
+    // Navigate after successful authentication
+    useEffect(() => {
+        if (isAuthenticated && user) {
+            // Navigate based on role
+            if (user.role === 'customer') {
+                router.replace('/(customer)/(home)');
+            } else if (user.role === 'vendor') {
+                router.replace('/(vendor)/(servicerequests)');
+            }
+        }
+    }, [isAuthenticated, user]);
+
+    // Show error alert
+    useEffect(() => {
+        if (error) {
+            Alert.alert('Error', error, [
+                { text: 'OK', onPress: () => dispatch(clearError()) },
+            ]);
+        }
+    }, [error]);
+
+    // Handle Send OTP
+    const handleSendOTP = async () => {
+        if (phoneNumber.length < 10) {
+            Alert.alert('Invalid Phone', 'Please enter a valid phone number');
+            return;
+        }
+
+        try {
+            await dispatch(sendLoginOTP(phoneNumber)).unwrap();
+            setResendTimer(60); // Start 60-second countdown
+        } catch (err) {
+            // Error handled by useEffect
+        }
     };
 
-    const handleVerifyOTP = () => {
-        if (otp.length !== 6) return;
+    // Handle Verify OTP
+    const handleVerifyOTP = async () => {
+        if (otp.length !== 6) {
+            Alert.alert('Invalid OTP', 'Please enter a 6-digit OTP');
+            return;
+        }
 
-        setIsLoading(true);
-        setTimeout(() => {
-            setIsLoading(false);
-            // Navigate to role selection after OTP verification
-            router.push('/(auth)/role-selection');
-        }, 1500);
+        try {
+            await dispatch(verifyOTP({ phoneNumber, otp, type: 'login' })).unwrap();
+            // Navigation handled by useEffect
+        } catch (err) {
+            // Error handled by useEffect
+        }
     };
 
-    const handleResendOTP = () => {
-        setIsLoading(true);
-        setTimeout(() => {
-            setIsLoading(false);
-            alert('OTP resent successfully');
-        }, 1000);
+    // Handle Resend OTP
+    const handleResendOTP = async () => {
+        if (resendTimer > 0) {
+            Alert.alert('Please Wait', `You can resend OTP in ${resendTimer} seconds`);
+            return;
+        }
+
+        try {
+            await dispatch(resendOTP(phoneNumber)).unwrap();
+            setResendTimer(60);
+            Alert.alert('Success', 'OTP resent successfully');
+        } catch (err) {
+            // Error handled by useEffect
+        }
     };
 
     return (
@@ -97,10 +153,10 @@ export default function Login() {
                         {/* Welcome Text */}
                         <View style={styles.welcomeSection}>
                             <Text type='bodySemiBold' style={styles.welcomeTitle}>
-                                {otpSent ? 'Verify OTP' : 'Welcome Back!'}
+                                {reduxOtpSent ? 'Verify OTP' : 'Welcome Back!'}
                             </Text>
                             <Text type='body2' style={styles.welcomeSubtitle}>
-                                {otpSent
+                                {reduxOtpSent
                                     ? `Enter the code sent to ${phoneNumber}`
                                     : 'Login to continue'}
                             </Text>
@@ -121,14 +177,14 @@ export default function Login() {
                                     value={phoneNumber}
                                     onChangeText={setPhoneNumber}
                                     keyboardType="phone-pad"
-                                    editable={!otpSent}
+                                    editable={!reduxOtpSent}
                                     style={styles.input}
                                 />
                             </View>
                         </View>
 
                         {/* OTP Input (Conditional) */}
-                        {otpSent && (
+                        {reduxOtpSent && (
                             <Animated.View style={styles.inputContainer}>
                                 <Text type='body2' style={styles.inputLabel}>Enter OTP</Text>
                                 <View style={styles.inputWrapper}>
@@ -145,17 +201,27 @@ export default function Login() {
                                         keyboardType="number-pad"
                                         maxLength={6}
                                         style={styles.input}
+                                        autoFocus
                                     />
                                 </View>
 
-                                {/* Resend OTP Link */}
+                                {/* Resend OTP Link with Timer */}
                                 <TouchableOpacity
                                     onPress={handleResendOTP}
                                     style={styles.resendContainer}
+                                    disabled={resendTimer > 0}
                                 >
                                     <Text type='body' style={styles.resendText}>
                                         Didn't receive code?{' '}
-                                        <Text type='bodySemiBold' style={styles.resendLink}>Resend</Text>
+                                        <Text
+                                            type='bodySemiBold'
+                                            style={[
+                                                styles.resendLink,
+                                                resendTimer > 0 && styles.resendLinkDisabled
+                                            ]}
+                                        >
+                                            {resendTimer > 0 ? `Resend in ${resendTimer}s` : 'Resend'}
+                                        </Text>
                                     </Text>
                                 </TouchableOpacity>
                             </Animated.View>
@@ -163,7 +229,7 @@ export default function Login() {
 
                         {/* Action Buttons */}
                         <View style={styles.buttonContainer}>
-                            {!otpSent ? (
+                            {!reduxOtpSent ? (
                                 <TouchableOpacity
                                     onPress={handleSendOTP}
                                     disabled={phoneNumber.length < 10 || isLoading}
@@ -172,7 +238,7 @@ export default function Login() {
                                 >
                                     <LinearGradient
                                         colors={
-                                            phoneNumber.length < 10
+                                            phoneNumber.length < 10 || isLoading
                                                 ? ['#94a3b8', '#94a3b8']
                                                 : ['#2563EB', '#F97316']
                                         }
@@ -186,7 +252,7 @@ export default function Login() {
                                             <Ionicons name="paper-plane-outline" size={20} color="#fff" />
                                         )}
                                         <Text type='body2' style={styles.buttonText}>
-                                            {isLoading ? 'Loading!!...' : 'Login'}
+                                            {isLoading ? 'Sending OTP...' : 'Send OTP'}
                                         </Text>
                                     </LinearGradient>
                                 </TouchableOpacity>
@@ -199,7 +265,7 @@ export default function Login() {
                                 >
                                     <LinearGradient
                                         colors={
-                                            otp.length !== 6
+                                            otp.length !== 6 || isLoading
                                                 ? ['#94a3b8', '#94a3b8']
                                                 : ['#2563EB', '#F97316']
                                         }
@@ -212,7 +278,7 @@ export default function Login() {
                                         ) : (
                                             <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
                                         )}
-                                        <Text style={styles.buttonText}>
+                                        <Text type='body2' style={styles.buttonText}>
                                             {isLoading ? 'Verifying...' : 'Verify & Continue'}
                                         </Text>
                                     </LinearGradient>
@@ -374,6 +440,9 @@ const styles = StyleSheet.create({
         color: '#2563EB',
         fontSize: moderateScale(14)
         // fontWeight: '600',
+    },
+    resendLinkDisabled: {
+        color: '#94a3b8',
     },
     buttonContainer: {
         marginTop: moderateScale(8),
