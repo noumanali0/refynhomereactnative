@@ -16,18 +16,19 @@ export const RatingStars: React.FC<RatingStarsProps> = ({
   interactive = false,
   onRatingChange,
 }) => {
-  const getSizeClass = () => {
+  const getSizeStyle = () => {
     switch (size) {
       case 'small':
-        return 'text-sm';
+        return { fontSize: 14 };
       case 'medium':
-        return 'text-lg';
+        return { fontSize: 18 };
       case 'large':
-        return 'text-2xl';
+        return { fontSize: 26 };
       default:
-        return 'text-lg';
+        return { fontSize: 18 };
     }
   };
+
 
   const renderStars = () => {
     return Array.from({ length: maxStars }, (_, index) => {
@@ -42,7 +43,7 @@ export const RatingStars: React.FC<RatingStarsProps> = ({
 
       return (
         <StarComponent key={index} {...componentProps}>
-          <Text className={getSizeClass()}>
+          <Text style={getSizeStyle()}>
             {isFilled ? '⭐' : isHalf ? '⭐' : '☆'}
           </Text>
         </StarComponent>

@@ -10,6 +10,7 @@ import offersReducer from './slices/offersSlice';
 
 // ⭐ NEW: Import our newly created slice
 import requestsReducer from './slices/requestsSlice';
+import subscriptionReducer from './slices/subscriptionSlice';
 
 export const store = configureStore({
   reducer: {
@@ -21,6 +22,9 @@ export const store = configureStore({
 
     // ⭐ Add vendor live requests slice
     requests: requestsReducer,
+
+    // ⭐ Add vendor subscription slice
+    subscription: subscriptionReducer,
   },
 
   // (optional but recommended for production quality)
@@ -31,6 +35,13 @@ export const store = configureStore({
           // ignore non-serializable actions coming from live mock generator
           'requests/startReceiving',
           'requests/stopReceiving',
+        ],
+        ignoredPaths: [
+          // Ignore Set object in state (used for O(1) service category lookups)
+          'requests.vendorServiceCategories',
+          // Ignore API service instance (contains functions/callbacks)
+          'requests._apiService',
+          'subscription._apiService',
         ],
       },
     }),

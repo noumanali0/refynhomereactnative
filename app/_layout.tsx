@@ -34,8 +34,8 @@ function RootLayoutNav() {
     const inAuth = segments[0] === "(auth)";
     const inCustomer = segments[0] === "(customer)";
     const inVendor = segments[0] === "(vendor)";
-    // router.replace({ pathname: "/(customer)/(home)/live-offers" })
-    router.replace({ pathname: "/(vendor)/(servicerequests)" })
+    router.replace({ pathname: "/(customer)" })
+    // router.replace({ pathname: "/(vendor)/(servicerequests)" })
     // if (loaded) {
     let redirectTimeout: NodeJS.Timeout;
     // redirectTimeout = setTimeout(() => {

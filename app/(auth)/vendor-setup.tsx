@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   View,
-  Text,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -11,6 +10,7 @@ import {
   Image,
   TextInput,
 } from 'react-native';
+import Text from '@/components/common/Text';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -279,8 +279,8 @@ export default function VendorProfileSetup() {
               <Ionicons name="construct" size={36} color="#fff" />
             </LinearGradient>
           </View>
-          <Text style={styles.appName}>Complete Your Profile</Text>
-          <Text style={styles.tagline}>Let's set up your vendor profile</Text>
+          <Text type="title" style={styles.appName}>Complete Your Profile</Text>
+          <Text type="body2" style={styles.tagline}>Let's set up your vendor profile</Text>
         </View>
 
         {/* Progress Indicator */}
@@ -316,7 +316,7 @@ export default function VendorProfileSetup() {
                 style={styles.infoBannerGradient}
               >
                 <Ionicons name="information-circle" size={24} color="#F97316" />
-                <Text style={styles.infoBannerText}>
+                <Text type="body" style={styles.infoBannerText}>
                   Complete profile helps customers trust you more
                 </Text>
               </LinearGradient>
@@ -324,7 +324,7 @@ export default function VendorProfileSetup() {
 
             {/* Profile Photo Upload */}
             <View style={styles.photoContainer}>
-              <Text style={styles.photoLabel}>
+              <Text type="subtitle2" style={styles.photoLabel}>
                 Profile Photo <Text style={styles.required}>*</Text>
               </Text>
               <TouchableOpacity
@@ -344,7 +344,7 @@ export default function VendorProfileSetup() {
                         style={styles.photoEditGradient}
                       >
                         <Ionicons name="camera" size={24} color="#fff" />
-                        <Text style={styles.photoEditText}>Change Photo</Text>
+                        <Text type="bodySemiBold" style={styles.photoEditText}>Change Photo</Text>
                       </LinearGradient>
                     </View>
                   </View>
@@ -363,23 +363,23 @@ export default function VendorProfileSetup() {
                     >
                       <Ionicons name="camera" size={40} color="#F97316" />
                     </View>
-                    <Text style={styles.photoPlaceholderText}>
+                    <Text type="bodySemiBold" style={styles.photoPlaceholderText}>
                       Tap to upload photo
                     </Text>
-                    <Text style={styles.photoPlaceholderSubtext}>
+                    <Text type="body" style={styles.photoPlaceholderSubtext}>
                       JPG, PNG (Max 5MB)
                     </Text>
                   </LinearGradient>
                 )}
               </TouchableOpacity>
               {errors.profilePhoto ? (
-                <Text style={styles.errorText}>{errors.profilePhoto}</Text>
+                <Text type="body" style={styles.errorText}>{errors.profilePhoto}</Text>
               ) : null}
             </View>
 
             {/* CNIC Number Input */}
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>
+              <Text type="subtitle2" style={styles.inputLabel}>
                 CNIC Number <Text style={styles.required}>*</Text>
               </Text>
               <View
@@ -404,13 +404,13 @@ export default function VendorProfileSetup() {
                 />
               </View>
               {errors.cnicNumber ? (
-                <Text style={styles.errorText}>{errors.cnicNumber}</Text>
+                <Text type="body" style={styles.errorText}>{errors.cnicNumber}</Text>
               ) : null}
             </View>
 
             {/* City Dropdown */}
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>
+              <Text type="subtitle2" style={styles.inputLabel}>
                 City <Text style={styles.required}>*</Text>
               </Text>
               <TouchableOpacity
@@ -430,6 +430,7 @@ export default function VendorProfileSetup() {
                     style={styles.inputIcon}
                   />
                   <Text
+                    type="body2"
                     style={[
                       styles.dropdownText,
                       formData.city === 'Select city' && styles.placeholderText,
@@ -461,6 +462,7 @@ export default function VendorProfileSetup() {
                         ]}
                       >
                         <Text
+                          type="body2"
                           style={[
                             styles.dropdownItemText,
                             formData.city === city && styles.dropdownItemTextSelected,
@@ -477,13 +479,13 @@ export default function VendorProfileSetup() {
                 </View>
               )}
               {errors.city ? (
-                <Text style={styles.errorText}>{errors.city}</Text>
+                <Text type="body" style={styles.errorText}>{errors.city}</Text>
               ) : null}
             </View>
 
             {/* Service Areas Input */}
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>
+              <Text type="subtitle2" style={styles.inputLabel}>
                 Service Areas <Text style={styles.required}>*</Text>
               </Text>
               <View
@@ -506,13 +508,13 @@ export default function VendorProfileSetup() {
                 />
               </View>
               {errors.serviceAreas ? (
-                <Text style={styles.errorText}>{errors.serviceAreas}</Text>
+                <Text type="body" style={styles.errorText}>{errors.serviceAreas}</Text>
               ) : null}
             </View>
 
             {/* Years of Experience */}
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Years of Experience</Text>
+              <Text type="subtitle2" style={styles.inputLabel}>Years of Experience</Text>
               <View style={styles.inputWrapper}>
                 <Ionicons
                   name="briefcase-outline"
@@ -536,7 +538,7 @@ export default function VendorProfileSetup() {
 
             {/* Full Name Input */}
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>
+              <Text type="subtitle2" style={styles.inputLabel}>
                 Full Name <Text style={styles.required}>*</Text>
               </Text>
               <View
@@ -559,13 +561,13 @@ export default function VendorProfileSetup() {
                 />
               </View>
               {errors.name ? (
-                <Text style={styles.errorText}>{errors.name}</Text>
+                <Text type="body" style={styles.errorText}>{errors.name}</Text>
               ) : null}
             </View>
 
             {/* Email Input */}
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>
+              <Text type="subtitle2" style={styles.inputLabel}>
                 Email Address <Text style={styles.required}>*</Text>
               </Text>
               <View
@@ -590,16 +592,16 @@ export default function VendorProfileSetup() {
                 />
               </View>
               {errors.email ? (
-                <Text style={styles.errorText}>{errors.email}</Text>
+                <Text type="body" style={styles.errorText}>{errors.email}</Text>
               ) : null}
-              <Text style={styles.hintText}>
+              <Text type="body" style={styles.hintText}>
                 We'll use this for important notifications
               </Text>
             </View>
 
             {/* Service Categories */}
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>
+              <Text type="subtitle2" style={styles.inputLabel}>
                 Service Categories <Text style={styles.required}>*</Text>
               </Text>
               <View style={styles.categoriesGrid}>
@@ -627,6 +629,7 @@ export default function VendorProfileSetup() {
                           )}
                         </View>
                         <Text
+                          type="body"
                           style={[
                             styles.categoryLabel,
                             isSelected && styles.categoryLabelSelected,
@@ -641,13 +644,13 @@ export default function VendorProfileSetup() {
                 })}
               </View>
               {errors.serviceCategories ? (
-                <Text style={styles.errorText}>{errors.serviceCategories}</Text>
+                <Text type="body" style={styles.errorText}>{errors.serviceCategories}</Text>
               ) : null}
             </View>
 
             {/* Bio */}
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>Bio</Text>
+              <Text type="subtitle2" style={styles.inputLabel}>Bio</Text>
               <View style={[styles.inputWrapper, styles.textAreaWrapper]}>
                 <Ionicons
                   name="document-text-outline"
@@ -669,7 +672,7 @@ export default function VendorProfileSetup() {
 
             {/* CNIC Verification Photo */}
             <View style={styles.photoContainer}>
-              <Text style={styles.photoLabel}>
+              <Text type="subtitle2" style={styles.photoLabel}>
                 ID Verification Photo (CNIC) <Text style={styles.required}>*</Text>
               </Text>
               <TouchableOpacity
@@ -693,8 +696,8 @@ export default function VendorProfileSetup() {
                       color={errors.cnicPhoto ? '#ef4444' : '#F97316'}
                     />
                     <View style={styles.cnicPhotoTextContainer}>
-                      <Text style={styles.cnicPhotoButtonText}>Choose File</Text>
-                      <Text style={styles.cnicPhotoSubtext}>
+                      <Text type="bodySemiBold" style={styles.cnicPhotoButtonText}>Choose File</Text>
+                      <Text type="body" style={styles.cnicPhotoSubtext}>
                         {cnicPhoto ? 'File selected ✓' : 'No file chosen'}
                       </Text>
                     </View>
@@ -710,7 +713,7 @@ export default function VendorProfileSetup() {
                 </LinearGradient>
               </TouchableOpacity>
               {errors.cnicPhoto ? (
-                <Text style={styles.errorText}>{errors.cnicPhoto}</Text>
+                <Text type="body" style={styles.errorText}>{errors.cnicPhoto}</Text>
               ) : null}
             </View>
 
@@ -732,7 +735,7 @@ export default function VendorProfileSetup() {
                 ) : (
                   <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
                 )}
-                <Text style={styles.submitButtonText}>
+                <Text type="button" style={styles.submitButtonText}>
                   {isLoading ? 'Setting Up...' : 'Complete Profile'}
                 </Text>
               </LinearGradient>
@@ -774,7 +777,6 @@ const styles = StyleSheet.create({
   },
   appName: {
     fontSize: moderateScale(26),
-    fontWeight: '800',
     color: '#fff',
     marginBottom: 4,
     textShadowColor: 'rgba(0,0,0,0.1)',
@@ -782,9 +784,7 @@ const styles = StyleSheet.create({
     textShadowRadius: 4,
   },
   tagline: {
-    fontSize: moderateScale(14),
     color: 'rgba(255,255,255,0.9)',
-    fontWeight: '500',
   },
   progressContainer: {
     paddingHorizontal: moderateScale(40),
@@ -838,17 +838,13 @@ const styles = StyleSheet.create({
   },
   infoBannerText: {
     flex: 1,
-    fontSize: moderateScale(13),
     color: '#334155',
     lineHeight: 18,
-    fontWeight: '500',
   },
   photoContainer: {
     marginBottom: moderateScale(24),
   },
   photoLabel: {
-    fontSize: moderateScale(14),
-    fontWeight: '600',
     color: '#334155',
     marginBottom: 12,
   },
@@ -882,8 +878,6 @@ const styles = StyleSheet.create({
   },
   photoEditText: {
     color: '#fff',
-    fontSize: moderateScale(14),
-    fontWeight: '600',
   },
   photoPlaceholder: {
     height: moderateScale(200),
@@ -907,13 +901,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(239, 68, 68, 0.1)',
   },
   photoPlaceholderText: {
-    fontSize: moderateScale(15),
-    fontWeight: '600',
     color: '#334155',
     marginTop: 8,
   },
   photoPlaceholderSubtext: {
-    fontSize: moderateScale(12),
     color: '#64748b',
     marginTop: 4,
   },
@@ -921,8 +912,6 @@ const styles = StyleSheet.create({
     marginBottom: moderateScale(20),
   },
   inputLabel: {
-    fontSize: moderateScale(14),
-    fontWeight: '600',
     color: '#334155',
     marginBottom: 8,
   },
@@ -951,7 +940,6 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   errorText: {
-    fontSize: moderateScale(12),
     color: '#ef4444',
     marginTop: 6,
     marginLeft: 4,
@@ -991,13 +979,10 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   submitButtonText: {
-    fontSize: moderateScale(16),
-    fontWeight: '700',
     color: '#fff',
   },
 
   hintText: {
-    fontSize: moderateScale(12),
     color: '#64748b',
     marginTop: 4,
   },
@@ -1025,16 +1010,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(37,99,235,0.08)',
   },
   dropdownItemText: {
-    fontSize: moderateScale(14),
     color: '#334155',
   },
   dropdownItemTextSelected: {
     color: '#2563eb',
-    fontWeight: '700',
   },
   dropdownText: {
     flex: 1,
-    fontSize: moderateScale(14),
     color: '#0f172a',
   },
   placeholderText: {
@@ -1081,14 +1063,11 @@ const styles = StyleSheet.create({
     borderColor: '#2563eb',
   },
   categoryLabel: {
-    fontSize: moderateScale(12),
     color: '#334155',
-    fontWeight: '600',
     flex: 1,
   },
   categoryLabelSelected: {
     color: '#1e293b',
-    fontWeight: '700',
   },
 
 
@@ -1117,12 +1096,9 @@ const styles = StyleSheet.create({
     marginLeft: 12,
   },
   cnicPhotoButtonText: {
-    fontSize: moderateScale(14),
-    fontWeight: '700',
     color: '#0f172a',
   },
   cnicPhotoSubtext: {
-    fontSize: moderateScale(12),
     color: '#64748b',
   },
   cnicPhotoPreviewThumb: {

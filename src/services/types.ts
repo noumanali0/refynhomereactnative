@@ -43,3 +43,6 @@ export type RouteInfo = {
     duration: number; // in seconds
     coordinates: Coordinates[];
 };
+
+// Export subscription types
+export * from '@/types/subscription';

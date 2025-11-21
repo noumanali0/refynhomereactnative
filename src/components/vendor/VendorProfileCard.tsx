@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, Image, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Image, TouchableOpacity, StyleSheet } from 'react-native';
+import Text from '@/components/common/Text';
 import { Star, MapPin, CheckCircle, Award } from 'lucide-react-native';
 
 interface VendorProfileCardProps {
@@ -32,32 +33,32 @@ export const VendorProfileCard: React.FC<VendorProfileCardProps> = ({
 
                 <View style={styles.headerInfo}>
                     <View style={styles.nameRow}>
-                        <Text style={styles.name}>{vendor.name}</Text>
+                        <Text type="title" style={styles.name}>{vendor.name}</Text>
                         {vendor.isVerified && (
                             <View style={styles.badge}>
                                 <CheckCircle size={12} color="#2563EB" />
-                                <Text style={styles.badgeText}>Verified</Text>
+                                <Text type="caption" style={styles.badgeText}>Verified</Text>
                             </View>
                         )}
                         {vendor.isGold && (
                             <View style={[styles.badge, styles.goldBadge]}>
                                 <Award size={12} color="#F59E0B" />
-                                <Text style={styles.goldBadgeText}>Gold</Text>
+                                <Text type="caption" style={styles.goldBadgeText}>Gold</Text>
                             </View>
                         )}
                     </View>
 
                     <View style={styles.ratingRow}>
                         <Star size={14} color="#F59E0B" fill="#F59E0B" />
-                        <Text style={styles.rating}>{vendor.rating.toFixed(1)}</Text>
-                        <Text style={styles.reviewCount}>({vendor.reviewCount} reviews)</Text>
+                        <Text type="bodySemiBold" style={styles.rating}>{vendor.rating.toFixed(1)}</Text>
+                        <Text type="body2" style={styles.reviewCount}>({vendor.reviewCount} reviews)</Text>
                     </View>
 
                     <View style={styles.locationRow}>
                         <MapPin size={14} color="#6B7280" />
-                        <Text style={styles.location}>{vendor.city}</Text>
-                        <Text style={styles.separator}>•</Text>
-                        <Text style={styles.jobsCompleted}>{vendor.jobsCompleted} jobs completed</Text>
+                        <Text type="body2" style={styles.location}>{vendor.city}</Text>
+                        <Text type="body2" style={styles.separator}>•</Text>
+                        <Text type="body2" style={styles.jobsCompleted}>{vendor.jobsCompleted} jobs completed</Text>
                     </View>
                 </View>
             </View>
@@ -68,11 +69,11 @@ export const VendorProfileCard: React.FC<VendorProfileCardProps> = ({
                 onPress={onToggleAvailability}
                 activeOpacity={0.7}
             >
-                <Text style={styles.toggleLabel}>Availability:</Text>
+                <Text type="body2" style={styles.toggleLabel}>Availability:</Text>
                 <View style={[styles.toggle, vendor.isOnline && styles.toggleActive]}>
                     <View style={[styles.toggleThumb, vendor.isOnline && styles.toggleThumbActive]} />
                 </View>
-                <Text style={[styles.toggleStatus, vendor.isOnline && styles.toggleStatusActive]}>
+                <Text type="bodySemiBold" style={[styles.toggleStatus, vendor.isOnline && styles.toggleStatusActive]}>
                     {vendor.isOnline ? 'Online' : 'Offline'}
                 </Text>
             </TouchableOpacity>
@@ -130,7 +131,6 @@ const styles = StyleSheet.create({
     },
     name: {
         fontSize: 18,
-        fontWeight: '700',
         color: '#111827',
         marginRight: 8,
     },
@@ -144,8 +144,6 @@ const styles = StyleSheet.create({
         marginRight: 6,
     },
     badgeText: {
-        fontSize: 11,
-        fontWeight: '600',
         color: '#2563EB',
         marginLeft: 3,
     },
@@ -154,8 +152,6 @@ const styles = StyleSheet.create({
     },
     goldBadgeText: {
         color: '#F59E0B',
-        fontSize: 11,
-        fontWeight: '600',
         marginLeft: 3,
     },
     ratingRow: {
@@ -164,13 +160,10 @@ const styles = StyleSheet.create({
         marginBottom: 4,
     },
     rating: {
-        fontSize: 14,
-        fontWeight: '600',
         color: '#111827',
         marginLeft: 4,
     },
     reviewCount: {
-        fontSize: 13,
         color: '#6B7280',
         marginLeft: 4,
     },
@@ -179,17 +172,14 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     location: {
-        fontSize: 13,
         color: '#6B7280',
         marginLeft: 4,
     },
     separator: {
-        fontSize: 13,
         color: '#D1D5DB',
         marginHorizontal: 6,
     },
     jobsCompleted: {
-        fontSize: 13,
         color: '#6B7280',
     },
     toggleButton: {
@@ -200,8 +190,6 @@ const styles = StyleSheet.create({
         borderTopColor: '#F3F4F6',
     },
     toggleLabel: {
-        fontSize: 14,
-        fontWeight: '500',
         color: '#374151',
         marginRight: 12,
     },
@@ -226,8 +214,6 @@ const styles = StyleSheet.create({
         transform: [{ translateX: 20 }],
     },
     toggleStatus: {
-        fontSize: 14,
-        fontWeight: '600',
         color: '#6B7280',
         marginLeft: 8,
     },

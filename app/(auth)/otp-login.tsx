@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { View, Text, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import Text from '@/components/common/Text';
 import { useRouter } from 'expo-router';
 import { AppButton } from '../../src/components/common/AppButton';
 import { InputField } from '../../src/components/common/InputField';
@@ -36,8 +37,8 @@ export default function OTPLogin() {
       >
         <ScrollView className="flex-1 px-6">
           <View className="mt-20 mb-10">
-            <Text className="text-4xl font-bold text-primary mb-2">RefynHome</Text>
-            <Text className="text-gray-600 text-lg">Welcome back!</Text>
+            <Text type="title" className="text-4xl font-bold text-primary mb-2">RefynHome</Text>
+            <Text type="body2" className="text-gray-600 text-lg">Welcome back!</Text>
           </View>
 
           <InputField
@@ -86,7 +87,7 @@ export default function OTPLogin() {
             )}
           </View>
 
-          <Text className="text-center text-gray-500 text-sm mt-8">
+          <Text type="body2" className="text-center text-gray-500 text-sm mt-8">
             By continuing, you agree to our Terms & Conditions
           </Text>
         </ScrollView>

@@ -36,7 +36,7 @@ export const BookingCard: React.FC<BookingCardProps> = ({ booking, vendorName, o
     >
       <View className="flex-row justify-between items-start mb-3">
         <View className="flex-1">
-          <Text className="text-lg font-bold text-gray-900 mb-1">{booking.serviceCategory}</Text>
+          <Text className="text-lg font-bold text-gray-900 mb-1">{booking.serviceCategory.label}</Text>
           {vendorName && (
             <Text className="text-sm text-gray-600">Vendor: {vendorName}</Text>
           )}

@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import {
   View,
-  Text,
   StyleSheet,
   TouchableOpacity,
   Animated,
   ScrollView,
 } from 'react-native';
+import Text from '@/components/common/Text';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -83,8 +83,8 @@ export default function RoleSelection() {
               <Ionicons name="people" size={40} color="#fff" />
             </LinearGradient>
           </View>
-          <Text style={styles.appName}>Choose Your Role</Text>
-          <Text style={styles.tagline}>How would you like to use RefynHome?</Text>
+          <Text type="title" style={styles.appName}>Choose Your Role</Text>
+          <Text type="body2" style={styles.tagline}>How would you like to use RefynHome?</Text>
         </View>
       </LinearGradient>
       <ScrollView>
@@ -125,6 +125,7 @@ export default function RoleSelection() {
               </LinearGradient>
 
               <Text
+                type="title"
                 style={[
                   styles.roleTitle,
                   selectedRole === 'customer' && styles.roleTitleSelected,
@@ -132,22 +133,22 @@ export default function RoleSelection() {
               >
                 I'm a Customer
               </Text>
-              <Text style={styles.roleDescription}>
+              <Text type="body2" style={styles.roleDescription}>
                 Find and hire service providers for your home needs
               </Text>
 
               <View style={styles.featuresList}>
                 <View style={styles.featureItem}>
                   <Ionicons name="checkmark-circle" size={18} color="#10b981" />
-                  <Text style={styles.featureText}>Request services</Text>
+                  <Text type="body" style={styles.featureText}>Request services</Text>
                 </View>
                 <View style={styles.featureItem}>
                   <Ionicons name="checkmark-circle" size={18} color="#10b981" />
-                  <Text style={styles.featureText}>Track vendors</Text>
+                  <Text type="body" style={styles.featureText}>Track vendors</Text>
                 </View>
                 <View style={styles.featureItem}>
                   <Ionicons name="checkmark-circle" size={18} color="#10b981" />
-                  <Text style={styles.featureText}>Manage favorites</Text>
+                  <Text type="body" style={styles.featureText}>Manage favorites</Text>
                 </View>
               </View>
             </View>
@@ -187,6 +188,7 @@ export default function RoleSelection() {
               </LinearGradient>
 
               <Text
+                type="title"
                 style={[
                   styles.roleTitle,
                   selectedRole === 'vendor' && styles.roleTitleSelected,
@@ -194,22 +196,22 @@ export default function RoleSelection() {
               >
                 I'm a Vendor
               </Text>
-              <Text style={styles.roleDescription}>
+              <Text type="body2" style={styles.roleDescription}>
                 Provide home services and grow your business
               </Text>
 
               <View style={styles.featuresList}>
                 <View style={styles.featureItem}>
                   <Ionicons name="checkmark-circle" size={18} color="#10b981" />
-                  <Text style={styles.featureText}>Receive requests</Text>
+                  <Text type="body" style={styles.featureText}>Receive requests</Text>
                 </View>
                 <View style={styles.featureItem}>
                   <Ionicons name="checkmark-circle" size={18} color="#10b981" />
-                  <Text style={styles.featureText}>Send proposals</Text>
+                  <Text type="body" style={styles.featureText}>Send proposals</Text>
                 </View>
                 <View style={styles.featureItem}>
                   <Ionicons name="checkmark-circle" size={18} color="#10b981" />
-                  <Text style={styles.featureText}>Earn money</Text>
+                  <Text type="body" style={styles.featureText}>Earn money</Text>
                 </View>
               </View>
             </View>
@@ -232,7 +234,7 @@ export default function RoleSelection() {
               end={{ x: 1, y: 0 }}
               style={styles.continueButtonInner}
             >
-              <Text style={styles.continueButtonText}>Continue</Text>
+              <Text type="button" style={styles.continueButtonText}>Continue</Text>
               <Ionicons name="arrow-forward" size={20} color="#fff" />
             </LinearGradient>
           </TouchableOpacity>
@@ -272,7 +274,6 @@ const styles = StyleSheet.create({
   },
   appName: {
     fontSize: moderateScale(28),
-    fontWeight: '800',
     color: '#fff',
     marginBottom: 4,
     textShadowColor: 'rgba(0,0,0,0.1)',
@@ -280,9 +281,7 @@ const styles = StyleSheet.create({
     textShadowRadius: 4,
   },
   tagline: {
-    fontSize: moderateScale(14),
     color: 'rgba(255,255,255,0.9)',
-    fontWeight: '500',
     textAlign: 'center',
     paddingHorizontal: 40,
   },
@@ -330,7 +329,6 @@ const styles = StyleSheet.create({
   },
   roleTitle: {
     fontSize: moderateScale(22),
-    fontWeight: '700',
     color: '#1e293b',
     textAlign: 'center',
     marginBottom: 8,
@@ -339,7 +337,6 @@ const styles = StyleSheet.create({
     color: '#2563EB',
   },
   roleDescription: {
-    fontSize: moderateScale(14),
     color: '#64748b',
     textAlign: 'center',
     marginBottom: moderateScale(16),
@@ -354,9 +351,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   featureText: {
-    fontSize: moderateScale(14),
     color: '#475569',
-    fontWeight: '500',
   },
   continueButton: {
     marginTop: moderateScale(16),
@@ -376,8 +371,6 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   continueButtonText: {
-    fontSize: moderateScale(16),
-    fontWeight: '700',
     color: '#fff',
   },
 });

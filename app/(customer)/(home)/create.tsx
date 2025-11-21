@@ -1,75 +1,59 @@
 import React, { useCallback, memo, useState } from "react";
 import {
     View,
-    Text,
     TextInput,
     TouchableOpacity,
     ScrollView,
     Image,
     Pressable,
+    StyleSheet,
 } from "react-native";
-import {
-    CalendarDays,
-    MapPin,
-    Navigation,
-    ChevronDown,
-    Upload,
-} from "lucide-react-native";
-import DateTimePicker from "@react-native-community/datetimepicker";
+import Text from "@/components/common/Text";
 import * as ImagePicker from "expo-image-picker";
 import { Ionicons } from "@expo/vector-icons";
 import { Formik } from "formik";
 import * as Yup from "yup";
+import { LinearGradient } from "expo-linear-gradient";
+import { moderateScale, scale, verticalScale } from "react-native-size-matters";
 import Dropdown from "../../../src/components/common/Dropdown";
 import { router } from "expo-router";
+import { COLORS } from "@/constants/colors";
 
-// ✅ Reusable components
+// ============================================================================
+// Reusable Components
+// ============================================================================
+
 const SectionTitle = memo(({ title }: { title: string }) => (
-    <Text className="text-sm font-medium text-gray-700 mb-2">{title}</Text>
+    <Text type="bodySemiBold" style={styles.sectionTitle}>{title}</Text>
 ));
 
-const RadioButton = memo(
-    ({
-        label,
-        selected,
-        onPress,
-    }: {
-        label: string;
-        selected: boolean;
-        onPress: () => void;
-    }) => (
-        <TouchableOpacity onPress={onPress} className="flex-row items-center mr-6">
-            <View
-                className={`w-5 h-5 rounded-full border mr-2 ${selected ? "border-blue-500 bg-blue-500" : "border-gray-400"
-                    }`}
-            />
-            <Text className="text-gray-700">{label}</Text>
-        </TouchableOpacity>
-    )
-);
-
 const InfoList = memo(({ items }: { items: string[] }) => (
-    <View className="border-0 rounded-lg p-4 mb-5">
-        <Text className="text-sm font-semibold text-blue-700 mb-2">How it works:</Text>
+    <View style={styles.infoContainer}>
+        <View style={styles.infoHeader}>
+            <Ionicons name="information-circle" size={20} color={COLORS.primary} />
+            <Text type="bodySemiBold" style={styles.infoHeaderText}>How it works:</Text>
+        </View>
         {items.map((text, i) => (
-            <Text key={i} className="text-sm text-gray-700 mb-1">
-                • {text}
-            </Text>
+            <View key={i} style={styles.infoItem}>
+                <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+                <Text type="body2" style={styles.infoText}>{text}</Text>
+            </View>
         ))}
     </View>
 ));
 
 const Disclaimer = memo(
     ({ agreed, onToggle }: { agreed: boolean; onToggle: () => void }) => (
-        <View className="mt-6 flex-row items-start space-x-3 border border-gray-200 rounded-lg p-4 mb-4">
-            <Pressable
-                onPress={onToggle}
-                className={`w-5 h-5 rounded-full border-2 ${agreed ? "border-blue-600 bg-blue-600" : "border-gray-400"
-                    } flex items-center justify-center mt-1`}
-            >
-                {agreed && <Ionicons name="checkmark" size={12} color="white" />}
+        <View style={styles.disclaimerContainer}>
+            <Pressable onPress={onToggle} style={styles.checkbox}>
+                <View style={[
+                    styles.checkboxInner,
+                    agreed && styles.checkboxActive
+                ]}>
+                    {agreed && <Ionicons name="checkmark" size={14} color={COLORS.white} />}
+                </View>
             </Pressable>
-            <Text className="flex-1 text-xs text-gray-600 leading-5">
+            <Text type="body" style={styles.disclaimerText}>
                 RefynHome connects you with independent service providers. All payments are
                 handled directly between customers and vendors. RefynHome is not responsible
                 for any damages or disputes.
@@ -128,153 +112,161 @@ const RequestServiceScreen = () => {
                 errors,
                 touched,
             }) => (
-                <ScrollView className="flex-1 bg-white px-5 py-6">
+                <View style={styles.container}>
                     {/* Header */}
-                    <Text className="text-xl font-semibold text-gray-900 mb-1 text-center">
-                        Request Service
-                    </Text>
-                    <Text className="text-md text-gray-500 mb-5 text-center">
-                        We'll broadcast your request to qualified technicians near you
-                    </Text>
-
-                    {/* Service Category */}
-                    {/* <SectionTitle title="Service Category *" /> */}
-                    <Dropdown
-                        label="Service Category *"
-                        items={[
-                            { label: "AC Repair", value: "ac_repair" },
-                            { label: "Plumbing", value: "plumbing" },
-                            { label: "Electrical", value: "electrical" },
-                        ]}
-                        value={values.selectedService}
-                        onValueChange={(val) => setFieldValue("selectedService", val)}
-                        error={touched.selectedService && errors.selectedService}
-                    />
-                    {/* <TouchableOpacity
-                        className="flex-row justify-between items-center border border-blue-400 rounded-lg px-4 py-3 mb-1"
-                        onPress={() => console.log("Open service dropdown")}
+                    <LinearGradient
+                        colors={[COLORS.primary, COLORS.accent]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.header}
                     >
-                        <Text
-                            className={`${values.selectedService ? "text-gray-700" : "text-gray-400"
-                                } text-sm`}
-                        >
-                            {values.selectedService || "Select a service"}
-                        </Text>
-                        <ChevronDown size={18} color="#4B5563" />
-                    </TouchableOpacity>
-                    {touched.selectedService && errors.selectedService && (
-                        <Text className="text-xs text-red-500 mb-3">
-                            {errors.selectedService}
-                        </Text>
-                    )} */}
-
-                    {/* Need Service */}
-                    {/* <SectionTitle title="When do you need service? *" />
-                    <View className="flex-row mb-1">
-                        <RadioButton
-                            label="ASAP"
-                            selected={values.needService === "asap"}
-                            onPress={() => setFieldValue("needService", "asap")}
-                        />
-                        <RadioButton
-                            label="Schedule for later"
-                            selected={values.needService === "schedule"}
-                            onPress={() => setFieldValue("needService", "schedule")}
-                        />
-                    </View>
-                    {touched.needService && errors.needService && (
-                        <Text className="text-xs text-red-500 mb-3">{errors.needService}</Text>
-                    )} */}
-
-                    {/* Date Picker */}
-                    {/* r */}
-
-                    {/* City */}
-                    <SectionTitle title="City *" />
-                    <TextInput
-                        value={values.city}
-                        onChangeText={handleChange("city")}
-                        placeholder="Enter city"
-                        className="border border-blue-400 rounded-lg px-4 py-3 mb-1 text-gray-700 text-sm"
-                    />
-                    {touched.city && errors.city && (
-                        <Text className="text-xs text-red-500 mb-3">{errors.city}</Text>
-                    )}
-
-                    {/* Description */}
-                    <SectionTitle title="Problem Description *" />
-                    <TextInput
-                        value={values.description}
-                        onChangeText={handleChange("description")}
-                        placeholder="Describe the issue in detail (e.g., AC not cooling)"
-                        multiline
-                        numberOfLines={5}
-                        textAlignVertical="top"
-                        className="border border-blue-400 rounded-lg px-4 py-3 mb-1 text-gray-700 text-sm"
-                    />
-                    {touched.description && errors.description && (
-                        <Text className="text-xs text-red-500 mb-3">{errors.description}</Text>
-                    )}
-
-                    {/* Photo Upload */}
-                    <SectionTitle title="Photos (Optional)" />
-                    <TouchableOpacity
-                        onPress={pickImage}
-                        className="flex-row items-center justify-between border border-blue-400 rounded-lg px-4 py-3 mb-5"
-                    >
-                        <Text className="text-gray-600 text-sm">
-                            {photo ? "1 file selected" : "Choose Files"}
-                        </Text>
-                        <Upload size={18} color="#2563EB" />
-                    </TouchableOpacity>
-                    {photo && (
-                        <Image
-                            source={{ uri: photo }}
-                            className="w-full h-40 rounded-lg mb-5"
-                            resizeMode="cover"
-                        />
-                    )}
-
-                    {/* Info Section */}
-                    <InfoList
-                        items={[
-                            "We'll notify qualified technicians near you",
-                            "First qualified technician to accept gets priority",
-                            "You'll have 5 minutes to confirm the assignment",
-                            "Contact details revealed after confirmation",
-                        ]}
-                    />
-
-                    {/* Disclaimer */}
-                    <Disclaimer
-                        agreed={values.isAgreed}
-                        onToggle={() => setFieldValue("isAgreed", !values.isAgreed)}
-                    />
-                    {touched.isAgreed && errors.isAgreed && (
-                        <Text className="text-xs text-red-500 mb-3">{errors.isAgreed}</Text>
-                    )}
-
-                    {/* Buttons */}
-                    <View className="flex-row justify-between mb-10">
-                        <TouchableOpacity className="flex-1 border  border-blue-400  rounded-lg py-4 mr-2"
-                            onPress={() => router.push("customer/services")}
-                        >
-                            <Text className="text-center text-blue-400 font-medium">Cancel</Text>
-                        </TouchableOpacity>
-
                         <TouchableOpacity
-                            disabled={!values.isAgreed}
-                            onPress={() => router.push("/(customer)/(home)/live-offers")}
-                            // onPress={() => handleSubmit()}
-                            className={`flex-1 rounded-lg py-4 ml-2 ${values.isAgreed ? "bg-blue-600" : "bg-blue-300"
-                                }`}
+                            onPress={() => router.back()}
+                            style={styles.backButton}
                         >
-                            <Text className="text-center text-white font-semibold">
-                                Submit Request
-                            </Text>
+                            <Ionicons name="arrow-back" size={24} color={COLORS.white} />
                         </TouchableOpacity>
-                    </View>
-                </ScrollView>
+                        <Text type="title" style={styles.headerTitle}>Request Service</Text>
+                        <Text type="subtitle" style={styles.headerSubtitle}>
+                            We'll connect you with qualified technicians nearby
+                        </Text>
+                    </LinearGradient>
+
+                    <ScrollView
+                        style={styles.scrollView}
+                        contentContainerStyle={styles.scrollContent}
+                        showsVerticalScrollIndicator={false}
+                    >
+
+                        {/* Service Category */}
+                        <Dropdown
+                            label="Service Category *"
+                            items={[
+                                { label: "AC Repair", value: "ac_repair" },
+                                { label: "Plumbing", value: "plumbing" },
+                                { label: "Electrical", value: "electrical" },
+                                { label: "Washing Machine", value: "washing_machine" },
+                                { label: "Refrigerator", value: "refrigerator" },
+                            ]}
+                            value={values.selectedService}
+                            onValueChange={(val) => setFieldValue("selectedService", val)}
+                            error={touched.selectedService && errors.selectedService}
+                        />
+
+                        {/* City */}
+                        <SectionTitle title="City *" />
+                        <TextInput
+                            value={values.city}
+                            onChangeText={handleChange("city")}
+                            placeholder="Enter your city"
+                            placeholderTextColor={COLORS.gray400}
+                            style={styles.input}
+                        />
+                        {touched.city && errors.city && (
+                            <Text type="body" style={styles.errorText}>{errors.city}</Text>
+                        )}
+
+                        {/* Description */}
+                        <SectionTitle title="Problem Description *" />
+                        <TextInput
+                            value={values.description}
+                            onChangeText={handleChange("description")}
+                            placeholder="Describe the issue in detail (e.g., AC not cooling, water leaking)"
+                            placeholderTextColor={COLORS.gray400}
+                            multiline
+                            numberOfLines={5}
+                            textAlignVertical="top"
+                            style={[styles.input, styles.textArea]}
+                        />
+                        {touched.description && errors.description && (
+                            <Text type="body" style={styles.errorText}>{errors.description}</Text>
+                        )}
+
+                        {/* Photo Upload */}
+                        <SectionTitle title="Photos (Optional)" />
+                        <TouchableOpacity
+                            onPress={pickImage}
+                            style={styles.uploadButton}
+                            activeOpacity={0.7}
+                        >
+                            <View style={styles.uploadContent}>
+                                <Ionicons name="camera-outline" size={24} color={COLORS.primary} />
+                                <Text type="body2" style={styles.uploadText}>
+                                    {photo ? "1 photo selected" : "Add photos of the problem"}
+                                </Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={20} color={COLORS.gray400} />
+                        </TouchableOpacity>
+                        {photo && (
+                            <View style={styles.photoPreview}>
+                                <Image
+                                    source={{ uri: photo }}
+                                    style={styles.photoImage}
+                                    resizeMode="cover"
+                                />
+                                <TouchableOpacity
+                                    onPress={() => setPhoto(null)}
+                                    style={styles.removePhotoButton}
+                                >
+                                    <Ionicons name="close-circle" size={24} color={COLORS.error} />
+                                </TouchableOpacity>
+                            </View>
+                        )}
+
+                        {/* Info Section */}
+                        <InfoList
+                            items={[
+                                "We'll notify qualified technicians near you",
+                                "First technician to accept gets priority",
+                                "You'll have 5 minutes to confirm",
+                                "Contact details shared after confirmation",
+                            ]}
+                        />
+
+                        {/* Disclaimer */}
+                        <Disclaimer
+                            agreed={values.isAgreed}
+                            onToggle={() => setFieldValue("isAgreed", !values.isAgreed)}
+                        />
+                        {touched.isAgreed && errors.isAgreed && (
+                            <Text type="body" style={styles.errorText}>{errors.isAgreed}</Text>
+                        )}
+
+                        {/* Buttons */}
+                        <View style={styles.buttonContainer}>
+                            <TouchableOpacity
+                                style={styles.cancelButton}
+                                onPress={() => router.back()}
+                                activeOpacity={0.7}
+                            >
+                                <Text type="bodySemiBold" style={styles.cancelButtonText}>Cancel</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                disabled={!values.isAgreed}
+                                onPress={() => router.push("/(customer)/(home)/live-offers")}
+                                activeOpacity={0.8}
+                                style={styles.submitButtonWrapper}
+                            >
+                                <LinearGradient
+                                    colors={
+                                        values.isAgreed
+                                            ? [COLORS.primary, COLORS.accent]
+                                            : [COLORS.gray300, COLORS.gray400]
+                                    }
+                                    start={{ x: 0, y: 0 }}
+                                    end={{ x: 1, y: 0 }}
+                                    style={styles.submitButton}
+                                >
+                                    <Text type="button" style={styles.submitButtonText}>
+                                        Submit Request
+                                    </Text>
+                                    <Ionicons name="arrow-forward" size={18} color={COLORS.white} />
+                                </LinearGradient>
+                            </TouchableOpacity>
+                        </View>
+                    </ScrollView>
+                </View>
             )}
         </Formik>
     );
@@ -282,4 +274,204 @@ const RequestServiceScreen = () => {
 
 export default RequestServiceScreen;
 
+// ============================================================================
+// Styles
+// ============================================================================
 
+const styles = StyleSheet.create({
+    container: {
+        flex: 1,
+        backgroundColor: COLORS.gray50,
+    },
+    header: {
+        paddingTop: verticalScale(60),
+        paddingBottom: verticalScale(24),
+        paddingHorizontal: scale(16),
+        borderBottomLeftRadius: moderateScale(24),
+        borderBottomRightRadius: moderateScale(24),
+    },
+    backButton: {
+        width: moderateScale(40),
+        height: moderateScale(40),
+        borderRadius: moderateScale(20),
+        backgroundColor: 'rgba(255, 255, 255, 0.2)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: verticalScale(16),
+    },
+    headerTitle: {
+        fontSize: moderateScale(28),
+        color: COLORS.white,
+        marginBottom: verticalScale(4),
+    },
+    headerSubtitle: {
+        color: 'rgba(255, 255, 255, 0.9)',
+    },
+    scrollView: {
+        flex: 1,
+    },
+    scrollContent: {
+        padding: scale(16),
+        paddingBottom: verticalScale(100),
+    },
+    sectionTitle: {
+        color: COLORS.gray900,
+        marginTop: verticalScale(16),
+        marginBottom: verticalScale(8),
+    },
+    input: {
+        borderWidth: 1.5,
+        borderColor: COLORS.gray300,
+        borderRadius: moderateScale(12),
+        paddingHorizontal: scale(16),
+        paddingVertical: verticalScale(12),
+        fontSize: moderateScale(14),
+        color: COLORS.gray900,
+        backgroundColor: COLORS.white,
+        fontFamily: 'Poppins-Regular',
+        marginBottom: verticalScale(4),
+    },
+    textArea: {
+        minHeight: verticalScale(120),
+        textAlignVertical: 'top',
+        paddingTop: verticalScale(12),
+    },
+    errorText: {
+        color: COLORS.error,
+        marginBottom: verticalScale(12),
+        marginTop: verticalScale(4),
+    },
+    uploadButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        borderWidth: 1.5,
+        borderColor: COLORS.gray300,
+        borderRadius: moderateScale(12),
+        padding: scale(16),
+        backgroundColor: COLORS.white,
+        marginBottom: verticalScale(12),
+    },
+    uploadContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: scale(12),
+    },
+    uploadText: {
+        color: COLORS.gray700,
+    },
+    photoPreview: {
+        position: 'relative',
+        marginBottom: verticalScale(16),
+        borderRadius: moderateScale(12),
+        overflow: 'hidden',
+    },
+    photoImage: {
+        width: '100%',
+        height: verticalScale(200),
+        borderRadius: moderateScale(12),
+    },
+    removePhotoButton: {
+        position: 'absolute',
+        top: scale(8),
+        right: scale(8),
+        backgroundColor: COLORS.white,
+        borderRadius: moderateScale(20),
+        padding: scale(4),
+    },
+    infoContainer: {
+        backgroundColor: COLORS.primary + '08',
+        borderRadius: moderateScale(12),
+        padding: scale(16),
+        marginTop: verticalScale(16),
+        marginBottom: verticalScale(16),
+        borderWidth: 1,
+        borderColor: COLORS.primary + '20',
+    },
+    infoHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: scale(8),
+        marginBottom: verticalScale(12),
+    },
+    infoHeaderText: {
+        color: COLORS.primary,
+    },
+    infoItem: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: scale(10),
+        marginBottom: verticalScale(8),
+    },
+    infoText: {
+        flex: 1,
+        color: COLORS.gray700,
+        lineHeight: moderateScale(20),
+    },
+    disclaimerContainer: {
+        flexDirection: 'row',
+        backgroundColor: COLORS.warning + '10',
+        borderRadius: moderateScale(12),
+        padding: scale(16),
+        marginTop: verticalScale(8),
+        marginBottom: verticalScale(20),
+        borderWidth: 1,
+        borderColor: COLORS.warning + '30',
+        gap: scale(12),
+    },
+    checkbox: {
+        marginTop: verticalScale(2),
+    },
+    checkboxInner: {
+        width: moderateScale(22),
+        height: moderateScale(22),
+        borderRadius: moderateScale(6),
+        borderWidth: 2,
+        borderColor: COLORS.gray400,
+        backgroundColor: COLORS.white,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    checkboxActive: {
+        borderColor: COLORS.primary,
+        backgroundColor: COLORS.primary,
+    },
+    disclaimerText: {
+        flex: 1,
+        color: COLORS.gray700,
+        lineHeight: moderateScale(20),
+    },
+    buttonContainer: {
+        flexDirection: 'row',
+        gap: scale(12),
+        marginTop: verticalScale(8),
+    },
+    cancelButton: {
+        flex: 1,
+        borderWidth: 1.5,
+        borderColor: COLORS.primary,
+        borderRadius: moderateScale(12),
+        paddingVertical: verticalScale(14),
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: COLORS.white,
+    },
+    cancelButtonText: {
+        color: COLORS.primary,
+    },
+    submitButtonWrapper: {
+        flex: 1,
+        borderRadius: moderateScale(12),
+        overflow: 'hidden',
+    },
+    submitButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: scale(8),
+        paddingVertical: verticalScale(14),
+    },
+    submitButtonText: {
+        color: COLORS.white,
+    },
+});

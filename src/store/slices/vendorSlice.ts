@@ -43,7 +43,7 @@ const vendorSlice = createSlice({
 
 function filterVendors(vendors: Vendor[], filters: VendorFilters): Vendor[] {
   return vendors.filter(vendor => {
-    if (filters.category && !vendor.serviceCategories.includes(filters.category)) {
+    if (filters.category && !vendor.serviceCategories.some(cat => cat.id === filters.category?.id)) {
       return false;
     }
     if (filters.verifiedOnly && !vendor.verified) {
@@ -56,7 +56,7 @@ function filterVendors(vendors: Vendor[], filters: VendorFilters): Vendor[] {
       const query = filters.searchQuery.toLowerCase();
       return (
         vendor.name.toLowerCase().includes(query) ||
-        vendor.serviceCategories.some(cat => cat.toLowerCase().includes(query))
+        vendor.serviceCategories.some(cat => cat.label.toLowerCase().includes(query))
       );
     }
     return true;

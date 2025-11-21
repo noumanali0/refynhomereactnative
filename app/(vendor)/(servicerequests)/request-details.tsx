@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Animated } from "react-native";
+import { View, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Animated } from "react-native";
+import Text from '@/components/common/Text';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
 import * as Location from "expo-location";
 import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
@@ -11,7 +12,8 @@ import { moderateScale, scale, verticalScale } from "react-native-size-matters";
 import { Coordinates, CustomerRequestInfo, RouteInfo } from "@/services/types";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { COLORS } from "@/constants/colors";
-import { haversineDistanceKm } from "@/utils/geo";
+import { getDistance } from "@/utils/distanceCache";
+import { makeSelectRequestById, makeSelectActiveRequestDetail } from "@/selectors/requestSelectors";
 import { Ionicons } from "@expo/vector-icons";
 
 // Mock customer data generator
@@ -56,13 +58,19 @@ export default function RequestDetailScreen() {
     const locationWatchRef = useRef<Location.LocationSubscription | null>(null);
     const progressAnim = useRef(new Animated.Value(1)).current;
 
-    // Redux state
+    // Memoized selectors for optimal performance
+    const selectRequestById = useMemo(() => makeSelectRequestById(), []);
+    const selectActiveRequestDetail = useMemo(() => makeSelectActiveRequestDetail(), []);
+
+    // Redux state (using memoized selectors for O(1) lookup)
     const activeRequest = useSelector((s: RootState) =>
-        s.requests.requests.find(r => r.id === id)
+        selectRequestById(s, id as string)
     );
     const requestDetail = useSelector((s: RootState) =>
-        s.requests.activeRequestDetails[id as string]
+        selectActiveRequestDetail(s, id as string)
     );
+    const distanceCache = useSelector((s: RootState) => s.requests.distanceCache);
+    const vendorLocationFromRedux = useSelector((s: RootState) => s.requests.vendorLocation);
 
     // Local state
     const [vendorLocation, setVendorLocation] = useState<Coordinates | null>(null);
@@ -148,14 +156,10 @@ export default function RequestDetailScreen() {
                     };
                     setVendorLocation(newCoords);
 
-                    // Check proximity
+                    // Check proximity (use cached distance calculation)
                     if (customerLocation) {
-                        const distanceMeters = haversineDistanceKm(
-                            newCoords.latitude,
-                            newCoords.longitude,
-                            customerLocation.latitude,
-                            customerLocation.longitude
-                        ) * 1000;
+                        const distanceKm = getDistance(newCoords, customerLocation);
+                        const distanceMeters = distanceKm * 1000;
                         setIsNearby(distanceMeters <= 100);
                     }
                 }
@@ -313,7 +317,7 @@ export default function RequestDetailScreen() {
         return (
             <View style={styles.loadingContainer}>
                 <ActivityIndicator size="large" color={COLORS.primary} />
-                <Text style={styles.loadingText}>Loading request details...</Text>
+                <Text type="body2" style={styles.loadingText}>Loading request details...</Text>
             </View>
         );
     }
@@ -323,12 +327,12 @@ export default function RequestDetailScreen() {
         return (
             <View style={styles.errorContainer}>
                 <Ionicons name="alert-circle-outline" size={64} color={COLORS.error} />
-                <Text style={styles.errorText}>Request not found</Text>
+                <Text type="title" style={styles.errorText}>Request not found</Text>
                 <TouchableOpacity
                     style={styles.backButton}
                     onPress={() => router.back()}
                 >
-                    <Text style={styles.backButtonText}>Go Back</Text>
+                    <Text type="bodySemiBold" style={styles.backButtonText}>Go Back</Text>
                 </TouchableOpacity>
             </View>
         );
@@ -389,14 +393,14 @@ export default function RequestDetailScreen() {
                 <View style={styles.etaCard}>
                     <View style={styles.etaItem}>
                         <Ionicons name="navigate" size={20} color={COLORS.primary} />
-                        <Text style={styles.etaLabel}>Distance</Text>
-                        <Text style={styles.etaValue}>{formatDistance(routeInfo.distance)}</Text>
+                        <Text type="body" style={styles.etaLabel}>Distance</Text>
+                        <Text type="bodySemiBold" style={styles.etaValue}>{formatDistance(routeInfo.distance)}</Text>
                     </View>
                     <View style={styles.etaDivider} />
                     <View style={styles.etaItem}>
                         <Ionicons name="time" size={20} color={COLORS.accent} />
-                        <Text style={styles.etaLabel}>ETA</Text>
-                        <Text style={styles.etaValue}>{formatDuration(routeInfo.duration)}</Text>
+                        <Text type="body" style={styles.etaLabel}>ETA</Text>
+                        <Text type="bodySemiBold" style={styles.etaValue}>{formatDuration(routeInfo.duration)}</Text>
                     </View>
                 </View>
             )}
@@ -415,7 +419,7 @@ export default function RequestDetailScreen() {
                             ]}
                         />
                     </View>
-                    <Text style={styles.timerText}>
+                    <Text type="body" style={styles.timerText}>
                         Waiting for customer response... {remainingTime}s
                     </Text>
                 </View>
@@ -426,8 +430,8 @@ export default function RequestDetailScreen() {
                 <View style={styles.acceptedBanner}>
                     <Ionicons name="checkmark-circle" size={24} color={COLORS.white} />
                     <View style={styles.acceptedTextContainer}>
-                        <Text style={styles.acceptedTitle}>Proposal Accepted!</Text>
-                        <Text style={styles.acceptedSubtitle}>Navigate to customer location</Text>
+                        <Text type="bodySemiBold" style={styles.acceptedTitle}>Proposal Accepted!</Text>
+                        <Text type="body" style={styles.acceptedSubtitle}>Navigate to customer location</Text>
                     </View>
                 </View>
             )}
@@ -445,58 +449,58 @@ export default function RequestDetailScreen() {
                 >
                     {/* Header */}
                     <View style={styles.sheetHeader}>
-                        <Text style={styles.sheetTitle}>Request Details</Text>
-                        <View style={[
+                        <Text type="title" style={styles.sheetTitle}>Request Details</Text>
+                        {/* <View style={[
                             styles.urgencyBadge,
                             { backgroundColor: getUrgencyColor(customerData.urgencyLevel) + '20' }
                         ]}>
-                            <Text style={[
+                            <Text type="caption" style={[
                                 styles.urgencyText,
                                 { color: getUrgencyColor(customerData.urgencyLevel) }
                             ]}>
-                                {customerData.urgencyLevel.toUpperCase()}
+                                {customerData?.urgencyLevel?.toUpperCase()}
                             </Text>
-                        </View>
+                        </View> */}
                     </View>
 
                     {/* Customer Information */}
                     <View style={styles.section}>
                         <View style={styles.sectionHeader}>
                             <Ionicons name="person" size={20} color={COLORS.primary} />
-                            <Text style={styles.sectionTitle}>Customer Information</Text>
+                            <Text type="bodySemiBold" style={styles.sectionTitle}>Customer Information</Text>
                         </View>
 
                         <View style={styles.infoRow}>
-                            <Text style={styles.infoLabel}>Name</Text>
-                            <Text style={styles.infoValue}>{customerData.name}</Text>
+                            <Text type="body2" style={styles.infoLabel}>Name</Text>
+                            <Text type="bodySemiBold" style={styles.infoValue}>{customerData.name}</Text>
                         </View>
 
                         <View style={styles.infoRow}>
-                            <Text style={styles.infoLabel}>Service</Text>
-                            <Text style={styles.infoValue}>{customerData.serviceRequested}</Text>
+                            <Text type="body2" style={styles.infoLabel}>Service</Text>
+                            <Text type="bodySemiBold" style={styles.infoValue}>{customerData.serviceRequested}</Text>
                         </View>
 
                         <View style={styles.infoRow}>
-                            <Text style={styles.infoLabel}>Address</Text>
-                            <Text style={[styles.infoValue, styles.addressText]}>
+                            <Text type="body2" style={styles.infoLabel}>Address</Text>
+                            <Text type="bodySemiBold" style={[styles.infoValue, styles.addressText]}>
                                 {customerData.address}
                             </Text>
                         </View>
 
-                        {customerData.preferredTime && (
+                        {/* {customerData.preferredTime && (
                             <View style={styles.infoRow}>
-                                <Text style={styles.infoLabel}>Preferred Time</Text>
-                                <Text style={styles.infoValue}>{customerData.preferredTime}</Text>
+                                <Text type="body2" style={styles.infoLabel}>Preferred Time</Text>
+                                <Text type="bodySemiBold" style={styles.infoValue}>{customerData.preferredTime}</Text>
                             </View>
-                        )}
+                        )} */}
 
                         {/* Contact number (only shown after acceptance) */}
                         {requestDetail?.customerAccepted && requestDetail.customerPhone && (
                             <View style={[styles.infoRow, styles.phoneRow]}>
                                 <Ionicons name="call" size={18} color={COLORS.success} />
-                                <Text style={styles.infoLabel}>Contact</Text>
+                                <Text type="body2" style={styles.infoLabel}>Contact</Text>
                                 <TouchableOpacity>
-                                    <Text style={styles.phoneValue}>
+                                    <Text type="bodySemiBold" style={styles.phoneValue}>
                                         {requestDetail.customerPhone}
                                     </Text>
                                 </TouchableOpacity>
@@ -509,9 +513,9 @@ export default function RequestDetailScreen() {
                         <View style={styles.section}>
                             <View style={styles.sectionHeader}>
                                 <Ionicons name="document-text" size={20} color={COLORS.accent} />
-                                <Text style={styles.sectionTitle}>Additional Notes</Text>
+                                <Text type="bodySemiBold" style={styles.sectionTitle}>Additional Notes</Text>
                             </View>
-                            <Text style={styles.notesText}>{customerData.additionalNotes}</Text>
+                            <Text type="body2" style={styles.notesText}>{customerData.additionalNotes}</Text>
                         </View>
                     )}
 
@@ -520,10 +524,10 @@ export default function RequestDetailScreen() {
                         <View style={styles.section}>
                             <View style={styles.sectionHeader}>
                                 <Ionicons name="cash" size={20} color={COLORS.success} />
-                                <Text style={styles.sectionTitle}>Send Proposal</Text>
+                                <Text type="bodySemiBold" style={styles.sectionTitle}>Send Proposal</Text>
                             </View>
 
-                            <Text style={styles.proposalLabel}>Visit Charges (PKR)</Text>
+                            <Text type="subtitle2" style={styles.proposalLabel}>Visit Charges (PKR)</Text>
                             <View style={styles.proposalInputContainer}>
                                 <TouchableOpacity
                                     style={styles.proposalButton}
@@ -534,8 +538,8 @@ export default function RequestDetailScreen() {
                                 </TouchableOpacity>
 
                                 <View style={styles.proposalAmountContainer}>
-                                    <Text style={styles.currencySymbol}>PKR</Text>
-                                    <Text style={styles.proposalAmount}>{proposalAmount}</Text>
+                                    <Text type="body" style={styles.currencySymbol}>PKR</Text>
+                                    <Text type="title" style={styles.proposalAmount}>{proposalAmount}</Text>
                                 </View>
 
                                 <TouchableOpacity
@@ -559,7 +563,7 @@ export default function RequestDetailScreen() {
                                         onPress={() => setProposalAmount(amount)}
                                         disabled={requestDetail?.proposalStatus === 'sending' || requestDetail?.proposalStatus === 'sent'}
                                     >
-                                        <Text style={[
+                                        <Text type="body" style={[
                                             styles.presetText,
                                             proposalAmount === amount && styles.presetTextActive
                                         ]}>
@@ -591,19 +595,19 @@ export default function RequestDetailScreen() {
                                     {requestDetail?.proposalStatus === 'sending' ? (
                                         <>
                                             <ActivityIndicator color={COLORS.white} />
-                                            <Text style={styles.sendProposalText}>Sending...</Text>
+                                            <Text type="button" style={styles.sendProposalText}>Sending...</Text>
                                         </>
                                     ) : requestDetail?.proposalStatus === 'sent' ? (
                                         <>
                                             <Ionicons name="hourglass" size={20} color={COLORS.white} />
-                                            <Text style={styles.sendProposalText}>
+                                            <Text type="button" style={styles.sendProposalText}>
                                                 Waiting ({remainingTime}s)
                                             </Text>
                                         </>
                                     ) : (
                                         <>
                                             <Ionicons name="send" size={20} color={COLORS.white} />
-                                            <Text style={styles.sendProposalText}>Send Proposal</Text>
+                                            <Text type="button" style={styles.sendProposalText}>Send Proposal</Text>
                                         </>
                                     )}
                                 </LinearGradient>
@@ -624,7 +628,7 @@ export default function RequestDetailScreen() {
                                 style={styles.gradientButton}
                             >
                                 <Ionicons name="checkmark-done" size={24} color={COLORS.white} />
-                                <Text style={styles.arrivedButtonText}>I Have Arrived</Text>
+                                <Text type="title" style={styles.arrivedButtonText}>I Have Arrived</Text>
                             </LinearGradient>
                         </TouchableOpacity>
                     )}
@@ -632,7 +636,7 @@ export default function RequestDetailScreen() {
                     {requestDetail?.vendorArrived && (
                         <View style={styles.arrivedConfirmation}>
                             <Ionicons name="checkmark-circle" size={24} color={COLORS.success} />
-                            <Text style={styles.arrivedConfirmationText}>
+                            <Text type="bodySemiBold" style={styles.arrivedConfirmationText}>
                                 You have marked your arrival
                             </Text>
                         </View>
@@ -656,7 +660,6 @@ const styles = StyleSheet.create({
     },
     loadingText: {
         marginTop: verticalScale(16),
-        fontSize: moderateScale(16),
         color: COLORS.gray600,
     },
     errorContainer: {
@@ -667,8 +670,6 @@ const styles = StyleSheet.create({
         padding: scale(24),
     },
     errorText: {
-        fontSize: moderateScale(18),
-        fontWeight: '600',
         color: COLORS.gray900,
         marginTop: verticalScale(16),
         marginBottom: verticalScale(24),
@@ -681,8 +682,6 @@ const styles = StyleSheet.create({
     },
     backButtonText: {
         color: COLORS.white,
-        fontSize: moderateScale(16),
-        fontWeight: '600',
     },
     map: {
         flex: 1,
@@ -727,13 +726,10 @@ const styles = StyleSheet.create({
         marginHorizontal: scale(12),
     },
     etaLabel: {
-        fontSize: moderateScale(12),
         color: COLORS.gray500,
         marginTop: verticalScale(4),
     },
     etaValue: {
-        fontSize: moderateScale(16),
-        fontWeight: '700',
         color: COLORS.gray900,
         marginTop: verticalScale(2),
     },
@@ -763,10 +759,8 @@ const styles = StyleSheet.create({
         borderRadius: moderateScale(3),
     },
     timerText: {
-        fontSize: moderateScale(13),
         color: COLORS.gray700,
         textAlign: 'center',
-        fontWeight: '500',
     },
     acceptedBanner: {
         position: 'absolute',
@@ -789,12 +783,9 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     acceptedTitle: {
-        fontSize: moderateScale(16),
-        fontWeight: '700',
         color: COLORS.white,
     },
     acceptedSubtitle: {
-        fontSize: moderateScale(13),
         color: COLORS.white,
         opacity: 0.9,
         marginTop: verticalScale(2),
@@ -823,8 +814,6 @@ const styles = StyleSheet.create({
         marginBottom: verticalScale(20),
     },
     sheetTitle: {
-        fontSize: moderateScale(22),
-        fontWeight: '700',
         color: COLORS.gray900,
     },
     urgencyBadge: {
@@ -833,8 +822,6 @@ const styles = StyleSheet.create({
         borderRadius: moderateScale(16),
     },
     urgencyText: {
-        fontSize: moderateScale(11),
-        fontWeight: '700',
         letterSpacing: 0.5,
     },
     section: {
@@ -846,8 +833,6 @@ const styles = StyleSheet.create({
         marginBottom: verticalScale(12),
     },
     sectionTitle: {
-        fontSize: moderateScale(16),
-        fontWeight: '600',
         color: COLORS.gray900,
         marginLeft: scale(8),
     },
@@ -859,19 +844,15 @@ const styles = StyleSheet.create({
         borderBottomColor: COLORS.gray100,
     },
     infoLabel: {
-        fontSize: moderateScale(14),
         color: COLORS.gray600,
         flex: 1,
     },
     infoValue: {
-        fontSize: moderateScale(14),
-        fontWeight: '600',
         color: COLORS.gray900,
         flex: 2,
         textAlign: 'right',
     },
     addressText: {
-        fontSize: moderateScale(13),
     },
     phoneRow: {
         backgroundColor: COLORS.success + '10',
@@ -880,12 +861,9 @@ const styles = StyleSheet.create({
         borderBottomWidth: 0,
     },
     phoneValue: {
-        fontSize: moderateScale(15),
-        fontWeight: '700',
         color: COLORS.success,
     },
     notesText: {
-        fontSize: moderateScale(14),
         color: COLORS.gray700,
         lineHeight: moderateScale(20),
         backgroundColor: COLORS.gray50,
@@ -895,8 +873,6 @@ const styles = StyleSheet.create({
         borderLeftColor: COLORS.accent,
     },
     proposalLabel: {
-        fontSize: moderateScale(14),
-        fontWeight: '600',
         color: COLORS.gray700,
         marginBottom: verticalScale(12),
     },
@@ -930,13 +906,10 @@ const styles = StyleSheet.create({
         borderColor: COLORS.primary + '30',
     },
     currencySymbol: {
-        fontSize: moderateScale(12),
         color: COLORS.gray500,
-        fontWeight: '600',
     },
     proposalAmount: {
         fontSize: moderateScale(32),
-        fontWeight: '700',
         color: COLORS.gray900,
     },
     presetsContainer: {
@@ -959,13 +932,10 @@ const styles = StyleSheet.create({
         borderColor: COLORS.primary,
     },
     presetText: {
-        fontSize: moderateScale(13),
-        fontWeight: '600',
         color: COLORS.gray700,
     },
     presetTextActive: {
         color: COLORS.primary,
-        fontWeight: '700',
     },
     sendProposalButton: {
         borderRadius: moderateScale(12),
@@ -982,8 +952,6 @@ const styles = StyleSheet.create({
         gap: scale(8),
     },
     sendProposalText: {
-        fontSize: moderateScale(16),
-        fontWeight: '700',
         color: COLORS.white,
     },
     arrivedButton: {
@@ -992,8 +960,6 @@ const styles = StyleSheet.create({
         marginTop: verticalScale(8),
     },
     arrivedButtonText: {
-        fontSize: moderateScale(18),
-        fontWeight: '700',
         color: COLORS.white,
     },
     arrivedConfirmation: {
@@ -1006,8 +972,6 @@ const styles = StyleSheet.create({
         marginTop: verticalScale(8),
     },
     arrivedConfirmationText: {
-        fontSize: moderateScale(15),
-        fontWeight: '600',
         color: COLORS.success,
         marginLeft: scale(8),
     },

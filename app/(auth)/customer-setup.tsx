@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import {
   View,
-  Text,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -9,6 +8,7 @@ import {
   TouchableOpacity,
   Animated,
 } from 'react-native';
+import Text from '@/components/common/Text';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -117,8 +117,8 @@ export default function CustomerProfileSetup() {
               <Ionicons name="person" size={36} color="#fff" />
             </LinearGradient>
           </View>
-          <Text style={styles.appName}>Complete Your Profile</Text>
-          <Text style={styles.tagline}>Let's set up your customer profile</Text>
+          <Text type="title" style={styles.appName}>Complete Your Profile</Text>
+          <Text type="body2" style={styles.tagline}>Let's set up your customer profile</Text>
         </View>
 
         {/* Progress Indicator */}
@@ -153,7 +153,7 @@ export default function CustomerProfileSetup() {
                 style={styles.infoBannerGradient}
               >
                 <Ionicons name="information-circle" size={24} color="#2563EB" />
-                <Text style={styles.infoBannerText}>
+                <Text type="body" style={styles.infoBannerText}>
                   This information helps vendors provide better service
                 </Text>
               </LinearGradient>
@@ -161,7 +161,7 @@ export default function CustomerProfileSetup() {
 
             {/* Full Name Input */}
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>
+              <Text type="subtitle2" style={styles.inputLabel}>
                 Full Name <Text style={styles.required}>*</Text>
               </Text>
               <View
@@ -187,13 +187,13 @@ export default function CustomerProfileSetup() {
                 />
               </View>
               {errors.name ? (
-                <Text style={styles.errorText}>{errors.name}</Text>
+                <Text type="body" style={styles.errorText}>{errors.name}</Text>
               ) : null}
             </View>
 
             {/* Address Input */}
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>
+              <Text type="subtitle2" style={styles.inputLabel}>
                 Complete Address <Text style={styles.required}>*</Text>
               </Text>
               <View
@@ -222,13 +222,13 @@ export default function CustomerProfileSetup() {
                 />
               </View>
               {errors.address ? (
-                <Text style={styles.errorText}>{errors.address}</Text>
+                <Text type="body" style={styles.errorText}>{errors.address}</Text>
               ) : null}
             </View>
 
             {/* City Input */}
             <View style={styles.inputContainer}>
-              <Text style={styles.inputLabel}>
+              <Text type="subtitle2" style={styles.inputLabel}>
                 City <Text style={styles.required}>*</Text>
               </Text>
               <View
@@ -254,7 +254,7 @@ export default function CustomerProfileSetup() {
                 />
               </View>
               {errors.city ? (
-                <Text style={styles.errorText}>{errors.city}</Text>
+                <Text type="body" style={styles.errorText}>{errors.city}</Text>
               ) : null}
             </View>
 
@@ -276,7 +276,7 @@ export default function CustomerProfileSetup() {
                 ) : (
                   <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
                 )}
-                <Text style={styles.submitButtonText}>
+                <Text type="button" style={styles.submitButtonText}>
                   {isLoading ? 'Setting Up...' : 'Complete Setup'}
                 </Text>
               </LinearGradient>
@@ -317,7 +317,6 @@ const styles = StyleSheet.create({
   },
   appName: {
     fontSize: moderateScale(26),
-    fontWeight: '800',
     color: '#fff',
     marginBottom: 4,
     textShadowColor: 'rgba(0,0,0,0.1)',
@@ -325,9 +324,7 @@ const styles = StyleSheet.create({
     textShadowRadius: 4,
   },
   tagline: {
-    fontSize: moderateScale(14),
     color: 'rgba(255,255,255,0.9)',
-    fontWeight: '500',
   },
   progressContainer: {
     paddingHorizontal: moderateScale(40),
@@ -380,17 +377,13 @@ const styles = StyleSheet.create({
   },
   infoBannerText: {
     flex: 1,
-    fontSize: moderateScale(13),
     color: '#334155',
     lineHeight: 18,
-    fontWeight: '500',
   },
   inputContainer: {
     marginBottom: moderateScale(20),
   },
   inputLabel: {
-    fontSize: moderateScale(14),
-    fontWeight: '600',
     color: '#334155',
     marginBottom: 8,
   },
@@ -435,7 +428,6 @@ const styles = StyleSheet.create({
     paddingTop: 4,
   },
   errorText: {
-    fontSize: moderateScale(12),
     color: '#ef4444',
     marginTop: 6,
     marginLeft: 4,
@@ -458,8 +450,6 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   submitButtonText: {
-    fontSize: moderateScale(16),
-    fontWeight: '700',
     color: '#fff',
   },
 });

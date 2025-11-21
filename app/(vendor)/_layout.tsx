@@ -28,20 +28,7 @@ export default function VendorTabsLayout() {
                     )
                 }}
             />
-            <Tabs.Screen
-                name="(dashboard)"
-                options={{
-                    title: "Home",
-                    // tabBarIcon: ({ size }) => <GradientIcon name="home" size={size} />,
-                    tabBarIcon: ({ focused, size }) => (
-                        <GradientIcon
-                            name="home"
-                            size={size}
-                            colors={focused ? ["#2563EB", "#F97316"] : ["#ccc", "#ccc"]}
-                        />
-                    )
-                }}
-            />
+
             <Tabs.Screen
                 name="(history)"
                 options={{
@@ -57,13 +44,13 @@ export default function VendorTabsLayout() {
                 }}
             />
             <Tabs.Screen
-                name="(profile)"
+                name="(subscriptions)"
                 options={{
-                    title: "Profile",
+                    title: "Subscriptions",
                     // tabBarIcon: ({ color, size }) => <Ionicons name="person" size={size} color={color} />,
                     tabBarIcon: ({ focused, size }) => (
                         <GradientIcon
-                            name="person"
+                            name="trophy"
                             size={size}
                             colors={focused ? ["#2563EB", "#F97316"] : ["#ccc", "#ccc"]}
                         />
@@ -71,9 +58,9 @@ export default function VendorTabsLayout() {
                 }}
             />
             <Tabs.Screen
-                name="(subscriptions)"
+                name="(profile)"
                 options={{
-                    title: "Subscriptions",
+                    title: "Profile",
                     // tabBarIcon: ({ color, size }) => <Ionicons name="person" size={size} color={color} />,
                     tabBarIcon: ({ focused, size }) => (
                         <GradientIcon

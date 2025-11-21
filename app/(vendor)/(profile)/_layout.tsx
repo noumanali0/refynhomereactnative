@@ -10,6 +10,9 @@ export default function VendorProfileLayout() {
             }}
         >
             <Stack.Screen name="index" options={{ title: "Profile" }} />
+            <Stack.Screen name="edit-profile" options={{ title: "Edit Profile" }} />
+            <Stack.Screen name="settings" options={{ title: "Settings" }} />
+            <Stack.Screen name="reviews" options={{ title: "Reviews" }} />
             {/* <Stack.Screen name="request-detail" options={{ title: "Request Detail" }} /> */}
             {/* <Stack.Screen name="live-offers" options={{ title: "Live Offers" }} /> */}
             {/* <Stack.Screen name="tracking" options={{ title: "Track Vendor" }} /> */}
