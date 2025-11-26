@@ -14,22 +14,25 @@ import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppDispatch, useAppSelector } from '@/hooks/useAppDispatch';
-import { sendLoginOTP, verifyOTP, resendOTP, clearError } from '@/store/slices/authSlice';
+import { loginUser, clearError } from '@/store/slices/authSlice';
 import { moderateScale } from 'react-native-size-matters';
+import { normalizePhoneNumber } from '@/utils/validation';
 import Text from '@/components/common/Text';
+import PasswordInput from '@/components/common/PasswordInput';
+import { useToast } from '@/contexts/ToastContext';
 
 export default function Login() {
     const router = useRouter();
     const dispatch = useAppDispatch();
+    const { showToast } = useToast();
 
     // Redux state
-    const { isLoading, error, otpSent: reduxOtpSent, isAuthenticated, user } = useAppSelector((state) => state.auth);
+    const { isLoading, error, isAuthenticated, user, vendorOnboardingStatus } = useAppSelector((state) => state.auth);
 
     // Local state
     const [phoneNumber, setPhoneNumber] = useState('');
-    const [otp, setOtp] = useState('');
+    const [password, setPassword] = useState('');
     const [fadeAnim] = useState(new Animated.Value(0));
-    const [resendTimer, setResendTimer] = useState(0);
 
     // Animation
     useEffect(() => {
@@ -40,81 +43,81 @@ export default function Login() {
         }).start();
     }, []);
 
-    // Resend timer countdown
-    useEffect(() => {
-        let interval: NodeJS.Timeout;
-        if (resendTimer > 0) {
-            interval = setInterval(() => {
-                setResendTimer((prev) => prev - 1);
-            }, 1000);
-        }
-        return () => clearInterval(interval);
-    }, [resendTimer]);
-
     // Navigate after successful authentication
     useEffect(() => {
         if (isAuthenticated && user) {
-            // Navigate based on role
+            // Navigate based on role and vendor status
             if (user.role === 'customer') {
                 router.replace('/(customer)/(home)');
             } else if (user.role === 'vendor') {
-                router.replace('/(vendor)/(servicerequests)');
+                const vendorVerified = user.vendorProfile?.verified === true;
+                const needsOnboarding = vendorOnboardingStatus === 'in_progress';
+                const pendingVerification = vendorOnboardingStatus === 'pending_verification';
+
+                if (needsOnboarding) {
+                    router.replace('/(shared)/vendor-setup');
+                } else if (pendingVerification || !vendorVerified) {
+                    router.replace('/(shared)/pending-verification');
+                } else {
+                    router.replace('/(vendor)/(servicerequests)');
+                }
             }
         }
-    }, [isAuthenticated, user]);
+    }, [isAuthenticated, user, vendorOnboardingStatus]);
 
-    // Show error alert
+    // Show error toast
     useEffect(() => {
         if (error) {
-            Alert.alert('Error', error, [
-                { text: 'OK', onPress: () => dispatch(clearError()) },
-            ]);
+            showToast({
+                type: 'error',
+                title: 'Login Failed',
+                message: error,
+            });
+            dispatch(clearError());
         }
     }, [error]);
 
-    // Handle Send OTP
-    const handleSendOTP = async () => {
+    // Handle Login with Password
+    const handleLogin = async () => {
+        // Validation
         if (phoneNumber.length < 10) {
-            Alert.alert('Invalid Phone', 'Please enter a valid phone number');
+            showToast({
+                type: 'error',
+                title: 'Invalid Phone',
+                message: 'Please enter a valid phone number',
+            });
+            return;
+        }
+
+        if (password.length < 8) {
+            showToast({
+                type: 'error',
+                title: 'Invalid Password',
+                message: 'Password must be at least 8 characters',
+            });
             return;
         }
 
         try {
-            await dispatch(sendLoginOTP(phoneNumber)).unwrap();
-            setResendTimer(60); // Start 60-second countdown
-        } catch (err) {
-            // Error handled by useEffect
-        }
-    };
+            // Normalize phone number for API
+            const normalizedPhone = normalizePhoneNumber(phoneNumber);
 
-    // Handle Verify OTP
-    const handleVerifyOTP = async () => {
-        if (otp.length !== 6) {
-            Alert.alert('Invalid OTP', 'Please enter a 6-digit OTP');
-            return;
-        }
+            // Dispatch login action
+            await dispatch(loginUser({
+                phone: normalizedPhone,
+                password: password,
+            })).unwrap();
 
-        try {
-            await dispatch(verifyOTP({ phoneNumber, otp, type: 'login' })).unwrap();
-            // Navigation handled by useEffect
-        } catch (err) {
-            // Error handled by useEffect
-        }
-    };
+            // Show success toast
+            showToast({
+                type: 'success',
+                title: 'Login Successful',
+                message: 'Welcome back!',
+            });
 
-    // Handle Resend OTP
-    const handleResendOTP = async () => {
-        if (resendTimer > 0) {
-            Alert.alert('Please Wait', `You can resend OTP in ${resendTimer} seconds`);
-            return;
-        }
-
-        try {
-            await dispatch(resendOTP(phoneNumber)).unwrap();
-            setResendTimer(60);
-            Alert.alert('Success', 'OTP resent successfully');
-        } catch (err) {
-            // Error handled by useEffect
+            // Navigation handled by useEffect above
+        } catch (err: any) {
+            // Specific errors are handled by useEffect showing the error toast
         }
     };
 
@@ -153,12 +156,10 @@ export default function Login() {
                         {/* Welcome Text */}
                         <View style={styles.welcomeSection}>
                             <Text type='bodySemiBold' style={styles.welcomeTitle}>
-                                {reduxOtpSent ? 'Verify OTP' : 'Welcome Back!'}
+                                Welcome Back!
                             </Text>
                             <Text type='body2' style={styles.welcomeSubtitle}>
-                                {reduxOtpSent
-                                    ? `Enter the code sent to ${phoneNumber}`
-                                    : 'Login to continue'}
+                                Login to continue
                             </Text>
                         </View>
 
@@ -177,113 +178,66 @@ export default function Login() {
                                     value={phoneNumber}
                                     onChangeText={setPhoneNumber}
                                     keyboardType="phone-pad"
-                                    editable={!reduxOtpSent}
+                                    autoComplete="tel"
+                                    textContentType="telephoneNumber"
                                     style={styles.input}
                                 />
                             </View>
                         </View>
 
-                        {/* OTP Input (Conditional) */}
-                        {reduxOtpSent && (
-                            <Animated.View style={styles.inputContainer}>
-                                <Text type='body2' style={styles.inputLabel}>Enter OTP</Text>
-                                <View style={styles.inputWrapper}>
-                                    <Ionicons
-                                        name="lock-closed-outline"
-                                        size={20}
-                                        color="#F97316"
-                                        style={styles.inputIcon}
-                                    />
-                                    <TextInput
-                                        placeholder="Enter 6-digit OTP"
-                                        value={otp}
-                                        onChangeText={setOtp}
-                                        keyboardType="number-pad"
-                                        maxLength={6}
-                                        style={styles.input}
-                                        autoFocus
-                                    />
-                                </View>
+                        {/* Password Input */}
+                        <PasswordInput
+                            value={password}
+                            onChangeText={setPassword}
+                            placeholder="Enter your password"
+                            label="Password"
+                            autoComplete="password"
+                            textContentType="password"
+                        />
 
-                                {/* Resend OTP Link with Timer */}
-                                <TouchableOpacity
-                                    onPress={handleResendOTP}
-                                    style={styles.resendContainer}
-                                    disabled={resendTimer > 0}
-                                >
-                                    <Text type='body' style={styles.resendText}>
-                                        Didn't receive code?{' '}
-                                        <Text
-                                            type='bodySemiBold'
-                                            style={[
-                                                styles.resendLink,
-                                                resendTimer > 0 && styles.resendLinkDisabled
-                                            ]}
-                                        >
-                                            {resendTimer > 0 ? `Resend in ${resendTimer}s` : 'Resend'}
-                                        </Text>
-                                    </Text>
-                                </TouchableOpacity>
-                            </Animated.View>
-                        )}
+                        {/* Forgot Password Link */}
+                        <TouchableOpacity
+                            style={styles.forgotPasswordContainer}
+                            onPress={() => {
+                                Alert.alert(
+                                    'Forgot Password',
+                                    'Password reset feature coming soon! Please contact support.'
+                                );
+                            }}
+                        >
+                            <Text type='body2' style={styles.forgotPasswordText}>
+                                Forgot Password?
+                            </Text>
+                        </TouchableOpacity>
 
-                        {/* Action Buttons */}
+                        {/* Login Button */}
                         <View style={styles.buttonContainer}>
-                            {!reduxOtpSent ? (
-                                <TouchableOpacity
-                                    onPress={handleSendOTP}
-                                    disabled={phoneNumber.length < 10 || isLoading}
-                                    activeOpacity={0.8}
-                                    style={styles.gradientButton}
+                            <TouchableOpacity
+                                onPress={handleLogin}
+                                disabled={phoneNumber.length < 10 || password.length < 8 || isLoading}
+                                activeOpacity={0.8}
+                                style={styles.gradientButton}
+                            >
+                                <LinearGradient
+                                    colors={
+                                        phoneNumber.length < 10 || password.length < 8 || isLoading
+                                            ? ['#94a3b8', '#94a3b8']
+                                            : ['#2563EB', '#F97316']
+                                    }
+                                    start={{ x: 0, y: 0 }}
+                                    end={{ x: 1, y: 0 }}
+                                    style={styles.gradientButtonInner}
                                 >
-                                    <LinearGradient
-                                        colors={
-                                            phoneNumber.length < 10 || isLoading
-                                                ? ['#94a3b8', '#94a3b8']
-                                                : ['#2563EB', '#F97316']
-                                        }
-                                        start={{ x: 0, y: 0 }}
-                                        end={{ x: 1, y: 0 }}
-                                        style={styles.gradientButtonInner}
-                                    >
-                                        {isLoading ? (
-                                            <Ionicons name="hourglass-outline" size={20} color="#fff" />
-                                        ) : (
-                                            <Ionicons name="paper-plane-outline" size={20} color="#fff" />
-                                        )}
-                                        <Text type='body2' style={styles.buttonText}>
-                                            {isLoading ? 'Sending OTP...' : 'Send OTP'}
-                                        </Text>
-                                    </LinearGradient>
-                                </TouchableOpacity>
-                            ) : (
-                                <TouchableOpacity
-                                    onPress={handleVerifyOTP}
-                                    disabled={otp.length !== 6 || isLoading}
-                                    activeOpacity={0.8}
-                                    style={styles.gradientButton}
-                                >
-                                    <LinearGradient
-                                        colors={
-                                            otp.length !== 6 || isLoading
-                                                ? ['#94a3b8', '#94a3b8']
-                                                : ['#2563EB', '#F97316']
-                                        }
-                                        start={{ x: 0, y: 0 }}
-                                        end={{ x: 1, y: 0 }}
-                                        style={styles.gradientButtonInner}
-                                    >
-                                        {isLoading ? (
-                                            <Ionicons name="hourglass-outline" size={20} color="#fff" />
-                                        ) : (
-                                            <Ionicons name="checkmark-circle-outline" size={20} color="#fff" />
-                                        )}
-                                        <Text type='body2' style={styles.buttonText}>
-                                            {isLoading ? 'Verifying...' : 'Verify & Continue'}
-                                        </Text>
-                                    </LinearGradient>
-                                </TouchableOpacity>
-                            )}
+                                    {isLoading ? (
+                                        <Ionicons name="hourglass-outline" size={20} color="#fff" />
+                                    ) : (
+                                        <Ionicons name="log-in-outline" size={20} color="#fff" />
+                                    )}
+                                    <Text type='body2' style={styles.buttonText}>
+                                        {isLoading ? 'Logging in...' : 'Login'}
+                                    </Text>
+                                </LinearGradient>
+                            </TouchableOpacity>
                         </View>
 
                         {/* Sign Up Link */}
@@ -311,7 +265,6 @@ export default function Login() {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        // backgroundColor: 'red',
         backgroundColor: '#f8fafc',
     },
     headerGradient: {
@@ -338,7 +291,6 @@ const styles = StyleSheet.create({
     },
     appName: {
         fontSize: moderateScale(24),
-        // fontWeight: '00',
         color: '#fff',
         marginBottom: 4,
         textShadowColor: 'rgba(0,0,0,0.1)',
@@ -346,7 +298,6 @@ const styles = StyleSheet.create({
         textShadowRadius: 4,
     },
     tagline: {
-        // fontSize: moderateScale(14),
         color: 'rgba(255,255,255,0.9)',
         fontWeight: '500',
     },
@@ -372,7 +323,6 @@ const styles = StyleSheet.create({
     },
     welcomeTitle: {
         fontSize: moderateScale(18),
-        // fontWeight: '700',
         color: '#1e293b',
         marginBottom: 6,
     },
@@ -401,48 +351,34 @@ const styles = StyleSheet.create({
         borderColor: '#e2e8f0',
         paddingHorizontal: 16,
         alignContent: "center",
-        // justifyContent: "center",
-        // Shadow — soft & premium
         shadowColor: '#000',
         shadowOpacity: 0.05,
         shadowOffset: { width: 0, height: 2 },
         shadowRadius: 6,
         elevation: 2,
-        // paddingVertical: 0
     },
     inputIcon: {
         marginRight: 14,
         opacity: 0.7,
     },
     input: {
-        // width: 'auto',
         flexGrow: 1,
         flexShrink: 1,
-        // height: "100%",
-        // marginTop: moderateScale(10),
         fontSize: moderateScale(15),
         fontWeight: '500',
         color: '#0f172a',
-        // backgroundColor: "red",
         borderWidth: 0,
-        textAlignVertical: 'center',   // ⭐ MAIN FIX
-        // paddingVertical: 0,
+        textAlignVertical: 'center',
     },
-    resendContainer: {
-        marginTop: 12,
+    forgotPasswordContainer: {
         alignItems: 'flex-end',
+        marginTop: moderateScale(-10),
+        marginBottom: moderateScale(10),
     },
-    resendText: {
+    forgotPasswordText: {
         fontSize: moderateScale(13),
-        color: '#64748b',
-    },
-    resendLink: {
         color: '#2563EB',
-        fontSize: moderateScale(14)
-        // fontWeight: '600',
-    },
-    resendLinkDisabled: {
-        color: '#94a3b8',
+        fontWeight: '600',
     },
     buttonContainer: {
         marginTop: moderateScale(8),
@@ -480,7 +416,6 @@ const styles = StyleSheet.create({
     signupLink: {
         fontSize: moderateScale(14),
         color: '#2563EB',
-        // fontWeight: '700',
     },
     termsText: {
         textAlign: 'center',
@@ -494,115 +429,3 @@ const styles = StyleSheet.create({
         fontWeight: '600',
     },
 });
-
-// import React, { useState } from 'react';
-// import { View, Text, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
-// import { useRouter } from 'expo-router';
-// import { AppButton } from '../../src/components/common/AppButton';
-// import { InputField } from '../../src/components/common/InputField';
-// import { SafeAreaView } from 'react-native-safe-area-context';
-// import { useAppDispatch } from '@/hooks/useAppDispatch';
-// import { loginSuccess } from '@/store/slices/authSlice';
-
-// export default function Login() {
-//     const router = useRouter();
-//     const dispatch = useAppDispatch()
-//     const [phoneNumber, setPhoneNumber] = useState('');
-//     const [otp, setOtp] = useState('');
-//     const [otpSent, setOtpSent] = useState(false);
-//     const [isLoading, setIsLoading] = useState(false);
-
-//     const handleSendOTP = () => {
-//         setIsLoading(true);
-//         setTimeout(() => {
-//             setOtpSent(true);
-//             setIsLoading(false);
-//         }, 1000);
-//     };
-
-//     const handleVerifyOTP = () => {
-//         setIsLoading(true);
-//         setTimeout(() => {
-//             setIsLoading(false);
-//             dispatch(loginSuccess({
-//                 name: "Test User",
-//                 role: "customer",
-//                 id: "123456",
-//                 phoneNumber: "+923022977298",
-//                 profilePhoto: "",
-//                 city: "Lahore",
-//                 address: "R111 Roman City Shah Town",
-//                 favoriteVendors: []
-//             }))
-//             // router.push('/(auth)/role-selection' as any);
-//         }, 1000);
-//     };
-
-//     return (
-//         <SafeAreaView className="flex-1 bg-white">
-//             <KeyboardAvoidingView
-//                 behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-//                 className="flex-1"
-//             >
-//                 <ScrollView className="flex-1 px-6">
-//                     <View className="mt-20 mb-10">
-//                         <Text className="text-4xl font-bold text-primary mb-2">RefynHome</Text>
-//                         <Text className="text-gray-600 text-lg">Welcome back!</Text>
-//                     </View>
-
-//                     <InputField
-//                         label="Phone Number"
-//                         placeholder="+92 300 1234567"
-//                         value={phoneNumber}
-//                         onChangeText={setPhoneNumber}
-//                         keyboardType="phone-pad"
-//                         editable={!otpSent}
-//                     />
-
-//                     {otpSent && (
-//                         <InputField
-//                             label="Enter OTP"
-//                             placeholder="Enter 6-digit OTP"
-//                             value={otp}
-//                             onChangeText={setOtp}
-//                             keyboardType="number-pad"
-//                             maxLength={6}
-//                         />
-//                     )}
-
-//                     <View className="mt-6">
-//                         {!otpSent ? (
-//                             <AppButton
-//                                 title="Send OTP"
-//                                 variant='primary'
-//                                 onPress={handleSendOTP}
-//                                 isLoading={isLoading}
-//                                 disabled={phoneNumber.length < 10}
-//                             />
-//                         ) : (
-//                             <>
-//                                 <AppButton
-//                                     title="Verify OTP"
-//                                     variant='primary'
-//                                     onPress={handleVerifyOTP}
-//                                     isLoading={isLoading}
-//                                     disabled={otp.length !== 6}
-//                                 />
-//                                 <AppButton
-//                                     title="Resend OTP"
-//                                     onPress={handleSendOTP}
-//                                     variant="outline"
-//                                     className="mt-3"
-//                                 />
-//                             </>
-//                         )}
-//                     </View>
-
-//                     <Text className="text-center text-gray-500 text-sm mt-8">
-//                         By continuing, you agree to our Terms & Conditions
-//                     </Text>
-//                 </ScrollView>
-//             </KeyboardAvoidingView>
-//         </SafeAreaView>
-//     );
-// }

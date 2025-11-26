@@ -18,7 +18,10 @@ import { InputField } from '@/components/common/InputField';
 import { moderateScale } from 'react-native-size-matters';
 import Text from '@/components/common/Text';
 import { useAppDispatch, useAppSelector } from '@/hooks/useAppDispatch';
-import { sendSignupOTP, verifyOTP, resendOTP, clearError } from '@/store/slices/authSlice';
+import { signupUser, clearError } from '@/store/slices/authSlice';
+import { normalizePhoneNumber } from '@/utils/validation';
+import { getErrorMessage } from '@/api/client';
+import PasswordInput from '@/components/common/PasswordInput';
 import { UserRole } from '@/types';
 
 type Role = 'customer' | 'vendor' | null;
@@ -34,13 +37,15 @@ export default function Signup() {
 
     // Local state
     const [formData, setFormData] = useState({
-        name: '',
+        firstName: '',
+        lastName: '',
         phoneNumber: '',
-        email: '',
-        otp: '',
+        password: '',
+        confirmPassword: '',
+        address: '', // For customers
+        city: '', // For customers
     });
     const [selectedRole, setSelectedRole] = useState<Role>(null);
-    const [resendTimer, setResendTimer] = useState(0);
     const [fadeAnim] = useState(new Animated.Value(0));
 
     // Animation on mount
@@ -52,27 +57,16 @@ export default function Signup() {
         }).start();
     }, []);
 
-    // Countdown timer for resend OTP
-    useEffect(() => {
-        let interval: NodeJS.Timeout;
-        if (resendTimer > 0) {
-            interval = setInterval(() => {
-                setResendTimer((prev) => prev - 1);
-            }, 1000);
-        }
-        return () => clearInterval(interval);
-    }, [resendTimer]);
 
-    // Navigate after authentication
+    // Navigate to OTP screen after successful signup
     useEffect(() => {
-        if (isAuthenticated && user) {
-            if (user.role === 'customer') {
-                router.replace('/(customer)/(home)');
-            } else if (user.role === 'vendor') {
-                router.replace('/(vendor)/(servicerequests)');
-            }
+        if (reduxOtpSent && formData.phoneNumber) {
+            router.push({
+                pathname: '/(auth)/otp-login',
+                params: { phone: formData.phoneNumber, type: 'signup' }
+            });
         }
-    }, [isAuthenticated, user]);
+    }, [reduxOtpSent]);
 
     // Handle errors
     useEffect(() => {
@@ -83,64 +77,71 @@ export default function Signup() {
         }
     }, [error]);
 
-    const handleSendOTP = async () => {
-        if (!formData.name || !formData.phoneNumber) {
-            Alert.alert('Error', 'Please fill all required fields');
-            return;
-        }
-
+    const handleSignup = async () => {
+        // Validation
         if (!selectedRole) {
-            Alert.alert('Error', 'Please select your role');
+            Alert.alert('Error', 'Please select your role (Customer or Vendor)');
             return;
         }
 
-        try {
-            await dispatch(
-                sendSignupOTP({
-                    name: formData.name,
-                    phoneNumber: formData.phoneNumber,
-                    email: formData.email,
-                    role: selectedRole as UserRole,
-                })
-            ).unwrap();
-            setResendTimer(60); // Start 60-second countdown
-        } catch (err) {
-            // Error handled by useEffect above
-        }
-    };
-
-    const handleVerifyOTP = async () => {
-        if (formData.otp.length !== 6) {
-            Alert.alert('Error', 'Please enter a valid 6-digit OTP');
+        if (!formData.firstName.trim() || !formData.lastName.trim()) {
+            Alert.alert('Error', 'Please enter your first and last name');
             return;
         }
 
-        try {
-            await dispatch(
-                verifyOTP({
-                    phoneNumber: formData.phoneNumber,
-                    otp: formData.otp,
-                    type: 'signup',
-                })
-            ).unwrap();
-            // Navigation handled by useEffect above
-        } catch (err) {
-            // Error handled by useEffect above
-        }
-    };
-
-    const handleResendOTP = async () => {
-        if (resendTimer > 0) {
-            Alert.alert('Please Wait', `You can resend OTP in ${resendTimer} seconds`);
+        if (formData.phoneNumber.length < 10) {
+            Alert.alert('Error', 'Please enter a valid phone number');
             return;
         }
 
+        if (formData.password.length < 8) {
+            Alert.alert('Error', 'Password must be at least 8 characters');
+            return;
+        }
+
+        if (formData.password !== formData.confirmPassword) {
+            Alert.alert('Error', 'Passwords do not match');
+            return;
+        }
+
+        // Additional validation for customers
+        if (selectedRole === 'customer') {
+            if (!formData.address.trim()) {
+                Alert.alert('Error', 'Please enter your address');
+                return;
+            }
+            if (!formData.city.trim()) {
+                Alert.alert('Error', 'Please enter your city');
+                return;
+            }
+        }
+
         try {
-            await dispatch(resendOTP(formData.phoneNumber)).unwrap();
-            setResendTimer(60); // Restart countdown
-            Alert.alert('Success', 'OTP has been resent to your phone');
-        } catch (err) {
+            const normalizedPhone = normalizePhoneNumber(formData.phoneNumber);
+
+            // Prepare payload based on role
+            const payload: any = {
+                phone: normalizedPhone,
+                password: formData.password,
+                role: selectedRole,
+                first_name: formData.firstName.trim(),
+                last_name: formData.lastName.trim(),
+            };
+
+            // Add customer-specific fields
+            if (selectedRole === 'customer') {
+                payload.address = formData.address.trim();
+                payload.city = formData.city.trim();
+            }
+
+            // Dispatch signup action
+            await dispatch(signupUser(payload)).unwrap();
+
+            // Navigation to OTP screen handled by useEffect above
+        } catch (err: any) {
             // Error handled by useEffect above
+            const errorMessage = getErrorMessage(err);
+            console.error('Signup error:', errorMessage);
         }
     };
 
@@ -186,17 +187,14 @@ export default function Signup() {
                         {/* Welcome Text */}
                         <View style={styles.welcomeSection}>
                             <Text type='bodySemiBold' style={styles.welcomeTitle}>
-                                {reduxOtpSent ? 'Verify OTP' : 'Sign Up'}
+                                Sign Up
                             </Text>
                             <Text type='body2' style={styles.welcomeSubtitle}>
-                                {reduxOtpSent
-                                    ? `Enter the code sent to ${formData.phoneNumber}`
-                                    : 'Create your account to get started'}
+                                Create your account to get started
                             </Text>
                         </View>
 
-                        {!reduxOtpSent ? (
-                            <>
+                        <>
                                 {/* Role Selection Cards */}
                                 <View style={styles.roleSelectionSection}>
                                     <Text type='bodySemiBold' style={styles.roleSectionTitle}>I am a...</Text>
@@ -288,9 +286,9 @@ export default function Signup() {
                                     </View>
                                 </View>
 
-                                {/* Name Input */}
+                                {/* First Name Input */}
                                 <View style={styles.inputContainer}>
-                                    <Text type='body2' style={styles.inputLabel}>Full Name</Text>
+                                    <Text type='body2' style={styles.inputLabel}>First Name</Text>
                                     <View style={styles.inputWrapper}>
                                         <Ionicons
                                             name="person-outline"
@@ -299,12 +297,35 @@ export default function Signup() {
                                             style={styles.inputIcon}
                                         />
                                         <TextInput
-                                            placeholder="Enter your full name"
-                                            value={formData.name}
+                                            placeholder="Enter your first name"
+                                            value={formData.firstName}
                                             onChangeText={(text) =>
-                                                setFormData({ ...formData, name: text })
+                                                setFormData({ ...formData, firstName: text })
                                             }
                                             style={styles.input}
+                                            autoCapitalize="words"
+                                        />
+                                    </View>
+                                </View>
+
+                                {/* Last Name Input */}
+                                <View style={styles.inputContainer}>
+                                    <Text type='body2' style={styles.inputLabel}>Last Name</Text>
+                                    <View style={styles.inputWrapper}>
+                                        <Ionicons
+                                            name="person-outline"
+                                            size={20}
+                                            color="#2563EB"
+                                            style={styles.inputIcon}
+                                        />
+                                        <TextInput
+                                            placeholder="Enter your last name"
+                                            value={formData.lastName}
+                                            onChangeText={(text) =>
+                                                setFormData({ ...formData, lastName: text })
+                                            }
+                                            style={styles.input}
+                                            autoCapitalize="words"
                                         />
                                     </View>
                                 </View>
@@ -331,78 +352,85 @@ export default function Signup() {
                                     </View>
                                 </View>
 
-                                {/* Email Input */}
-                                <View style={styles.inputContainer}>
-                                    <Text type='body2' style={styles.inputLabel}>Email Address (Optional)</Text>
-                                    <View style={styles.inputWrapper}>
-                                        <Ionicons
-                                            name="mail-outline"
-                                            size={20}
-                                            color="#2563EB"
-                                            style={styles.inputIcon}
-                                        />
-                                        <TextInput
-                                            placeholder="your@email.com"
-                                            value={formData.email}
-                                            onChangeText={(text) =>
-                                                setFormData({ ...formData, email: text })
-                                            }
-                                            keyboardType="email-address"
-                                            autoCapitalize="none"
-                                            style={styles.input}
-                                        />
-                                    </View>
-                                </View>
-                            </>
-                        ) : (
-                            /* OTP Input */
-                            <View style={styles.inputContainer}>
-                                <Text type='body2' style={styles.inputLabel}>Enter OTP</Text>
-                                <View style={styles.inputWrapper}>
-                                    <Ionicons
-                                        name="lock-closed-outline"
-                                        size={20}
-                                        color="#F97316"
-                                        style={styles.inputIcon}
-                                    />
-                                    <TextInput
-                                        placeholder="Enter 6-digit OTP"
-                                        value={formData.otp}
-                                        onChangeText={(text) =>
-                                            setFormData({ ...formData, otp: text })
-                                        }
-                                        keyboardType="number-pad"
-                                        maxLength={6}
-                                        style={styles.input}
-                                        autoFocus
-                                    />
-                                </View>
+                                {/* Customer-specific fields */}
+                                {selectedRole === 'customer' && (
+                                    <>
+                                        {/* Address Input */}
+                                        <View style={styles.inputContainer}>
+                                            <Text type='body2' style={styles.inputLabel}>Address</Text>
+                                            <View style={styles.inputWrapper}>
+                                                <Ionicons
+                                                    name="location-outline"
+                                                    size={20}
+                                                    color="#F97316"
+                                                    style={styles.inputIcon}
+                                                />
+                                                <TextInput
+                                                    placeholder="Enter your address"
+                                                    value={formData.address}
+                                                    onChangeText={(text) =>
+                                                        setFormData({ ...formData, address: text })
+                                                    }
+                                                    style={styles.input}
+                                                    autoCapitalize="words"
+                                                />
+                                            </View>
+                                        </View>
 
-                                <TouchableOpacity
-                                    onPress={handleResendOTP}
-                                    disabled={resendTimer > 0}
-                                    style={styles.resendContainer}
-                                >
-                                    <Text type='body2' style={styles.resendText}>
-                                        Didn't receive code?{' '}
-                                        <Text
-                                            type='bodySemiBold'
-                                            style={[
-                                                styles.resendLink,
-                                                resendTimer > 0 && styles.resendLinkDisabled
-                                            ]}
-                                        >
-                                            {resendTimer > 0 ? `Resend in ${resendTimer}s` : 'Resend'}
-                                        </Text>
-                                    </Text>
-                                </TouchableOpacity>
-                            </View>
-                        )}
+                                        {/* City Input */}
+                                        <View style={styles.inputContainer}>
+                                            <Text type='body2' style={styles.inputLabel}>City</Text>
+                                            <View style={styles.inputWrapper}>
+                                                <Ionicons
+                                                    name="business-outline"
+                                                    size={20}
+                                                    color="#2563EB"
+                                                    style={styles.inputIcon}
+                                                />
+                                                <TextInput
+                                                    placeholder="Enter your city"
+                                                    value={formData.city}
+                                                    onChangeText={(text) =>
+                                                        setFormData({ ...formData, city: text })
+                                                    }
+                                                    style={styles.input}
+                                                    autoCapitalize="words"
+                                                />
+                                            </View>
+                                        </View>
+                                    </>
+                                )}
+
+                                {/* Password Input */}
+                                <PasswordInput
+                                    value={formData.password}
+                                    onChangeText={(text) =>
+                                        setFormData({ ...formData, password: text })
+                                    }
+                                    placeholder="Enter your password"
+                                    label="Password"
+                                    showStrengthIndicator={true}
+                                    autoComplete="password-new"
+                                    textContentType="newPassword"
+                                />
+
+                                {/* Confirm Password Input */}
+                                <PasswordInput
+                                    value={formData.confirmPassword}
+                                    onChangeText={(text) =>
+                                        setFormData({ ...formData, confirmPassword: text })
+                                    }
+                                    placeholder="Re-enter your password"
+                                    label="Confirm Password"
+                                    autoComplete="password-new"
+                                    textContentType="newPassword"
+                                />
+                            </>
 
                         {/* Action Button */}
                         <View style={styles.buttonContainer}>
                             <TouchableOpacity
-                                onPress={reduxOtpSent ? handleVerifyOTP : handleSendOTP}
+                                onPress={handleSignup}
                                 disabled={isLoading}
                                 activeOpacity={0.8}
                                 style={styles.gradientButton}
@@ -417,17 +445,13 @@ export default function Signup() {
                                         <Ionicons name="hourglass-outline" size={20} color="#fff" />
                                     ) : (
                                         <Ionicons
-                                            name={reduxOtpSent ? "checkmark-circle-outline" : "paper-plane-outline"}
+                                            name="person-add-outline"
                                             size={20}
                                             color="#fff"
                                         />
                                     )}
                                     <Text type='body2' style={styles.buttonText}>
-                                        {isLoading
-                                            ? 'Processing...'
-                                            : reduxOtpSent
-                                                ? 'Verify & Continue'
-                                                : 'Send OTP'}
+                                        {isLoading ? 'Creating Account...' : 'Sign Up'}
                                     </Text>
                                 </LinearGradient>
                             </TouchableOpacity>
@@ -565,22 +589,6 @@ const styles = StyleSheet.create({
         height: moderateScale(50),
         fontSize: moderateScale(15),
         color: '#1e293b',
-    },
-    resendContainer: {
-        marginTop: 12,
-        alignItems: 'flex-end',
-    },
-    resendText: {
-        fontSize: moderateScale(13),
-        color: '#64748b',
-    },
-    resendLink: {
-        color: '#2563EB',
-        fontSize: moderateScale(14),
-        fontWeight: '600',
-    },
-    resendLinkDisabled: {
-        color: '#94a3b8',
     },
     buttonContainer: {
         marginTop: moderateScale(8),

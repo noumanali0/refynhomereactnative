@@ -1,237 +1,408 @@
-// src/services/authService.ts
 /**
  * Authentication Service
  *
  * Centralized service for all authentication-related API calls.
- * Currently uses mock data - replace with actual API endpoints.
+ * Connects to Django backend at /api/auth/*
+ *
+ * All methods use the apiClient which automatically:
+ * - Adds JWT token to requests
+ * - Refreshes expired tokens
+ * - Handles 401 errors
  */
 
-import { Customer, Vendor, UserRole } from '@/types';
-
-// API Base URL - Move to environment config
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000/api';
-
-// ============================================================================
-// Types
-// ============================================================================
-
-export interface SendOTPResponse {
-  success: boolean;
-  message: string;
-  otpSent: boolean;
-}
-
-export interface VerifyOTPResponse {
-  success: boolean;
-  message: string;
-  user: Customer | Vendor;
-  token: string;
-}
-
-export interface SignupPayload {
-  name: string;
-  phoneNumber: string;
-  email?: string;
-  role: UserRole;
-}
-
-export interface SignupResponse {
-  success: boolean;
-  message: string;
-  otpSent: boolean;
-}
+import { apiClient } from '@/api/client';
+import { AUTH_ENDPOINTS } from '@/api/endpoints';
+import type {
+  SignupRequest,
+  SignupResponse,
+  OTPRequest,
+  OTPRequestResponse,
+  OTPVerifyRequest,
+  OTPVerifyResponse,
+  LoginRequest,
+  LoginResponse,
+  TokenRefreshResponse,
+  ProfileResponse,
+  VendorOnboardingRequest,
+  VendorOnboardingResponse,
+  UserAPI,
+} from '@/types/api';
+import { Customer, Vendor, User } from '@/types';
 
 // ============================================================================
-// Auth Service
+// TYPE CONVERSIONS
+// ============================================================================
+
+/**
+ * Convert Django backend user to frontend User type
+ * Handles field name mapping and computed properties
+ */
+function convertAPIUserToFrontend(apiUser: UserAPI): Customer | Vendor {
+  const baseUser: User = {
+    id: apiUser.id,
+    phone: apiUser.phone,
+    firstName: apiUser.first_name,
+    lastName: apiUser.last_name,
+    role: apiUser.role,
+    address: apiUser.address,
+    city: apiUser.city,
+    subscriptionTier: apiUser.subscription_tier,
+    favoriteVendors: apiUser.favorite_vendors.map(convertAPIUserToFrontend),
+    vendorProfile: apiUser.vendor_profile
+      ? {
+          id: apiUser.vendor_profile.id,
+          verified: apiUser.vendor_profile.verified,
+          cnic: apiUser.vendor_profile.cnic,
+          city: apiUser.vendor_profile.city,
+          bio: apiUser.vendor_profile.bio,
+          profilePhoto: apiUser.vendor_profile.profile_photo,
+          idVerificationPhoto: apiUser.vendor_profile.id_verification_photo,
+          latitude: apiUser.vendor_profile.latitude,
+          longitude: apiUser.vendor_profile.longitude,
+          serviceRadiusKm: apiUser.vendor_profile.service_radius_km,
+          locationUpdatedAt: apiUser.vendor_profile.location_updated_at,
+          averageRating: apiUser.vendor_profile.average_rating,
+          totalReviews: apiUser.vendor_profile.total_reviews,
+          completedJobs: apiUser.vendor_profile.completed_jobs,
+        }
+      : null,
+
+    // Computed fields
+    name: `${apiUser.first_name} ${apiUser.last_name}`.trim(),
+    phoneNumber: apiUser.phone, // Legacy alias
+    profilePhoto: apiUser.vendor_profile?.profile_photo || undefined,
+  };
+
+  // Return as Customer or Vendor based on role
+  if (apiUser.role === 'vendor' && baseUser.vendorProfile) {
+    return {
+      ...baseUser,
+      role: 'vendor',
+      vendorProfile: baseUser.vendorProfile,
+      // Legacy computed fields for backward compatibility
+      cnic: baseUser.vendorProfile.cnic,
+      rating: baseUser.vendorProfile.averageRating,
+      totalReviews: baseUser.vendorProfile.totalReviews,
+      verified: baseUser.vendorProfile.verified,
+      isOnline: false, // Not in backend, default to false
+      idVerificationUrl: baseUser.vendorProfile.idVerificationPhoto || undefined,
+    } as Vendor;
+  } else {
+    return {
+      ...baseUser,
+      role: 'customer',
+      vendorProfile: null,
+    } as Customer;
+  }
+}
+
+// ============================================================================
+// AUTH SERVICE CLASS
 // ============================================================================
 
 class AuthService {
   /**
-   * Send OTP for Login
-   * @param phoneNumber - User's phone number
+   * Signup - Register a new user (customer or vendor)
+   * POST /api/auth/signup/
+   *
+   * @param payload - Signup data
+   * @returns Promise with signup response
    */
-  async sendLoginOTP(phoneNumber: string): Promise<SendOTPResponse> {
+  async signup(payload: SignupRequest): Promise<SignupResponse> {
     try {
-      // TODO: Replace with actual API call
-      // const response = await fetch(`${API_BASE_URL}/auth/send-login-otp`, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ phoneNumber }),
-      // });
-      // const data = await response.json();
-      // return data;
+      const response = await apiClient.post<SignupResponse>(AUTH_ENDPOINTS.SIGNUP, payload);
+      return response.data;
+    } catch (error) {
+      console.error('[AuthService] Signup error:', error);
+      throw error;
+    }
+  }
 
-      // Mock response
-      await this.delay(1500);
+  /**
+   * Request OTP - Send OTP code to phone number
+   * POST /api/auth/otp-request/
+   *
+   * @param phone - Phone number
+   * @returns Promise with OTP request response
+   */
+  async requestOTP(phone: string): Promise<OTPRequestResponse> {
+    try {
+      const payload: OTPRequest = {
+        phone,
+        purpose: 'signup',
+      };
+
+      const response = await apiClient.post<OTPRequestResponse>(
+        AUTH_ENDPOINTS.OTP_REQUEST,
+        payload
+      );
+      return response.data;
+    } catch (error) {
+      console.error('[AuthService] OTP request error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Verify OTP - Verify OTP code and complete authentication
+   * POST /api/auth/otp-verify/
+   *
+   * @param phone - Phone number
+   * @param code - OTP code (6 digits)
+   * @returns Promise with tokens and user data
+   */
+  async verifyOTP(phone: string, code: string): Promise<{
+    access: string;
+    refresh: string;
+    user: Customer | Vendor;
+    status: 'onboarding_complete' | 'onboarding_required';
+  }> {
+    try {
+      const payload: OTPVerifyRequest = {
+        phone,
+        code,
+        purpose: 'signup',
+      };
+
+      const response = await apiClient.post<OTPVerifyResponse>(
+        AUTH_ENDPOINTS.OTP_VERIFY,
+        payload
+      );
+
+      // Convert API user to frontend format
+      const user = convertAPIUserToFrontend(response.data.user);
+
+      return {
+        access: response.data.access,
+        refresh: response.data.refresh,
+        user,
+        status: response.data.status,
+      };
+    } catch (error) {
+      console.error('[AuthService] OTP verify error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Login - Login with phone and password
+   * POST /api/auth/login/
+   *
+   * @param phone - Phone number
+   * @param password - Password
+   * @returns Promise with tokens and user data
+   */
+  async login(phone: string, password: string): Promise<{
+    access: string;
+    refresh: string;
+    user: Customer | Vendor;
+  }> {
+    try {
+      const payload: LoginRequest = {
+        phone,
+        password,
+      };
+
+      const response = await apiClient.post<LoginResponse>(AUTH_ENDPOINTS.LOGIN, payload);
+
+      // Convert API user to frontend format
+      const user = convertAPIUserToFrontend(response.data.user);
+
+      return {
+        access: response.data.access,
+        refresh: response.data.refresh,
+        user,
+      };
+    } catch (error) {
+      console.error('[AuthService] Login error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Refresh Token - Get new access token using refresh token
+   * POST /api/auth/refresh/
+   *
+   * @param refreshToken - Refresh token
+   * @returns Promise with new access token
+   */
+  async refreshToken(refreshToken: string): Promise<string> {
+    try {
+      const response = await apiClient.post<TokenRefreshResponse>(AUTH_ENDPOINTS.REFRESH, {
+        refresh: refreshToken,
+      });
+
+      return response.data.access;
+    } catch (error) {
+      console.error('[AuthService] Token refresh error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get Profile - Get current user profile
+   * GET /api/auth/me/
+   *
+   * Requires authentication (token in header)
+   * @returns Promise with user profile
+   */
+  async getProfile(): Promise<Customer | Vendor> {
+    try {
+      const response = await apiClient.get<ProfileResponse>(AUTH_ENDPOINTS.ME);
+
+      // Convert API user to frontend format
+      return convertAPIUserToFrontend(response.data);
+    } catch (error) {
+      console.error('[AuthService] Get profile error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Vendor Onboarding - Complete vendor profile after signup
+   * POST /api/auth/vendor-onboarding/
+   *
+   * Supports both multipart form data and JSON with base64 images
+   *
+   * @param payload - Vendor onboarding data
+   * @returns Promise with onboarding response
+   */
+  async vendorOnboarding(payload: VendorOnboardingRequest): Promise<VendorOnboardingResponse> {
+    try {
+      // Determine if we're sending multipart/form-data or JSON
+      const hasFileUploads =
+        payload.profile_photo instanceof File || payload.id_verification_photo instanceof File;
+
+      if (hasFileUploads) {
+        // Use FormData for file uploads
+        const formData = new FormData();
+
+        // Add all fields to FormData
+        formData.append('phone', payload.phone);
+        formData.append('cnic', payload.cnic);
+
+        if (payload.address) formData.append('address', payload.address);
+        if (payload.city) formData.append('city', payload.city);
+        if (payload.bio) formData.append('bio', payload.bio);
+        if (payload.experience) formData.append('experience', payload.experience.toString());
+
+        if (payload.profile_photo instanceof File) {
+          formData.append('profile_photo', payload.profile_photo);
+        }
+        if (payload.id_verification_photo instanceof File) {
+          formData.append('id_verification_photo', payload.id_verification_photo);
+        }
+
+        if (payload.service_categories) {
+          payload.service_categories.forEach((cat) => {
+            formData.append('service_categories', cat.toString());
+          });
+        }
+
+        const response = await apiClient.post<VendorOnboardingResponse>(
+          AUTH_ENDPOINTS.VENDOR_ONBOARDING,
+          formData,
+          {
+            headers: {
+              'Content-Type': 'multipart/form-data',
+            },
+          }
+        );
+
+        return response.data;
+      } else {
+        // Use JSON with base64 images
+        const response = await apiClient.post<VendorOnboardingResponse>(
+          AUTH_ENDPOINTS.VENDOR_ONBOARDING,
+          payload
+        );
+
+        return response.data;
+      }
+    } catch (error) {
+      console.error('[AuthService] Vendor onboarding error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Logout - Clear local session
+   * Note: Backend uses JWT which is stateless, so we only clear local storage
+   *
+   * @returns Promise that resolves when logout is complete
+   */
+  async logout(): Promise<void> {
+    try {
+      // JWT is stateless - no backend call needed
+      // Just clear local tokens (handled by Redux slice)
+      if (__DEV__) {
+        console.log('[AuthService] Logout complete (local only)');
+      }
+    } catch (error) {
+      console.error('[AuthService] Logout error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Send Login OTP - For backward compatibility with existing code
+   * @deprecated Use requestOTP instead
+   */
+  async sendLoginOTP(phoneNumber: string): Promise<{ success: boolean; message: string }> {
+    try {
+      await this.requestOTP(phoneNumber);
       return {
         success: true,
         message: 'OTP sent successfully',
-        otpSent: true,
       };
-    } catch (error: any) {
-      throw new Error(error.message || 'Failed to send OTP');
+    } catch (error) {
+      throw error;
     }
   }
 
   /**
-   * Send OTP for Signup
-   * @param payload - Signup data including name, phone, email, role
+   * Send Signup OTP - For backward compatibility with existing code
+   * @deprecated Use signup + requestOTP instead
    */
-  async sendSignupOTP(payload: SignupPayload): Promise<SignupResponse> {
+  async sendSignupOTP(payload: {
+    name: string;
+    phoneNumber: string;
+    email?: string;
+    role: 'customer' | 'vendor';
+  }): Promise<{ success: boolean; message: string }> {
     try {
-      // TODO: Replace with actual API call
-      // const response = await fetch(`${API_BASE_URL}/auth/signup`, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify(payload),
-      // });
-      // const data = await response.json();
-      // return data;
-
-      // Mock response
-      await this.delay(1500);
-      console.log('📤 Signup request:', payload);
+      // This is a placeholder for backward compatibility
+      // In the new flow, use signup() directly which will trigger OTP
       return {
         success: true,
-        message: 'Account created. OTP sent to your phone.',
-        otpSent: true,
+        message: 'Use signup() method instead',
       };
-    } catch (error: any) {
-      throw new Error(error.message || 'Failed to create account');
+    } catch (error) {
+      throw error;
     }
   }
 
   /**
-   * Verify OTP
-   * @param phoneNumber - User's phone number
-   * @param otp - OTP code
-   * @param type - 'login' or 'signup'
+   * Resend OTP - For backward compatibility
+   * @deprecated Use requestOTP instead
    */
-  async verifyOTP(
-    phoneNumber: string,
-    otp: string,
-    type: 'login' | 'signup' = 'login'
-  ): Promise<VerifyOTPResponse> {
+  async resendOTP(phoneNumber: string): Promise<{ success: boolean; message: string }> {
     try {
-      // TODO: Replace with actual API call
-      // const response = await fetch(`${API_BASE_URL}/auth/verify-otp`, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ phoneNumber, otp, type }),
-      // });
-      // const data = await response.json();
-      // return data;
-
-      // Mock response - Returns customer or vendor based on phone number
-      await this.delay(1500);
-
-      // Mock: Last digit determines role (even = customer, odd = vendor)
-      const lastDigit = parseInt(phoneNumber.slice(-1));
-      const role: UserRole = lastDigit % 2 === 0 ? 'customer' : 'vendor';
-
-      const mockUser: Customer | Vendor =
-        role === 'customer'
-          ? {
-              id: `customer_${Date.now()}`,
-              phoneNumber,
-              role: 'customer',
-              name: 'Demo Customer',
-              city: 'Lahore',
-              profilePhoto: 'https://i.pravatar.cc/150?img=1',
-              address: 'Demo Address, Lahore',
-              favoriteVendors: [],
-            }
-          : {
-              id: `vendor_${Date.now()}`,
-              phoneNumber,
-              role: 'vendor',
-              name: 'Demo Vendor',
-              city: 'Lahore',
-              profilePhoto: 'https://i.pravatar.cc/150?img=2',
-              cnic: '12345-1234567-1',
-              serviceCategories: [
-                { id: 'plumbing', label: 'Plumbing', icon: 'water' },
-              ],
-              rating: 4.5,
-              totalReviews: 120,
-              verified: true,
-              isOnline: true,
-              subscriptionTier: 'basic',
-            };
-
-      return {
-        success: true,
-        message: 'OTP verified successfully',
-        user: mockUser,
-        token: `mock_token_${Date.now()}`,
-      };
-    } catch (error: any) {
-      throw new Error(error.message || 'Failed to verify OTP');
-    }
-  }
-
-  /**
-   * Resend OTP
-   * @param phoneNumber - User's phone number
-   */
-  async resendOTP(phoneNumber: string): Promise<SendOTPResponse> {
-    try {
-      // TODO: Replace with actual API call
-      // const response = await fetch(`${API_BASE_URL}/auth/resend-otp`, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({ phoneNumber }),
-      // });
-      // const data = await response.json();
-      // return data;
-
-      // Mock response
-      await this.delay(1000);
+      await this.requestOTP(phoneNumber);
       return {
         success: true,
         message: 'OTP resent successfully',
-        otpSent: true,
       };
-    } catch (error: any) {
-      throw new Error(error.message || 'Failed to resend OTP');
+    } catch (error) {
+      throw error;
     }
-  }
-
-  /**
-   * Logout
-   * @param token - User's auth token
-   */
-  async logout(token: string): Promise<{ success: boolean; message: string }> {
-    try {
-      // TODO: Replace with actual API call
-      // const response = await fetch(`${API_BASE_URL}/auth/logout`, {
-      //   method: 'POST',
-      //   headers: {
-      //     'Content-Type': 'application/json',
-      //     Authorization: `Bearer ${token}`,
-      //   },
-      // });
-      // const data = await response.json();
-      // return data;
-
-      // Mock response
-      await this.delay(500);
-      return {
-        success: true,
-        message: 'Logged out successfully',
-      };
-    } catch (error: any) {
-      throw new Error(error.message || 'Failed to logout');
-    }
-  }
-
-  /**
-   * Helper: Simulate network delay
-   */
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 
+// ============================================================================
+// EXPORTS
+// ============================================================================
+
 // Export singleton instance
 export const authService = new AuthService();
+export default authService;

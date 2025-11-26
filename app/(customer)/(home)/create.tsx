@@ -18,6 +18,9 @@ import { moderateScale, scale, verticalScale } from "react-native-size-matters";
 import Dropdown from "../../../src/components/common/Dropdown";
 import { router } from "expo-router";
 import { COLORS } from "@/constants/colors";
+import { AddressSearchBottomSheet } from "@/components/customer/AddressSearchBottomSheet";
+import type { Address } from "@/types/mapbox";
+import { useCurrentLocation } from "@/hooks/useCurrentLocation";
 
 // ============================================================================
 // Reusable Components
@@ -66,7 +69,7 @@ const Disclaimer = memo(
 const requestServiceSchema = Yup.object().shape({
     selectedService: Yup.string().required("Service category is required"),
     needService: Yup.string().required("Please select when you need the service"),
-    city: Yup.string().trim().required("City is required"),
+    serviceAddress: Yup.string().trim().required("Service address is required"),
     description: Yup.string()
         .trim()
         .min(10, "Description must be at least 10 characters")
@@ -78,6 +81,11 @@ const requestServiceSchema = Yup.object().shape({
 const RequestServiceScreen = () => {
     const [showDatePicker, setShowDatePicker] = useState(false);
     const [photo, setPhoto] = useState<string | null>(null);
+    const [showAddressSearch, setShowAddressSearch] = useState(false);
+    const [selectedAddress, setSelectedAddress] = useState<Address | null>(null);
+
+    // Get current location for proximity bias in search
+    const { coordinates } = useCurrentLocation({ autoFetch: true });
 
     const pickImage = useCallback(async () => {
         const result = await ImagePicker.launchImageLibraryAsync({
@@ -89,13 +97,23 @@ const RequestServiceScreen = () => {
         if (!result.canceled) setPhoto(result.assets[0].uri);
     }, []);
 
+    const handleAddressSelect = useCallback((address: Address, setFieldValue: any) => {
+        setSelectedAddress(address);
+        setFieldValue("serviceAddress", address.formatted);
+        setFieldValue("latitude", address.coordinates.latitude.toString());
+        setFieldValue("longitude", address.coordinates.longitude.toString());
+        setShowAddressSearch(false);
+    }, []);
+
     return (
         <Formik
             initialValues={{
                 selectedService: "",
                 needService: "asap",
                 selectedDate: null,
-                city: "Karachi",
+                serviceAddress: "",
+                latitude: "",
+                longitude: "",
                 description: "",
                 isAgreed: false,
             }}
@@ -153,18 +171,43 @@ const RequestServiceScreen = () => {
                             error={touched.selectedService && errors.selectedService}
                         />
 
-                        {/* City */}
-                        <SectionTitle title="City *" />
-                        <TextInput
-                            value={values.city}
-                            onChangeText={handleChange("city")}
-                            placeholder="Enter your city"
-                            placeholderTextColor={COLORS.gray400}
-                            style={styles.input}
-                        />
-                        {touched.city && errors.city && (
-                            <Text type="body" style={styles.errorText}>{errors.city}</Text>
+                        {/* Service Address */}
+                        <SectionTitle title="Service Address *" />
+                        <TouchableOpacity
+                            onPress={() => setShowAddressSearch(true)}
+                            style={styles.addressButton}
+                            activeOpacity={0.7}
+                        >
+                            <View style={styles.addressContent}>
+                                <Ionicons name="location" size={22} color={COLORS.primary} />
+                                <Text
+                                    type="body2"
+                                    style={[
+                                        styles.addressText,
+                                        !values.serviceAddress && styles.addressPlaceholder,
+                                    ]}
+                                    numberOfLines={2}
+                                >
+                                    {values.serviceAddress || "Tap to search address"}
+                                </Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={20} color={COLORS.gray400} />
+                        </TouchableOpacity>
+                        {touched.serviceAddress && errors.serviceAddress && (
+                            <Text type="body" style={styles.errorText}>{errors.serviceAddress}</Text>
                         )}
+
+                        {/* Address Search Bottom Sheet */}
+                        <AddressSearchBottomSheet
+                            isVisible={showAddressSearch}
+                            onClose={() => setShowAddressSearch(false)}
+                            onSelectAddress={(address) => handleAddressSelect(address, setFieldValue)}
+                            proximity={coordinates ? {
+                                latitude: coordinates.latitude,
+                                longitude: coordinates.longitude,
+                            } : undefined}
+                            initialValue={values.serviceAddress}
+                        />
 
                         {/* Description */}
                         <SectionTitle title="Problem Description *" />
@@ -473,5 +516,33 @@ const styles = StyleSheet.create({
     },
     submitButtonText: {
         color: COLORS.white,
+    },
+    addressButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        borderWidth: 1.5,
+        borderColor: COLORS.gray300,
+        borderRadius: moderateScale(12),
+        padding: scale(16),
+        backgroundColor: COLORS.white,
+        marginBottom: verticalScale(4),
+        minHeight: verticalScale(56),
+    },
+    addressContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: scale(12),
+        flex: 1,
+        paddingRight: scale(8),
+    },
+    addressText: {
+        flex: 1,
+        color: COLORS.gray900,
+        fontSize: moderateScale(14),
+        lineHeight: moderateScale(20),
+    },
+    addressPlaceholder: {
+        color: COLORS.gray400,
     },
 });

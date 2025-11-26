@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   View,
   // Text,
@@ -6,10 +6,11 @@ import {
   ScrollView,
   TouchableOpacity,
   RefreshControl,
+  ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useAppSelector } from '@/hooks/useAppDispatch';
+import { useAppSelector, useAppDispatch } from '@/hooks/useAppDispatch';
 import { SERVICE_CATEGORIES } from '@/constants/serviceCategories';
 import { moderateScale } from "react-native-size-matters";
 import Text from '@/components/common/Text';
@@ -19,6 +20,9 @@ import { AppButton } from '@/components/common/AppButton';
 import { LinearGradient } from "expo-linear-gradient";
 import { mockActiveServices } from '@/mock/services';
 import { ServiceCard } from '@/components/customer/ServiceCard';
+import { useCurrentLocation } from '@/hooks/useCurrentLocation';
+import { updateProfile } from '@/store/slices/authSlice';
+import { AddressSearchBottomSheet } from '@/components/customer/AddressSearchBottomSheet';
 // import { useAppSelector } from '@/store/hooks';
 // import { useGetServiceHistoryQuery } from '@/services/customerApi';
 // import { SERVICE_TYPES } from '@/utils/constants';
@@ -26,15 +30,31 @@ import { ServiceCard } from '@/components/customer/ServiceCard';
 
 export default function CustomerHomeScreen() {
   const router = useRouter();
+  const dispatch = useAppDispatch();
   const { user } = useAppSelector((state) => state.auth);
   const { data: history, isLoading, refetch } = { data: [], isLoading: false, refetch: async () => { } }; // useGetServiceHistoryQuery();
   const [refreshing, setRefreshing] = useState(false);
   // const { isConnected } = useSocket();
   const isConnected = true;
 
+  // Get current location
+  const {
+    city: currentCity,
+    loading: locationLoading,
+    error: locationError,
+    refetch: refetchLocation,
+  } = useCurrentLocation({ autoFetch: true });
+
+  // Update Redux when location is fetched
+  useEffect(() => {
+    if (currentCity && currentCity !== user?.city) {
+      dispatch(updateProfile({ city: currentCity }));
+    }
+  }, [currentCity, user?.city, dispatch]);
+
   const onRefresh = async () => {
     setRefreshing(true);
-    await refetch();
+    await Promise.all([refetch(), refetchLocation()]);
     setRefreshing(false);
   };
 
@@ -57,11 +77,27 @@ export default function CustomerHomeScreen() {
           {/* map-marker and address */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
             <Ionicons name="location-outline" size={18} color={COLORS.gray500} />
-            <Text type="subtitle" style={styles.date}>
-              {user?.city || 'Lahore'}
-            </Text>
+            {locationLoading ? (
+              <ActivityIndicator size="small" color={COLORS.primary} />
+            ) : (
+              <Text type="subtitle" style={styles.date}>
+                {currentCity || user?.city || 'Lahore'}
+              </Text>
+            )}
+            {locationError && (
+              <TouchableOpacity onPress={refetchLocation} style={{ marginLeft: 4 }}>
+                <Ionicons name="refresh" size={16} color={COLORS.error} />
+              </TouchableOpacity>
+            )}
           </View>
         </View>
+        {/* <AddressSearchBottomSheet
+          isVisible={true}
+          onClose={() => { }}
+          onSelectAddress={(address) => console.log(address)}
+          proximity={undefined}
+          initialValue={''}
+        /> */}
         {/* <View>
           <Text style={styles.greeting}>Hello,</Text>
           <Text style={styles.userName}>{user?.name || 'Customer'}</Text>

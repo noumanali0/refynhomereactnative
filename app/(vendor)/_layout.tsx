@@ -1,10 +1,29 @@
-// app/(customer)/_layout.tsx
-import { Tabs } from "expo-router";
+// app/(vendor)/_layout.tsx
+import { Tabs, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import GradientIcon from "@/components/common/GradientIcon";
+import { useAppSelector } from "@/hooks/useAppDispatch";
+import { useEffect } from "react";
 
 
 export default function VendorTabsLayout() {
+    const router = useRouter();
+    const { user, vendorOnboardingStatus } = useAppSelector((state) => state.auth);
+
+    // Guard: Only verified vendors can access dashboard
+    useEffect(() => {
+        if (user?.role === 'vendor') {
+            const vendorVerified = user.vendorProfile?.verified === true;
+            const needsOnboarding = vendorOnboardingStatus === 'in_progress';
+            const pendingVerification = vendorOnboardingStatus === 'pending_verification';
+
+            if (needsOnboarding) {
+                router.replace('/(shared)/vendor-setup');
+            } else if (pendingVerification || !vendorVerified) {
+                router.replace('/(shared)/pending-verification');
+            }
+        }
+    }, [user, vendorOnboardingStatus]);
     return (
         <Tabs
             screenOptions={{

@@ -14,6 +14,8 @@ import { useFonts } from "expo-font";
 import { FONTS } from '@/constants/fonts';
 import * as SplashScreen from "expo-splash-screen";
 import { restoreSession } from '@/store/slices/authSlice';
+import { ToastProvider } from '@/contexts/ToastContext';
+import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 SplashScreen.preventAutoHideAsync();
 // import { useAppSelector } from "@/store/hooks";
 // import LoadingSpinner from "@/components/common/LoadingSpinner";
@@ -24,11 +26,15 @@ function RootLayoutNav() {
   const router = useRouter();
   const dispatch = useAppDispatch();
 
-  const { isAuthenticated, user, isLoading } = useAppSelector((s) => s.auth);
+  const { isAuthenticated, user, isLoading, vendorOnboardingStatus } = useAppSelector((s) => s.auth);
   const [isInitialized, setIsInitialized] = useState(false);
 
   const role = user?.role;
   const userId = user?.id;
+  const isVendor = role === 'vendor';
+  const vendorNeedsOnboarding = isVendor && vendorOnboardingStatus === 'in_progress';
+  const vendorPendingVerification = isVendor && vendorOnboardingStatus === 'pending_verification';
+  const vendorVerified = isVendor && user?.vendorProfile?.verified === true;
 
   // Restore session on mount
   useEffect(() => {
@@ -54,32 +60,59 @@ function RootLayoutNav() {
     const inAuth = segments[0] === "(auth)";
     const inCustomer = segments[0] === "(customer)";
     const inVendor = segments[0] === "(vendor)";
+    const inShared = segments[0] === "(shared)";
+    const onVendorSetup = inShared && (segments as string[])[1] === "vendor-setup";
+    const onPendingVerification = inShared && (segments as string[])[1] === "pending-verification";
 
     // Add a small delay to prevent navigation conflicts
     const redirectTimeout = setTimeout(() => {
       if (!isAuthenticated && !inAuth) {
         // Not authenticated and not on auth screen -> redirect to login
         router.replace("/(auth)/login");
-      } else if (isAuthenticated && inAuth) {
-        // Authenticated but still on auth screen -> redirect to appropriate home
-        if (role === "customer") {
-          router.replace("/(customer)/(home)");
-        } else if (role === "vendor") {
-          router.replace("/(vendor)/(servicerequests)");
-        }
-      } else if (isAuthenticated && role && !inAuth && !inCustomer && !inVendor) {
-        // Authenticated but not in any valid segment (e.g., on root after session restore)
-        // This handles the case when app restarts and segments[0] is undefined
-        if (role === "customer") {
-          router.replace("/(customer)/(home)");
-        } else if (role === "vendor") {
-          router.replace("/(vendor)/(servicerequests)");
-        }
       } else if (isAuthenticated && role) {
-        // Authenticated but in wrong module -> redirect to correct module
-        if (role === "customer" && inVendor) {
+        // Handle vendor onboarding status
+        if (isVendor) {
+          if (vendorNeedsOnboarding && !onVendorSetup) {
+            // Vendor needs to complete onboarding
+            router.replace("/(shared)/vendor-setup");
+            return;
+          } else if (vendorPendingVerification && !onPendingVerification) {
+            // Vendor is waiting for admin approval
+            console.log("this par running...!!")
+            router.replace("/(shared)/pending-verification");
+            return;
+          } else if (!vendorVerified && !vendorNeedsOnboarding && !vendorPendingVerification && inVendor) {
+            // Vendor not verified but trying to access dashboard
+            console.log("this par running...!!")
+            router.replace("/(shared)/pending-verification");
+            return;
+          }
+        }
+
+        // Handle normal authenticated navigation
+        if (inAuth) {
+          // Authenticated but still on auth screen -> redirect to appropriate home
+          if (role === "customer") {
+            router.replace("/(customer)/(home)");
+          } else if (role === "vendor" && vendorVerified) {
+            router.replace("/(vendor)/(servicerequests)");
+          }
+        } else if (!inAuth && !inCustomer && !inVendor && !inShared) {
+          // Authenticated but not in any valid segment (e.g., on root after session restore)
+          if (role === "customer") {
+            router.replace("/(customer)/(home)");
+          } else if (role === "vendor" && vendorVerified) {
+            router.replace("/(vendor)/(servicerequests)");
+          } else if (role === "vendor" && vendorPendingVerification) {
+            router.replace("/(shared)/pending-verification");
+          } else if (role === "vendor" && vendorNeedsOnboarding) {
+            router.replace("/(shared)/vendor-setup");
+          }
+        } else if (role === "customer" && inVendor) {
+          // Customer trying to access vendor module
           router.replace("/(customer)/(home)");
-        } else if (role === "vendor" && inCustomer) {
+        } else if (role === "vendor" && vendorVerified && inCustomer) {
+          // Vendor trying to access customer module
           router.replace("/(vendor)/(servicerequests)");
         }
       }
@@ -123,13 +156,17 @@ export default function RootLayout() {
       <SafeAreaView style={{ backgroundColor: "black" }} edges={["top"]} />
       <SafeAreaView style={styles.safe} edges={["left", "right", "bottom"]}>
         <Provider store={store}>
-          {/* <PersistGate loading={<LoadingSpinner />} persistor={persistor}> */}
-          <GestureHandlerRootView style={{ flex: 1 }}>
-            {/* <SafeAreaProvider> */}
-            <RootLayoutNav />
-            {/* </SafeAreaProvider> */}
-          </GestureHandlerRootView>
-          {/* </PersistGate> */}
+          <ToastProvider>
+            {/* <PersistGate loading={<LoadingSpinner />} persistor={persistor}> */}
+            <GestureHandlerRootView style={{ flex: 1 }}>
+              <BottomSheetModalProvider>
+                {/* <SafeAreaProvider> */}
+                <RootLayoutNav />
+                {/* </SafeAreaProvider> */}
+              </BottomSheetModalProvider>
+            </GestureHandlerRootView>
+            {/* </PersistGate> */}
+          </ToastProvider>
         </Provider>
       </SafeAreaView>
     </SafeAreaProvider>

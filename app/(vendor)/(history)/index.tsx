@@ -91,7 +91,6 @@ export default function HistoryScreen() {
                     <Ionicons name={icon as any} size={18} color={isActive ? color : COLORS.gray500} />
                 </View>
                 <View style={styles.filterTextContainer}>
-
                     <Text type="subtitle2" style={[styles.filterLabel, isActive && { color }]}>{label}</Text>
                     <Text type="body2" style={[styles.filterCount, isActive && { color }]}>({count})</Text>
                 </View>

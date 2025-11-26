@@ -1,30 +1,85 @@
-export type UserRole = 'customer' | 'vendor';
+/**
+ * User Types - Aligned with Django Backend
+ * Updated to match backend/refynhomedjango/accounts/models.py
+ */
 
-export interface User {
-  id: string;
-  phoneNumber: string;
-  role: UserRole;
-  name: string;
+export type UserRole = 'customer' | 'vendor' | 'admin';
+export type SubscriptionTier = 'free' | 'silver' | 'gold' | 'pro';
+
+/**
+ * Vendor Profile Details
+ * Matches Django VendorProfile model
+ */
+export interface VendorProfile {
+  id: number;
+  verified: boolean;
+  cnic: string;
   city: string;
-  profilePhoto?: string;
+  bio: string;
+  profilePhoto: string | null;
+  idVerificationPhoto: string | null;
+  latitude: string | null;
+  longitude: string | null;
+  serviceRadiusKm: string;
+  locationUpdatedAt: string | null;
+  averageRating: number;
+  totalReviews: number;
+  completedJobs: number;
+  // Legacy fields for backward compatibility
+  rating?: number;
+  isOnline?: boolean;
 }
 
+/**
+ * Base User Interface
+ * Matches Django User model
+ */
+export interface User {
+  id: number;
+  phone: string;
+  firstName: string;
+  lastName: string;
+  role: UserRole;
+  address: string;
+  city: string;
+  subscriptionTier: SubscriptionTier;
+  favoriteVendors: User[];
+  vendorProfile: VendorProfile | null;
+
+  // Computed fields
+  name?: string; // Computed from firstName + lastName
+
+  // Legacy fields for backward compatibility
+  phoneNumber?: string; // Alias for phone
+  profilePhoto?: string; // Mapped from vendorProfile.profilePhoto
+}
+
+/**
+ * Customer Interface
+ * Extends User with customer-specific fields
+ */
 export interface Customer extends User {
   role: 'customer';
-  address: string;
-  favoriteVendors: string[];
+  favoriteVendors: User[];
+  vendorProfile: null;
 }
 
+/**
+ * Vendor Interface
+ * Extends User with vendor-specific fields
+ */
 export interface Vendor extends User {
   role: 'vendor';
-  cnic: string;
-  serviceCategories: ServiceCategory[];
-  rating: number;
-  totalReviews: number;
-  verified: boolean;
-  isOnline: boolean;
-  idVerificationUrl?: string;
-  subscriptionTier?: 'basic' | 'premium';
+  vendorProfile: VendorProfile;
+
+  // Legacy computed fields for backward compatibility
+  cnic?: string; // Mapped from vendorProfile.cnic
+  rating?: number; // Mapped from vendorProfile.averageRating
+  totalReviews?: number; // Mapped from vendorProfile.totalReviews
+  verified?: boolean; // Mapped from vendorProfile.verified
+  isOnline?: boolean; // Not in backend, default to false
+  idVerificationUrl?: string; // Mapped from vendorProfile.idVerificationPhoto
+  serviceCategories?: ServiceCategory[]; // Loaded separately from backend
 }
 
 export type ServiceCategory = {
