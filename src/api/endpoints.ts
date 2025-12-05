@@ -177,6 +177,37 @@ export const CUSTOMER_ENDPOINTS = {
 } as const;
 
 // ============================================================================
+// FAVORITE VENDOR ENDPOINTS
+// ============================================================================
+
+export const FAVORITE_ENDPOINTS = {
+  /**
+   * GET /api/customers/favorites/
+   * Response: FavoriteVendor[]
+   */
+  LIST: '/customers/favorites/',
+
+  /**
+   * POST /api/customers/favorites/
+   * Body: { vendor_id: number }
+   * Response: { message, favorite: FavoriteVendor }
+   */
+  ADD: '/customers/favorites/',
+
+  /**
+   * DELETE /api/customers/favorites/{vendor_id}/
+   * Response: 204 No Content
+   */
+  REMOVE: (vendorId: number) => `/customers/favorites/${vendorId}/`,
+
+  /**
+   * GET /api/customers/favorites/{vendor_id}/check/
+   * Response: { is_favorite: boolean }
+   */
+  CHECK: (vendorId: number) => `/customers/favorites/${vendorId}/check/`,
+} as const;
+
+// ============================================================================
 // VENDOR ENDPOINTS
 // ============================================================================
 
@@ -189,8 +220,18 @@ export const VENDOR_ENDPOINTS = {
 
   /**
    * GET /api/vendors/service-requests/
-   * Query: ?category=1&radius=10
-   * Response: ServiceRequest[] (filtered by vendor location & categories)
+   * Query params:
+   *   - type: 'pending' | 'incoming' | 'active' | 'completed' | 'history'
+   *   - limit: number (default 50)
+   *
+   * Type values:
+   *   - pending: Requests where vendor sent proposal (waiting for customer)
+   *   - incoming: Requests where vendor can send proposal
+   *   - active: Active jobs assigned to vendor (en_route, in_progress)
+   *   - completed: Completed jobs assigned to vendor
+   *   - history: All past requests (completed or cancelled) assigned to vendor
+   *
+   * Response: { results: ServiceRequest[], count: number, type: string }
    */
   SERVICE_REQUESTS: '/vendors/service-requests/',
 
@@ -219,6 +260,25 @@ export const VENDOR_ENDPOINTS = {
    * Response: Vendor
    */
   UPDATE: (id: number) => `/vendors/${id}/`,
+
+  /**
+   * GET /api/vendors/{id}/reviews/
+   * Response: Review[] - List of reviews for vendor
+   */
+  REVIEWS: (id: number) => `/vendors/${id}/reviews/`,
+} as const;
+
+// ============================================================================
+// REVIEW ENDPOINTS
+// ============================================================================
+
+export const REVIEW_ENDPOINTS = {
+  /**
+   * POST /api/service-requests/{serviceRequestId}/rate/
+   * Body: { stars: 1-5, feedback: "optional text" }
+   * Response: { message, review: { id, service_request, customer, vendor, stars, feedback, created_at } }
+   */
+  RATE_SERVICE: (serviceRequestId: number) => `/service-requests/${serviceRequestId}/rate/`,
 } as const;
 
 // ============================================================================
@@ -368,7 +428,9 @@ export default {
   SERVICE_REQUESTS: SERVICE_REQUEST_ENDPOINTS,
   CATEGORIES: CATEGORY_ENDPOINTS,
   CUSTOMER: CUSTOMER_ENDPOINTS,
+  FAVORITES: FAVORITE_ENDPOINTS,
   VENDOR: VENDOR_ENDPOINTS,
+  REVIEWS: REVIEW_ENDPOINTS,
   PROPOSALS: PROPOSAL_ENDPOINTS,
   SUBSCRIPTIONS: SUBSCRIPTION_ENDPOINTS,
   ADMIN: ADMIN_ENDPOINTS,

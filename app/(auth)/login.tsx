@@ -365,7 +365,6 @@ const styles = StyleSheet.create({
         flexGrow: 1,
         flexShrink: 1,
         fontSize: moderateScale(15),
-        fontWeight: '500',
         color: '#0f172a',
         borderWidth: 0,
         textAlignVertical: 'center',

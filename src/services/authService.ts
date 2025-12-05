@@ -262,37 +262,64 @@ class AuthService {
    * Vendor Onboarding - Complete vendor profile after signup
    * POST /api/auth/vendor-onboarding/
    *
-   * Supports both multipart form data and JSON with base64 images
+   * Uses multipart/form-data for file uploads (React Native)
    *
    * @param payload - Vendor onboarding data
    * @returns Promise with onboarding response
    */
   async vendorOnboarding(payload: VendorOnboardingRequest): Promise<VendorOnboardingResponse> {
     try {
-      // Determine if we're sending multipart/form-data or JSON
-      const hasFileUploads =
-        payload.profile_photo instanceof File || payload.id_verification_photo instanceof File;
+      // Helper to check if string is a file URI (React Native)
+      const isFileUri = (value: unknown): value is string =>
+        typeof value === 'string' && (value.startsWith('file://') || value.startsWith('content://'));
 
-      if (hasFileUploads) {
-        // Use FormData for file uploads
+      // Check if we have image URIs (React Native returns file:// or content:// URIs)
+      const hasImageUris =
+        isFileUri(payload.profile_photo) || isFileUri(payload.id_verification_photo);
+
+      if (hasImageUris) {
+        // Use FormData for file uploads in React Native
         const formData = new FormData();
 
-        // Add all fields to FormData
+        // Add required fields
         formData.append('phone', payload.phone);
         formData.append('cnic', payload.cnic);
 
+        // Add optional fields
         if (payload.address) formData.append('address', payload.address);
         if (payload.city) formData.append('city', payload.city);
         if (payload.bio) formData.append('bio', payload.bio);
         if (payload.experience) formData.append('experience', payload.experience.toString());
 
-        if (payload.profile_photo instanceof File) {
-          formData.append('profile_photo', payload.profile_photo);
-        }
-        if (payload.id_verification_photo instanceof File) {
-          formData.append('id_verification_photo', payload.id_verification_photo);
+        // Add profile photo as file object (React Native format)
+        if (isFileUri(payload.profile_photo)) {
+          const uri = payload.profile_photo;
+          const filename = uri.split('/').pop() || 'profile.jpg';
+          const match = /\.(\w+)$/.exec(filename);
+          const type = match ? `image/${match[1].toLowerCase()}` : 'image/jpeg';
+
+          formData.append('profile_photo', {
+            uri,
+            name: filename,
+            type,
+          } as any);
         }
 
+        // Add ID verification photo as file object (React Native format)
+        if (isFileUri(payload.id_verification_photo)) {
+          const uri = payload.id_verification_photo;
+          const filename = uri.split('/').pop() || 'id_verification.jpg';
+          const match = /\.(\w+)$/.exec(filename);
+          const type = match ? `image/${match[1].toLowerCase()}` : 'image/jpeg';
+
+          formData.append('id_verification_photo', {
+            uri,
+            name: filename,
+            type,
+          } as any);
+        }
+
+        // Add service categories
         if (payload.service_categories) {
           payload.service_categories.forEach((cat) => {
             formData.append('service_categories', cat.toString());
@@ -311,7 +338,7 @@ class AuthService {
 
         return response.data;
       } else {
-        // Use JSON with base64 images
+        // Use JSON (for web or when no file URIs)
         const response = await apiClient.post<VendorOnboardingResponse>(
           AUTH_ENDPOINTS.VENDOR_ONBOARDING,
           payload

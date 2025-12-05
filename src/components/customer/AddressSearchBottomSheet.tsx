@@ -306,7 +306,6 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: moderateScale(15),
     color: COLORS.gray900,
-    fontFamily: 'Poppins-Regular',
   },
   clearButton: {
     padding: scale(4),

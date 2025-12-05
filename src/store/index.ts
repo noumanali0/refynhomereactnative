@@ -12,6 +12,15 @@ import offersReducer from './slices/offersSlice';
 import requestsReducer from './slices/requestsSlice';
 import subscriptionReducer from './slices/subscriptionSlice';
 
+// WebSocket dispatch slice for real-time features
+import dispatchReducer from './slices/dispatchSlice';
+
+// Customer service history slice
+import serviceHistoryReducer from './slices/serviceHistorySlice';
+
+// Vendor job history slice
+import vendorHistoryReducer from './slices/vendorHistorySlice';
+
 export const store = configureStore({
   reducer: {
     auth: authReducer,
@@ -25,6 +34,15 @@ export const store = configureStore({
 
     // ⭐ Add vendor subscription slice
     subscription: subscriptionReducer,
+
+    // ⭐ WebSocket real-time dispatch
+    dispatch: dispatchReducer,
+
+    // ⭐ Customer service request history
+    serviceHistory: serviceHistoryReducer,
+
+    // ⭐ Vendor job history
+    vendorHistory: vendorHistoryReducer,
   },
 
   // (optional but recommended for production quality)

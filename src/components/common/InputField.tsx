@@ -22,7 +22,6 @@ const styles = StyleSheet.create({
     height: moderateScale(50),
     fontSize: moderateScale(15),
     color: '#1e293b',
-    fontWeight: '500',
   },
 });
 

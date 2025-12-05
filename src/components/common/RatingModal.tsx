@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
     Modal,
     View,
@@ -7,42 +7,91 @@ import {
     StyleSheet,
     TextInput,
     Animated,
+    ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useNavigation } from "expo-router";
+import { useDispatch, useSelector } from "react-redux";
+import type { AppDispatch } from "@/store";
+import {
+    submitReview,
+    selectIsSubmittingReview,
+    selectReviewError,
+    clearReviewState,
+} from "@/store/slices/reviewSlice";
 
 interface RatingModalProps {
+    /** Whether modal is visible */
     visible: boolean;
+    /** Called when modal is closed (cancel or after success) */
     onClose: () => void;
+    /** Called after successful review submission */
+    onSuccess?: () => void;
+    /** Service request ID to rate */
+    serviceRequestId: number;
+    /** Vendor name to display */
+    vendorName: string;
 }
 
-export default function RatingModal({ visible, onClose }: RatingModalProps) {
-    const navigation = useNavigation();
+export default function RatingModal({
+    visible,
+    onClose,
+    onSuccess,
+    serviceRequestId,
+    vendorName,
+}: RatingModalProps) {
+    const dispatch = useDispatch<AppDispatch>();
+    const isSubmitting = useSelector(selectIsSubmittingReview);
+    const submitError = useSelector(selectReviewError);
+
     const [rating, setRating] = useState<number>(0);
     const [review, setReview] = useState<string>("");
     const [submitted, setSubmitted] = useState<boolean>(false);
 
-    const fadeAnim = new Animated.Value(0);
+    const fadeAnim = useRef(new Animated.Value(0)).current;
+
+    // Reset state when modal opens
+    useEffect(() => {
+        if (visible) {
+            setRating(0);
+            setReview("");
+            setSubmitted(false);
+            fadeAnim.setValue(0);
+        }
+    }, [visible, fadeAnim]);
 
     const handleRate = (value: number) => setRating(value);
 
-    const handleSubmit = () => {
-        if (rating === 0) return;
+    const handleSubmit = async () => {
+        if (rating === 0 || isSubmitting) return;
 
-        // Here you could call your API:
-        // await submitReview({ rating, review });
+        try {
+            await dispatch(submitReview({
+                serviceRequestId,
+                stars: rating,
+                feedback: review,
+            })).unwrap();
 
-        setSubmitted(true);
-        Animated.timing(fadeAnim, {
-            toValue: 1,
-            duration: 400,
-            useNativeDriver: true,
-        }).start(() => {
-            setTimeout(() => {
-                onClose();
-                navigation.goBack();
-            }, 1000);
-        });
+            setSubmitted(true);
+            Animated.timing(fadeAnim, {
+                toValue: 1,
+                duration: 400,
+                useNativeDriver: true,
+            }).start(() => {
+                setTimeout(() => {
+                    dispatch(clearReviewState());
+                    onSuccess?.();
+                    onClose();
+                }, 1000);
+            });
+        } catch (error) {
+            // Error is handled in Redux state
+            console.error('[RatingModal] Submit error:', error);
+        }
+    };
+
+    const handleSkip = () => {
+        dispatch(clearReviewState());
+        onClose();
     };
 
     return (
@@ -52,10 +101,15 @@ export default function RatingModal({ visible, onClose }: RatingModalProps) {
                     {!submitted ? (
                         <>
                             <Text style={styles.title}>Rate Your Experience</Text>
+                            <Text style={styles.subtitle}>How was your service with {vendorName}?</Text>
 
                             <View style={styles.starContainer}>
                                 {[1, 2, 3, 4, 5].map((star) => (
-                                    <TouchableOpacity key={star} onPress={() => handleRate(star)}>
+                                    <TouchableOpacity
+                                        key={star}
+                                        onPress={() => handleRate(star)}
+                                        disabled={isSubmitting}
+                                    >
                                         <Ionicons
                                             name={star <= rating ? "star" : "star-outline"}
                                             size={32}
@@ -73,21 +127,39 @@ export default function RatingModal({ visible, onClose }: RatingModalProps) {
                                 value={review}
                                 onChangeText={setReview}
                                 multiline
+                                editable={!isSubmitting}
                             />
+
+                            {/* Error Message */}
+                            {submitError && (
+                                <Text style={styles.errorText}>{submitError}</Text>
+                            )}
 
                             <TouchableOpacity
                                 onPress={handleSubmit}
                                 style={[
                                     styles.button,
-                                    { backgroundColor: rating > 0 ? "#2563EB" : "#9CA3AF" },
+                                    {
+                                        backgroundColor: rating > 0 && !isSubmitting
+                                            ? "#2563EB"
+                                            : "#9CA3AF"
+                                    },
                                 ]}
-                                disabled={rating === 0}
+                                disabled={rating === 0 || isSubmitting}
                             >
-                                <Text style={styles.buttonText}>Submit</Text>
+                                {isSubmitting ? (
+                                    <ActivityIndicator color="#FFF" size="small" />
+                                ) : (
+                                    <Text style={styles.buttonText}>Submit</Text>
+                                )}
                             </TouchableOpacity>
 
-                            <TouchableOpacity onPress={onClose} style={styles.cancelBtn}>
-                                <Text style={styles.cancelText}>Cancel</Text>
+                            <TouchableOpacity
+                                onPress={handleSkip}
+                                style={styles.cancelBtn}
+                                disabled={isSubmitting}
+                            >
+                                <Text style={styles.cancelText}>Skip</Text>
                             </TouchableOpacity>
                         </>
                     ) : (
@@ -100,7 +172,7 @@ export default function RatingModal({ visible, onClose }: RatingModalProps) {
             </View>
         </Modal>
     );
-};
+}
 
 // ✅ Styles: Clean, maintainable, consistent
 const styles = StyleSheet.create({
@@ -122,7 +194,19 @@ const styles = StyleSheet.create({
         fontSize: 18,
         fontWeight: "600",
         color: "#111827",
+        marginBottom: 4,
+    },
+    subtitle: {
+        fontSize: 14,
+        color: "#6B7280",
         marginBottom: 16,
+        textAlign: "center",
+    },
+    errorText: {
+        color: "#DC2626",
+        fontSize: 13,
+        marginTop: 8,
+        textAlign: "center",
     },
     starContainer: {
         flexDirection: "row",

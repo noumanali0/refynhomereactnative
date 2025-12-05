@@ -16,7 +16,7 @@ import { setupInterceptors } from './interceptors';
 // CONFIGURATION
 // ============================================================================
 
-const API_BASE_URL = 'http://192.168.100.14:8000/api';
+const API_BASE_URL = 'http://192.168.100.8:8000/api';
 
 // Log API base URL in development
 if (__DEV__) {

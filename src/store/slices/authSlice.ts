@@ -252,12 +252,26 @@ export const refreshAccessToken = createAsyncThunk(
 );
 
 /**
- * Logout - Clear session
+ * Logout - Clear session and disconnect socket
  */
 export const logoutUser = createAsyncThunk(
   'auth/logout',
-  async (_, { rejectWithValue }) => {
+  async (_, { dispatch }) => {
     try {
+      // Disconnect WebSocket first (imported dynamically to avoid circular deps)
+      const { disconnectSocket, resetDispatchState } = await import('./dispatchSlice');
+
+      // Properly await the async thunk dispatch
+      try {
+        await dispatch(disconnectSocket()).unwrap();
+      } catch (socketError) {
+        // Socket might not be connected, ignore this error
+        console.log('[Auth] Socket disconnect skipped:', socketError);
+      }
+
+      // Reset dispatch state (sync action)
+      dispatch(resetDispatchState());
+
       await authService.logout();
 
       // Clear all tokens and user data from SecureStore

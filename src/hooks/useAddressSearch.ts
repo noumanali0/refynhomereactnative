@@ -3,23 +3,20 @@
  * Hook for searching addresses with geocoding
  * Features: debouncing, loading states, error handling
  *
- * Currently using: OpenStreetMap (free, no API key)
- * To switch to Mapbox: Change import from openStreetMapService to mapboxService
+ * Currently using: Google Places API (requires EXPO_PUBLIC_GOOGLE_PLACES_API_KEY)
  */
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import debounce from 'lodash.debounce';
-// TODO: Switch to mapboxService when public token is available
-// import { mapboxService } from '@/services/mapboxService';
-import { openStreetMapService } from '@/services/openStreetMapService';
+import { googlePlacesService } from '@/services/googlePlacesService';
 import type { Address } from '@/types/mapbox';
 
 interface UseAddressSearchOptions {
-  debounceMs?: number; // Debounce delay in milliseconds (default: 500)
-  minQueryLength?: number; // Minimum query length before searching (default: 3)
-  limit?: number; // Max number of results (default: 5)
-  proximity?: { latitude: number; longitude: number }; // Bias results near this location
-  country?: string; // Restrict to country code (e.g., "pk" for Pakistan)
+  debounceMs?: number;
+  minQueryLength?: number;
+  limit?: number;
+  proximity?: { latitude: number; longitude: number };
+  country?: string;
 }
 
 interface UseAddressSearchReturn {
@@ -36,11 +33,11 @@ export function useAddressSearch(
   options: UseAddressSearchOptions = {}
 ): UseAddressSearchReturn {
   const {
-    debounceMs = 500,
+    debounceMs = 400,
     minQueryLength = 3,
     limit = 5,
     proximity,
-    country = 'pk', // Default to Pakistan
+    country = 'pk',
   } = options;
 
   const [suggestions, setSuggestions] = useState<Address[]>([]);
@@ -48,13 +45,24 @@ export function useAddressSearch(
   const [error, setError] = useState<string | null>(null);
   const [selectedAddress, setSelectedAddress] = useState<Address | null>(null);
 
-  // Keep track of the latest request to prevent race conditions
+  // Track the latest request to prevent race conditions
   const latestRequestRef = useRef<number>(0);
+  const mountedRef = useRef(true);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   /**
    * Perform the actual search
    */
-  const performSearch = async (query: string, requestId: number) => {
+  const performSearch = useCallback(async (query: string, requestId: number) => {
+    if (!mountedRef.current) return;
+
     try {
       setLoading(true);
       setError(null);
@@ -63,39 +71,48 @@ export function useAddressSearch(
         ? { longitude: proximity.longitude, latitude: proximity.latitude }
         : undefined;
 
-      // Using OpenStreetMap for now (switch to mapboxService when token available)
-      const results = await openStreetMapService.forwardGeocode(query, {
+      const results = await googlePlacesService.forwardGeocode(query, {
         limit,
         proximity: proximityCoords,
         country,
       });
 
-      // Only update if this is still the latest request
-      if (requestId === latestRequestRef.current) {
+      // Only update if still mounted and this is the latest request
+      if (mountedRef.current && requestId === latestRequestRef.current) {
         setSuggestions(results);
         setLoading(false);
       }
     } catch (err) {
-      // Only update if this is still the latest request
-      if (requestId === latestRequestRef.current) {
-        const message =
-          err instanceof Error ? err.message : 'Failed to search addresses';
+      // Only update if still mounted and this is the latest request
+      if (mountedRef.current && requestId === latestRequestRef.current) {
+        const message = err instanceof Error
+          ? err.message
+          : 'Failed to search addresses';
         setError(message);
         setSuggestions([]);
         setLoading(false);
       }
     }
-  };
+  }, [limit, proximity, country]);
 
   /**
-   * Debounced search function
+   * Debounced search function - created once and stable
    */
-  const debouncedSearch = useCallback(
-    debounce((query: string, requestId: number) => {
-      performSearch(query, requestId);
-    }, debounceMs),
-    [debounceMs, limit, proximity, country]
-  );
+  const debouncedSearchRef = useRef<ReturnType<typeof debounce> | null>(null);
+
+  // Initialize debounced function
+  useEffect(() => {
+    debouncedSearchRef.current = debounce(
+      (query: string, requestId: number, searchFn: typeof performSearch) => {
+        searchFn(query, requestId);
+      },
+      debounceMs
+    );
+
+    return () => {
+      debouncedSearchRef.current?.cancel();
+    };
+  }, [debounceMs]);
 
   /**
    * Main search function exposed to component
@@ -109,6 +126,7 @@ export function useAddressSearch(
         setSuggestions([]);
         setLoading(false);
         setError(null);
+        debouncedSearchRef.current?.cancel();
         return;
       }
 
@@ -120,15 +138,16 @@ export function useAddressSearch(
       setError(null);
 
       // Perform debounced search
-      debouncedSearch(trimmedQuery, requestId);
+      debouncedSearchRef.current?.(trimmedQuery, requestId, performSearch);
     },
-    [debouncedSearch, minQueryLength]
+    [minQueryLength, performSearch]
   );
 
   /**
    * Clear all suggestions
    */
   const clearSuggestions = useCallback(() => {
+    debouncedSearchRef.current?.cancel();
     setSuggestions([]);
     setError(null);
     setLoading(false);

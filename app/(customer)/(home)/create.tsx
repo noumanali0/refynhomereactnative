@@ -1,4 +1,4 @@
-import React, { useCallback, memo, useState } from "react";
+import React, { useCallback, memo, useState, useEffect, useMemo, useRef, Component, ErrorInfo, ReactNode } from "react";
 import {
     View,
     TextInput,
@@ -7,11 +7,15 @@ import {
     Image,
     Pressable,
     StyleSheet,
+    Alert,
+    ActivityIndicator,
+    KeyboardAvoidingView,
+    Platform,
 } from "react-native";
 import Text from "@/components/common/Text";
 import * as ImagePicker from "expo-image-picker";
 import { Ionicons } from "@expo/vector-icons";
-import { Formik } from "formik";
+import { Formik, FormikHelpers, FormikProps } from "formik";
 import * as Yup from "yup";
 import { LinearGradient } from "expo-linear-gradient";
 import { moderateScale, scale, verticalScale } from "react-native-size-matters";
@@ -21,33 +25,202 @@ import { COLORS } from "@/constants/colors";
 import { AddressSearchBottomSheet } from "@/components/customer/AddressSearchBottomSheet";
 import type { Address } from "@/types/mapbox";
 import { useCurrentLocation } from "@/hooks/useCurrentLocation";
+import {
+    createServiceRequest,
+    getServiceCategories,
+    ServiceCategory,
+} from "@/services/serviceRequestApi";
 
 // ============================================================================
-// Reusable Components
+// Error Boundary Component
 // ============================================================================
 
-const SectionTitle = memo(({ title }: { title: string }) => (
-    <Text type="bodySemiBold" style={styles.sectionTitle}>{title}</Text>
-));
+interface ErrorBoundaryProps {
+    children: ReactNode;
+    fallback?: ReactNode;
+}
 
-const InfoList = memo(({ items }: { items: string[] }) => (
-    <View style={styles.infoContainer}>
-        <View style={styles.infoHeader}>
-            <Ionicons name="information-circle" size={20} color={COLORS.primary} />
-            <Text type="bodySemiBold" style={styles.infoHeaderText}>How it works:</Text>
-        </View>
-        {items.map((text, i) => (
-            <View key={i} style={styles.infoItem}>
-                <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
-                <Text type="body2" style={styles.infoText}>{text}</Text>
+interface ErrorBoundaryState {
+    hasError: boolean;
+    error: Error | null;
+}
+
+class FormErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+    constructor(props: ErrorBoundaryProps) {
+        super(props);
+        this.state = { hasError: false, error: null };
+    }
+
+    static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+        return { hasError: true, error };
+    }
+
+    componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+        console.error('Form Error Boundary caught an error:', error);
+        console.error('Component stack:', errorInfo.componentStack);
+    }
+
+    render(): ReactNode {
+        if (this.state.hasError) {
+            return (
+                <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: COLORS.gray50 }}>
+                    <Ionicons name="alert-circle" size={48} color={COLORS.error} />
+                    <Text type="title" style={{ marginTop: 16, color: COLORS.gray900, textAlign: 'center' }}>
+                        Something went wrong
+                    </Text>
+                    <Text type="body" style={{ marginTop: 8, color: COLORS.gray600, textAlign: 'center' }}>
+                        {this.state.error?.message || 'An unexpected error occurred'}
+                    </Text>
+                    <TouchableOpacity
+                        onPress={() => {
+                            this.setState({ hasError: false, error: null });
+                            router.back();
+                        }}
+                        style={{
+                            marginTop: 24,
+                            backgroundColor: COLORS.primary,
+                            paddingHorizontal: 24,
+                            paddingVertical: 12,
+                            borderRadius: 8,
+                        }}
+                    >
+                        <Text type="bodySemiBold" style={{ color: COLORS.white }}>Go Back</Text>
+                    </TouchableOpacity>
+                </View>
+            );
+        }
+
+        return this.props.children;
+    }
+}
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+const FORM_CONSTANTS = {
+    INPUT_BORDER_RADIUS: moderateScale(12),
+    INPUT_PADDING_HORIZONTAL: scale(16),
+    INPUT_PADDING_VERTICAL: verticalScale(12),
+    SECTION_MARGIN_TOP: verticalScale(16),
+} as const;
+
+// Static info items - defined outside component to prevent re-creation
+const INFO_ITEMS = [
+    "We'll notify qualified technicians near you",
+    "First technician to accept gets priority",
+    "You'll have 5 minutes to confirm",
+    "Contact details shared after confirmation",
+];
+
+// Fallback categories
+const FALLBACK_CATEGORIES: ServiceCategory[] = [
+    { id: 1, name: "AC Repair", slug: "ac_repair", is_active: true },
+    { id: 2, name: "Plumbing", slug: "plumbing", is_active: true },
+    { id: 3, name: "Electrical", slug: "electrical", is_active: true },
+    { id: 4, name: "Washing Machine", slug: "washing_machine", is_active: true },
+    { id: 5, name: "Refrigerator", slug: "refrigerator", is_active: true },
+];
+
+// ============================================================================
+// Types
+// ============================================================================
+
+interface FormValues {
+    selectedService: string;
+    problemTitle: string;
+    needService: string;
+    selectedDate: Date | null;
+    serviceAddress: string;
+    latitude: string;
+    longitude: string;
+    description: string;
+    isAgreed: boolean;
+    photo: string | null; // Photo moved into Formik state
+}
+
+// Props for the extracted FormContent component
+interface FormContentProps {
+    formikProps: FormikProps<FormValues>;
+    categoryItems: { label: string; value: string }[];
+    loadingCategories: boolean;
+    showAddressSearch: boolean;
+    imageLoading: boolean;
+    coordinates: { latitude: number; longitude: number } | null;
+    onOpenAddressSearch: () => void;
+    onCloseAddressSearch: () => void;
+    onAddressSelect: (address: Address, setFieldValue: FormikProps<FormValues>['setFieldValue']) => void;
+    onPickImage: (setFieldValue: FormikProps<FormValues>['setFieldValue']) => Promise<void>;
+    onRemovePhoto: (setFieldValue: FormikProps<FormValues>['setFieldValue']) => void;
+    onGoBack: () => void;
+    problemTitleRef: React.RefObject<TextInput | null>;
+    descriptionRef: React.RefObject<TextInput | null>;
+}
+
+// ============================================================================
+// Validation Schema (defined outside component - already optimized)
+// ============================================================================
+
+const requestServiceSchema = Yup.object().shape({
+    selectedService: Yup.string().required("Service category is required"),
+    problemTitle: Yup.string()
+        .trim()
+        .min(5, "Problem title must be at least 5 characters")
+        .required("Problem title is required"),
+    needService: Yup.string().required("Please select when you need the service"),
+    serviceAddress: Yup.string().trim().required("Service address is required"),
+    latitude: Yup.string().required("Please select a valid address"),
+    longitude: Yup.string().required("Please select a valid address"),
+    description: Yup.string()
+        .trim()
+        .min(10, "Description must be at least 10 characters")
+        .required("Problem description is required"),
+    isAgreed: Yup.boolean()
+        .oneOf([true], "You must agree to the disclaimer before submitting"),
+});
+
+// ============================================================================
+// Memoized Sub-Components
+// ============================================================================
+
+interface SectionTitleProps {
+    title: string;
+}
+
+const SectionTitle = memo(function SectionTitle({ title }: SectionTitleProps) {
+    return <Text type="bodySemiBold" style={styles.sectionTitle}>{title}</Text>;
+});
+
+interface InfoListProps {
+    items: string[];
+}
+
+const InfoList = memo(function InfoList({ items }: InfoListProps) {
+    return (
+        <View style={styles.infoContainer}>
+            <View style={styles.infoHeader}>
+                <Ionicons name="information-circle" size={20} color={COLORS.primary} />
+                <Text type="bodySemiBold" style={styles.infoHeaderText}>How it works:</Text>
             </View>
-        ))}
-    </View>
-));
+            {items.map((text, i) => (
+                <View key={i} style={styles.infoItem}>
+                    <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+                    <Text type="body2" style={styles.infoText}>{text}</Text>
+                </View>
+            ))}
+        </View>
+    );
+});
 
-const Disclaimer = memo(
-    ({ agreed, onToggle }: { agreed: boolean; onToggle: () => void }) => (
-        <View style={styles.disclaimerContainer}>
+interface DisclaimerProps {
+    agreed: boolean;
+    onToggle: () => void;
+    hasError?: boolean;
+}
+
+const Disclaimer = memo(function Disclaimer({ agreed, onToggle, hasError }: DisclaimerProps) {
+    return (
+        <View style={[styles.disclaimerContainer, hasError && styles.disclaimerError]}>
             <Pressable onPress={onToggle} style={styles.checkbox}>
                 <View style={[
                     styles.checkboxInner,
@@ -62,256 +235,694 @@ const Disclaimer = memo(
                 for any damages or disputes.
             </Text>
         </View>
-    )
-);
-
-
-const requestServiceSchema = Yup.object().shape({
-    selectedService: Yup.string().required("Service category is required"),
-    needService: Yup.string().required("Please select when you need the service"),
-    serviceAddress: Yup.string().trim().required("Service address is required"),
-    description: Yup.string()
-        .trim()
-        .min(10, "Description must be at least 10 characters")
-        .required("Problem description is required"),
-    isAgreed: Yup.boolean()
-        .oneOf([true], "You must agree to the disclaimer before submitting"),
+    );
 });
 
+// Initial form values - photo now included
+const INITIAL_VALUES: FormValues = {
+    selectedService: "",
+    problemTitle: "",
+    needService: "asap",
+    selectedDate: null,
+    serviceAddress: "",
+    latitude: "",
+    longitude: "",
+    description: "",
+    isAgreed: false,
+    photo: null,
+};
+
+// ============================================================================
+// Custom Hooks
+// ============================================================================
+
+/**
+ * Hook to fetch and manage service categories with AbortController
+ */
+function useServiceCategories() {
+    const [categories, setCategories] = useState<ServiceCategory[]>([]);
+    const [loadingCategories, setLoadingCategories] = useState(true);
+    const abortControllerRef = useRef<AbortController | null>(null);
+
+    useEffect(() => {
+        // Create new AbortController for this fetch
+        abortControllerRef.current = new AbortController();
+        const signal = abortControllerRef.current.signal;
+
+        const fetchCategories = async () => {
+            try {
+                const data = await getServiceCategories();
+                // Check if aborted before updating state
+                if (!signal.aborted) {
+                    setCategories(data);
+                }
+            } catch (error: unknown) {
+                // Handle abort gracefully
+                if (error instanceof Error && error.name === 'AbortError') {
+                    return;
+                }
+                console.error('Failed to fetch categories:', error);
+                if (!signal.aborted) {
+                    setCategories(FALLBACK_CATEGORIES);
+                }
+            } finally {
+                if (!signal.aborted) {
+                    setLoadingCategories(false);
+                }
+            }
+        };
+
+        fetchCategories();
+
+        // Cleanup: abort on unmount
+        return () => {
+            abortControllerRef.current?.abort();
+        };
+    }, []);
+
+    // Memoized category items for dropdown
+    const categoryItems = useMemo(() =>
+        categories.map(c => ({
+            label: c.name,
+            value: c.id.toString(),
+        })),
+        [categories]
+    );
+
+    return { categories, categoryItems, loadingCategories };
+}
+
+/**
+ * Hook to manage image picking with loading state
+ */
+function useImagePicker() {
+    const [imageLoading, setImageLoading] = useState(false);
+
+    const pickImage = useCallback(async (
+        setFieldValue: FormikProps<FormValues>['setFieldValue']
+    ) => {
+        setImageLoading(true);
+        try {
+            const result = await ImagePicker.launchImageLibraryAsync({
+                mediaTypes: ImagePicker.MediaTypeOptions.Images,
+                allowsEditing: true,
+                aspect: [4, 3],
+                quality: 0.7,
+            });
+            if (!result.canceled) {
+                setFieldValue("photo", result.assets[0].uri);
+            }
+        } catch (error) {
+            console.error('Image picker error:', error);
+            Alert.alert('Error', 'Failed to pick image. Please try again.');
+        } finally {
+            setImageLoading(false);
+        }
+    }, []);
+
+    const removePhoto = useCallback((
+        setFieldValue: FormikProps<FormValues>['setFieldValue']
+    ) => {
+        setFieldValue("photo", null);
+    }, []);
+
+    return { imageLoading, pickImage, removePhoto };
+}
+
+// ============================================================================
+// Form Content Component (Memoized with custom comparison)
+// ============================================================================
+
+const FormContent = memo(function FormContent({
+    formikProps,
+    categoryItems,
+    loadingCategories,
+    showAddressSearch,
+    imageLoading,
+    coordinates,
+    onOpenAddressSearch,
+    onCloseAddressSearch,
+    onAddressSelect,
+    onPickImage,
+    onRemovePhoto,
+    onGoBack,
+    problemTitleRef,
+    descriptionRef,
+}: FormContentProps) {
+    const {
+        handleSubmit,
+        setFieldValue,
+        setFieldTouched,
+        values,
+        errors,
+        touched,
+        isSubmitting,
+    } = formikProps;
+
+    // Store refs to avoid stale closures - these NEVER change identity
+    const setFieldValueRef = useRef(setFieldValue);
+    const setFieldTouchedRef = useRef(setFieldTouched);
+    setFieldValueRef.current = setFieldValue;
+    setFieldTouchedRef.current = setFieldTouched;
+
+    // LOCAL STATE for text inputs - completely decoupled from Formik re-renders
+    const [localProblemTitle, setLocalProblemTitle] = useState(values.problemTitle);
+    const [localDescription, setLocalDescription] = useState(values.description);
+
+    // Debounce refs for cleanup
+    const problemTitleDebounceRef = useRef<NodeJS.Timeout | null>(null);
+    const descriptionDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Cleanup debounce timers on unmount
+    useEffect(() => {
+        return () => {
+            if (problemTitleDebounceRef.current) {
+                clearTimeout(problemTitleDebounceRef.current);
+            }
+            if (descriptionDebounceRef.current) {
+                clearTimeout(descriptionDebounceRef.current);
+            }
+        };
+    }, []);
+
+    // DEBOUNCED change handler for problem title - updates Formik after 300ms of no typing
+    const handleProblemTitleChange = useCallback((text: string) => {
+        // Update local state immediately for responsive UI
+        setLocalProblemTitle(text);
+
+        // Clear previous debounce timer
+        if (problemTitleDebounceRef.current) {
+            clearTimeout(problemTitleDebounceRef.current);
+        }
+
+        // Debounce Formik update to prevent re-render storms
+        problemTitleDebounceRef.current = setTimeout(() => {
+            setFieldValueRef.current("problemTitle", text, false);
+        }, 300);
+    }, []);
+
+    // DEBOUNCED change handler for description
+    const handleDescriptionChange = useCallback((text: string) => {
+        // Update local state immediately for responsive UI
+        setLocalDescription(text);
+
+        // Clear previous debounce timer
+        if (descriptionDebounceRef.current) {
+            clearTimeout(descriptionDebounceRef.current);
+        }
+
+        // Debounce Formik update to prevent re-render storms
+        descriptionDebounceRef.current = setTimeout(() => {
+            setFieldValueRef.current("description", text, false);
+        }, 300);
+    }, []);
+
+    // On blur, immediately sync to Formik and validate
+    const handleProblemTitleBlur = useCallback(() => {
+        // Clear any pending debounce
+        if (problemTitleDebounceRef.current) {
+            clearTimeout(problemTitleDebounceRef.current);
+            problemTitleDebounceRef.current = null;
+        }
+        // Immediately sync final value to Formik
+        setFieldValueRef.current("problemTitle", localProblemTitle, true);
+        setFieldTouchedRef.current("problemTitle", true);
+    }, [localProblemTitle]);
+
+    const handleDescriptionBlur = useCallback(() => {
+        // Clear any pending debounce
+        if (descriptionDebounceRef.current) {
+            clearTimeout(descriptionDebounceRef.current);
+            descriptionDebounceRef.current = null;
+        }
+        // Immediately sync final value to Formik
+        setFieldValueRef.current("description", localDescription, true);
+        setFieldTouchedRef.current("description", true);
+    }, [localDescription]);
+
+    // Stable handler for dropdown
+    const handleServiceChange = useCallback((val: string) => {
+        setFieldValueRef.current("selectedService", val);
+    }, []);
+
+    // Stable handler for disclaimer toggle - use ref to get latest value
+    const isAgreedRef = useRef(values.isAgreed);
+    isAgreedRef.current = values.isAgreed;
+
+    const handleDisclaimerToggle = useCallback(() => {
+        setFieldValueRef.current("isAgreed", !isAgreedRef.current);
+    }, []);
+
+    // Stable handlers for image picker
+    const handlePickImage = useCallback(() => {
+        onPickImage(setFieldValueRef.current);
+    }, [onPickImage]);
+
+    const handleRemovePhoto = useCallback(() => {
+        onRemovePhoto(setFieldValueRef.current);
+    }, [onRemovePhoto]);
+
+    // Stable handler for address selection
+    const handleAddressSelectInternal = useCallback((address: Address) => {
+        onAddressSelect(address, setFieldValueRef.current);
+    }, [onAddressSelect]);
+
+    return (
+        <View style={styles.container}>
+            {/* Header */}
+            <LinearGradient
+                colors={[COLORS.primary, COLORS.accent]}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.header}
+            >
+                <TouchableOpacity
+                    onPress={onGoBack}
+                    style={styles.backButton}
+                >
+                    <Ionicons name="arrow-back" size={24} color={COLORS.white} />
+                </TouchableOpacity>
+                <Text type="title" style={styles.headerTitle}>Request Service</Text>
+                <Text type="subtitle" style={styles.headerSubtitle}>
+                    We'll connect you with qualified technicians nearby
+                </Text>
+            </LinearGradient>
+
+            <ScrollView
+                style={styles.scrollView}
+                contentContainerStyle={styles.scrollContent}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+            >
+                {/* Service Category */}
+                <Dropdown
+                    label="Service Category *"
+                    items={categoryItems}
+                    value={values.selectedService}
+                    onValueChange={handleServiceChange}
+                    error={touched.selectedService ? errors.selectedService : undefined}
+                    disable={loadingCategories}
+                    placeholder={loadingCategories ? "Loading categories..." : "Select a category"}
+                />
+
+                {/* Problem Title - Uses local state + debounced Formik sync for performance */}
+                <SectionTitle title="Problem Title *" />
+                <TextInput
+                    ref={problemTitleRef}
+                    value={localProblemTitle}
+                    onChangeText={handleProblemTitleChange}
+                    onBlur={handleProblemTitleBlur}
+                    placeholder="Brief title (e.g., AC not cooling, Tap leaking)"
+                    placeholderTextColor={COLORS.gray400}
+                    style={[
+                        styles.input,
+                        touched.problemTitle && errors.problemTitle && styles.inputError
+                    ]}
+                    maxLength={100}
+                    returnKeyType="next"
+                    autoCorrect={false}
+                    autoCapitalize="sentences"
+                    spellCheck={false}
+                    onSubmitEditing={() => descriptionRef.current?.focus()}
+                />
+                {touched.problemTitle && errors.problemTitle && (
+                    <Text type="body" style={styles.errorText}>{errors.problemTitle}</Text>
+                )}
+
+                {/* Service Address */}
+                <SectionTitle title="Service Address *" />
+                <TouchableOpacity
+                    onPress={onOpenAddressSearch}
+                    style={[
+                        styles.addressButton,
+                        touched.serviceAddress && errors.serviceAddress && styles.inputError
+                    ]}
+                    activeOpacity={0.7}
+                >
+                    <View style={styles.addressContent}>
+                        <Ionicons name="location" size={22} color={COLORS.primary} />
+                        <Text
+                            type="body2"
+                            style={[
+                                styles.addressText,
+                                !values.serviceAddress && styles.addressPlaceholder,
+                            ]}
+                            numberOfLines={2}
+                        >
+                            {values.serviceAddress || "Tap to search address"}
+                        </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color={COLORS.gray400} />
+                </TouchableOpacity>
+                {touched.serviceAddress && errors.serviceAddress && (
+                    <Text type="body" style={styles.errorText}>{errors.serviceAddress}</Text>
+                )}
+
+                {/* Address Search Bottom Sheet - Conditionally Rendered */}
+                {showAddressSearch && (
+                    <AddressSearchBottomSheet
+                        isVisible={showAddressSearch}
+                        onClose={onCloseAddressSearch}
+                        onSelectAddress={handleAddressSelectInternal}
+                        proximity={coordinates ? {
+                            latitude: coordinates.latitude,
+                            longitude: coordinates.longitude,
+                        } : undefined}
+                        initialValue={values.serviceAddress}
+                    />
+                )}
+
+                {/* Description - Uses local state + debounced Formik sync for performance */}
+                <SectionTitle title="Problem Description *" />
+                <TextInput
+                    ref={descriptionRef}
+                    value={localDescription}
+                    onChangeText={handleDescriptionChange}
+                    onBlur={handleDescriptionBlur}
+                    placeholder="Describe the issue in detail (e.g., AC not cooling, water leaking)"
+                    placeholderTextColor={COLORS.gray400}
+                    multiline
+                    numberOfLines={5}
+                    textAlignVertical="top"
+                    style={[
+                        styles.input,
+                        styles.textArea,
+                        touched.description && errors.description && styles.inputError
+                    ]}
+                    autoCorrect={false}
+                    autoCapitalize="sentences"
+                    spellCheck={false}
+                />
+                {touched.description && errors.description && (
+                    <Text type="body" style={styles.errorText}>{errors.description}</Text>
+                )}
+
+                {/* Photo Upload */}
+                <SectionTitle title="Photos (Optional)" />
+                <TouchableOpacity
+                    onPress={handlePickImage}
+                    style={styles.uploadButton}
+                    activeOpacity={0.7}
+                    disabled={imageLoading}
+                >
+                    <View style={styles.uploadContent}>
+                        {imageLoading ? (
+                            <ActivityIndicator size="small" color={COLORS.primary} />
+                        ) : (
+                            <Ionicons name="camera-outline" size={24} color={COLORS.primary} />
+                        )}
+                        <Text type="body2" style={styles.uploadText}>
+                            {imageLoading
+                                ? "Processing..."
+                                : values.photo
+                                    ? "1 photo selected"
+                                    : "Add photos of the problem"}
+                        </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color={COLORS.gray400} />
+                </TouchableOpacity>
+                {values.photo && (
+                    <View style={styles.photoPreview}>
+                        <Image
+                            source={{ uri: values.photo }}
+                            style={styles.photoImage}
+                            resizeMode="cover"
+                        />
+                        <TouchableOpacity
+                            onPress={handleRemovePhoto}
+                            style={styles.removePhotoButton}
+                        >
+                            <Ionicons name="close-circle" size={24} color={COLORS.error} />
+                        </TouchableOpacity>
+                    </View>
+                )}
+
+                {/* Info Section */}
+                <InfoList items={INFO_ITEMS} />
+
+                {/* Disclaimer */}
+                <Disclaimer
+                    agreed={values.isAgreed}
+                    onToggle={handleDisclaimerToggle}
+                    hasError={touched.isAgreed && !!errors.isAgreed}
+                />
+                {touched.isAgreed && errors.isAgreed && (
+                    <Text type="body" style={styles.errorText}>{errors.isAgreed}</Text>
+                )}
+
+                {/* Buttons */}
+                <View style={styles.buttonContainer}>
+                    <TouchableOpacity
+                        style={styles.cancelButton}
+                        onPress={onGoBack}
+                        activeOpacity={0.7}
+                    >
+                        <Text type="bodySemiBold" style={styles.cancelButtonText}>Cancel</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        disabled={!values.isAgreed || isSubmitting}
+                        onPress={() => handleSubmit()}
+                        activeOpacity={0.8}
+                        style={styles.submitButtonWrapper}
+                    >
+                        <LinearGradient
+                            colors={
+                                values.isAgreed && !isSubmitting
+                                    ? [COLORS.primary, COLORS.accent]
+                                    : [COLORS.gray300, COLORS.gray400]
+                            }
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={styles.submitButton}
+                        >
+                            {isSubmitting ? (
+                                <>
+                                    <ActivityIndicator size="small" color={COLORS.white} />
+                                    <Text type="button" style={styles.submitButtonText}>
+                                        Creating...
+                                    </Text>
+                                </>
+                            ) : (
+                                <>
+                                    <Text type="button" style={styles.submitButtonText}>
+                                        Submit Request
+                                    </Text>
+                                    <Ionicons name="arrow-forward" size={18} color={COLORS.white} />
+                                </>
+                            )}
+                        </LinearGradient>
+                    </TouchableOpacity>
+                </View>
+            </ScrollView>
+        </View>
+    );
+}, (prevProps, nextProps) => {
+    // Custom comparison - only re-render when these specific values change
+    // This prevents re-renders from formikProps.values changes during typing
+    return (
+        prevProps.categoryItems === nextProps.categoryItems &&
+        prevProps.loadingCategories === nextProps.loadingCategories &&
+        prevProps.showAddressSearch === nextProps.showAddressSearch &&
+        prevProps.imageLoading === nextProps.imageLoading &&
+        prevProps.coordinates === nextProps.coordinates &&
+        // Only compare specific formik values that affect the UI
+        prevProps.formikProps.values.selectedService === nextProps.formikProps.values.selectedService &&
+        prevProps.formikProps.values.serviceAddress === nextProps.formikProps.values.serviceAddress &&
+        prevProps.formikProps.values.photo === nextProps.formikProps.values.photo &&
+        prevProps.formikProps.values.isAgreed === nextProps.formikProps.values.isAgreed &&
+        prevProps.formikProps.isSubmitting === nextProps.formikProps.isSubmitting &&
+        // Compare touched/errors for validation display
+        prevProps.formikProps.touched.problemTitle === nextProps.formikProps.touched.problemTitle &&
+        prevProps.formikProps.touched.description === nextProps.formikProps.touched.description &&
+        prevProps.formikProps.touched.serviceAddress === nextProps.formikProps.touched.serviceAddress &&
+        prevProps.formikProps.touched.selectedService === nextProps.formikProps.touched.selectedService &&
+        prevProps.formikProps.touched.isAgreed === nextProps.formikProps.touched.isAgreed &&
+        prevProps.formikProps.errors.problemTitle === nextProps.formikProps.errors.problemTitle &&
+        prevProps.formikProps.errors.description === nextProps.formikProps.errors.description &&
+        prevProps.formikProps.errors.serviceAddress === nextProps.formikProps.errors.serviceAddress &&
+        prevProps.formikProps.errors.selectedService === nextProps.formikProps.errors.selectedService &&
+        prevProps.formikProps.errors.isAgreed === nextProps.formikProps.errors.isAgreed
+    );
+});
+
+// ============================================================================
+// Main Component
+// ============================================================================
+
 const RequestServiceScreen = () => {
-    const [showDatePicker, setShowDatePicker] = useState(false);
-    const [photo, setPhoto] = useState<string | null>(null);
     const [showAddressSearch, setShowAddressSearch] = useState(false);
-    const [selectedAddress, setSelectedAddress] = useState<Address | null>(null);
+
+    // Custom hooks for data fetching and image picking
+    const { categories, categoryItems, loadingCategories } = useServiceCategories();
+    const { imageLoading, pickImage, removePhoto } = useImagePicker();
+
+    // AbortController for submission
+    const submitAbortControllerRef = useRef<AbortController | null>(null);
+
+    // Input refs for focus management
+    const problemTitleRef = useRef<TextInput>(null);
+    const descriptionRef = useRef<TextInput>(null);
 
     // Get current location for proximity bias in search
     const { coordinates } = useCurrentLocation({ autoFetch: true });
 
-    const pickImage = useCallback(async () => {
-        const result = await ImagePicker.launchImageLibraryAsync({
-            mediaTypes: ImagePicker.MediaTypeOptions.Images,
-            allowsEditing: true,
-            aspect: [4, 3],
-            quality: 0.7,
-        });
-        if (!result.canceled) setPhoto(result.assets[0].uri);
+    // Cleanup submission on unmount
+    useEffect(() => {
+        return () => {
+            submitAbortControllerRef.current?.abort();
+        };
     }, []);
 
-    const handleAddressSelect = useCallback((address: Address, setFieldValue: any) => {
-        setSelectedAddress(address);
+    const openAddressSearch = useCallback(() => {
+        setShowAddressSearch(true);
+    }, []);
+
+    const closeAddressSearch = useCallback(() => {
+        setShowAddressSearch(false);
+    }, []);
+
+    // Handle address selection - receives setFieldValue as parameter (no ref anti-pattern)
+    const handleAddressSelect = useCallback((
+        address: Address,
+        setFieldValue: FormikProps<FormValues>['setFieldValue']
+    ) => {
         setFieldValue("serviceAddress", address.formatted);
         setFieldValue("latitude", address.coordinates.latitude.toString());
         setFieldValue("longitude", address.coordinates.longitude.toString());
         setShowAddressSearch(false);
     }, []);
 
+    // Extract category finding logic
+    const findCategory = useCallback((
+        selectedService: string,
+        categoriesList: ServiceCategory[]
+    ): ServiceCategory | undefined => {
+        return categoriesList.find(
+            c => c.id.toString() === selectedService || c.slug === selectedService
+        );
+    }, []);
+
+    // Extract navigation logic
+    const navigateToLiveOffers = useCallback((
+        requestId: number,
+        latitude: string,
+        longitude: string,
+        address: string
+    ) => {
+        router.replace({
+            pathname: "/(customer)/(home)/live-offers",
+            params: {
+                requestId: requestId.toString(),
+                latitude,
+                longitude,
+                address,
+            },
+        } as any);
+    }, []);
+
+    // Handle form submission - uses Formik's isSubmitting, no duplicate state
+    const handleSubmitRequest = useCallback(async (
+        values: FormValues,
+        formikHelpers: FormikHelpers<FormValues>
+    ) => {
+        // Create abort controller for this submission
+        submitAbortControllerRef.current = new AbortController();
+        const signal = submitAbortControllerRef.current.signal;
+
+        try {
+            const selectedCategory = findCategory(values.selectedService, categories);
+
+            if (!selectedCategory) {
+                Alert.alert('Error', 'Please select a valid service category');
+                formikHelpers.setSubmitting(false);
+                return;
+            }
+
+            const response = await createServiceRequest({
+                category: selectedCategory.id,
+                problem_title: values.problemTitle,
+                description: values.description,
+                address_line: values.serviceAddress,
+                latitude: parseFloat(values.latitude),
+                longitude: parseFloat(values.longitude),
+                location_source: 'map',
+                radius_km: 10,
+            });
+
+            // Check if aborted before navigating
+            if (signal.aborted) {
+                return;
+            }
+
+            console.log('Service request created:', response);
+
+            navigateToLiveOffers(
+                response.request.id,
+                values.latitude,
+                values.longitude,
+                values.serviceAddress
+            );
+
+        } catch (error: unknown) {
+            // Handle abort gracefully
+            if (error instanceof Error && error.name === 'AbortError') {
+                console.log('Submission was cancelled');
+                return;
+            }
+
+            console.error('Failed to create service request:', error);
+            const errorMessage = error instanceof Error
+                ? error.message
+                : 'Failed to create service request. Please try again.';
+            Alert.alert('Error', errorMessage);
+        } finally {
+            // Formik handles setSubmitting(false) automatically when promise resolves
+        }
+    }, [categories, findCategory, navigateToLiveOffers]);
+
+    const goBack = useCallback(() => {
+        // Cancel any ongoing submission
+        submitAbortControllerRef.current?.abort();
+        router.back();
+    }, []);
+
     return (
-        <Formik
-            initialValues={{
-                selectedService: "",
-                needService: "asap",
-                selectedDate: null,
-                serviceAddress: "",
-                latitude: "",
-                longitude: "",
-                description: "",
-                isAgreed: false,
-            }}
-            validationSchema={requestServiceSchema}
-            onSubmit={(values) => {
-                console.log("Form submitted:", values);
-            }}
-        >
-            {({
-                handleChange,
-                handleSubmit,
-                setFieldValue,
-                values,
-                errors,
-                touched,
-            }) => (
-                <View style={styles.container}>
-                    {/* Header */}
-                    <LinearGradient
-                        colors={[COLORS.primary, COLORS.accent]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={styles.header}
-                    >
-                        <TouchableOpacity
-                            onPress={() => router.back()}
-                            style={styles.backButton}
-                        >
-                            <Ionicons name="arrow-back" size={24} color={COLORS.white} />
-                        </TouchableOpacity>
-                        <Text type="title" style={styles.headerTitle}>Request Service</Text>
-                        <Text type="subtitle" style={styles.headerSubtitle}>
-                            We'll connect you with qualified technicians nearby
-                        </Text>
-                    </LinearGradient>
-
-                    <ScrollView
-                        style={styles.scrollView}
-                        contentContainerStyle={styles.scrollContent}
-                        showsVerticalScrollIndicator={false}
-                    >
-
-                        {/* Service Category */}
-                        <Dropdown
-                            label="Service Category *"
-                            items={[
-                                { label: "AC Repair", value: "ac_repair" },
-                                { label: "Plumbing", value: "plumbing" },
-                                { label: "Electrical", value: "electrical" },
-                                { label: "Washing Machine", value: "washing_machine" },
-                                { label: "Refrigerator", value: "refrigerator" },
-                            ]}
-                            value={values.selectedService}
-                            onValueChange={(val) => setFieldValue("selectedService", val)}
-                            error={touched.selectedService && errors.selectedService}
+        <FormErrorBoundary>
+            <KeyboardAvoidingView
+                style={styles.container}
+                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            >
+                <Formik<FormValues>
+                    initialValues={INITIAL_VALUES}
+                    validationSchema={requestServiceSchema}
+                    onSubmit={handleSubmitRequest}
+                    enableReinitialize={false}
+                    validateOnMount={false}
+                    validateOnChange={false}
+                    validateOnBlur={true}
+                >
+                    {(formikProps) => (
+                        <FormContent
+                            formikProps={formikProps}
+                            categoryItems={categoryItems}
+                            loadingCategories={loadingCategories}
+                            showAddressSearch={showAddressSearch}
+                            imageLoading={imageLoading}
+                            coordinates={coordinates}
+                            onOpenAddressSearch={openAddressSearch}
+                            onCloseAddressSearch={closeAddressSearch}
+                            onAddressSelect={handleAddressSelect}
+                            onPickImage={pickImage}
+                            onRemovePhoto={removePhoto}
+                            onGoBack={goBack}
+                            problemTitleRef={problemTitleRef}
+                            descriptionRef={descriptionRef}
                         />
-
-                        {/* Service Address */}
-                        <SectionTitle title="Service Address *" />
-                        <TouchableOpacity
-                            onPress={() => setShowAddressSearch(true)}
-                            style={styles.addressButton}
-                            activeOpacity={0.7}
-                        >
-                            <View style={styles.addressContent}>
-                                <Ionicons name="location" size={22} color={COLORS.primary} />
-                                <Text
-                                    type="body2"
-                                    style={[
-                                        styles.addressText,
-                                        !values.serviceAddress && styles.addressPlaceholder,
-                                    ]}
-                                    numberOfLines={2}
-                                >
-                                    {values.serviceAddress || "Tap to search address"}
-                                </Text>
-                            </View>
-                            <Ionicons name="chevron-forward" size={20} color={COLORS.gray400} />
-                        </TouchableOpacity>
-                        {touched.serviceAddress && errors.serviceAddress && (
-                            <Text type="body" style={styles.errorText}>{errors.serviceAddress}</Text>
-                        )}
-
-                        {/* Address Search Bottom Sheet */}
-                        <AddressSearchBottomSheet
-                            isVisible={showAddressSearch}
-                            onClose={() => setShowAddressSearch(false)}
-                            onSelectAddress={(address) => handleAddressSelect(address, setFieldValue)}
-                            proximity={coordinates ? {
-                                latitude: coordinates.latitude,
-                                longitude: coordinates.longitude,
-                            } : undefined}
-                            initialValue={values.serviceAddress}
-                        />
-
-                        {/* Description */}
-                        <SectionTitle title="Problem Description *" />
-                        <TextInput
-                            value={values.description}
-                            onChangeText={handleChange("description")}
-                            placeholder="Describe the issue in detail (e.g., AC not cooling, water leaking)"
-                            placeholderTextColor={COLORS.gray400}
-                            multiline
-                            numberOfLines={5}
-                            textAlignVertical="top"
-                            style={[styles.input, styles.textArea]}
-                        />
-                        {touched.description && errors.description && (
-                            <Text type="body" style={styles.errorText}>{errors.description}</Text>
-                        )}
-
-                        {/* Photo Upload */}
-                        <SectionTitle title="Photos (Optional)" />
-                        <TouchableOpacity
-                            onPress={pickImage}
-                            style={styles.uploadButton}
-                            activeOpacity={0.7}
-                        >
-                            <View style={styles.uploadContent}>
-                                <Ionicons name="camera-outline" size={24} color={COLORS.primary} />
-                                <Text type="body2" style={styles.uploadText}>
-                                    {photo ? "1 photo selected" : "Add photos of the problem"}
-                                </Text>
-                            </View>
-                            <Ionicons name="chevron-forward" size={20} color={COLORS.gray400} />
-                        </TouchableOpacity>
-                        {photo && (
-                            <View style={styles.photoPreview}>
-                                <Image
-                                    source={{ uri: photo }}
-                                    style={styles.photoImage}
-                                    resizeMode="cover"
-                                />
-                                <TouchableOpacity
-                                    onPress={() => setPhoto(null)}
-                                    style={styles.removePhotoButton}
-                                >
-                                    <Ionicons name="close-circle" size={24} color={COLORS.error} />
-                                </TouchableOpacity>
-                            </View>
-                        )}
-
-                        {/* Info Section */}
-                        <InfoList
-                            items={[
-                                "We'll notify qualified technicians near you",
-                                "First technician to accept gets priority",
-                                "You'll have 5 minutes to confirm",
-                                "Contact details shared after confirmation",
-                            ]}
-                        />
-
-                        {/* Disclaimer */}
-                        <Disclaimer
-                            agreed={values.isAgreed}
-                            onToggle={() => setFieldValue("isAgreed", !values.isAgreed)}
-                        />
-                        {touched.isAgreed && errors.isAgreed && (
-                            <Text type="body" style={styles.errorText}>{errors.isAgreed}</Text>
-                        )}
-
-                        {/* Buttons */}
-                        <View style={styles.buttonContainer}>
-                            <TouchableOpacity
-                                style={styles.cancelButton}
-                                onPress={() => router.back()}
-                                activeOpacity={0.7}
-                            >
-                                <Text type="bodySemiBold" style={styles.cancelButtonText}>Cancel</Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                                disabled={!values.isAgreed}
-                                onPress={() => router.push("/(customer)/(home)/live-offers")}
-                                activeOpacity={0.8}
-                                style={styles.submitButtonWrapper}
-                            >
-                                <LinearGradient
-                                    colors={
-                                        values.isAgreed
-                                            ? [COLORS.primary, COLORS.accent]
-                                            : [COLORS.gray300, COLORS.gray400]
-                                    }
-                                    start={{ x: 0, y: 0 }}
-                                    end={{ x: 1, y: 0 }}
-                                    style={styles.submitButton}
-                                >
-                                    <Text type="button" style={styles.submitButtonText}>
-                                        Submit Request
-                                    </Text>
-                                    <Ionicons name="arrow-forward" size={18} color={COLORS.white} />
-                                </LinearGradient>
-                            </TouchableOpacity>
-                        </View>
-                    </ScrollView>
-                </View>
-            )}
-        </Formik>
+                    )}
+                </Formik>
+            </KeyboardAvoidingView>
+        </FormErrorBoundary>
     );
 };
 
@@ -330,8 +941,8 @@ const styles = StyleSheet.create({
         paddingTop: verticalScale(60),
         paddingBottom: verticalScale(24),
         paddingHorizontal: scale(16),
-        borderBottomLeftRadius: moderateScale(24),
-        borderBottomRightRadius: moderateScale(24),
+        borderBottomLeftRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS * 2,
+        borderBottomRightRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS * 2,
     },
     backButton: {
         width: moderateScale(40),
@@ -359,25 +970,28 @@ const styles = StyleSheet.create({
     },
     sectionTitle: {
         color: COLORS.gray900,
-        marginTop: verticalScale(16),
+        marginTop: FORM_CONSTANTS.SECTION_MARGIN_TOP,
         marginBottom: verticalScale(8),
     },
     input: {
         borderWidth: 1.5,
         borderColor: COLORS.gray300,
-        borderRadius: moderateScale(12),
-        paddingHorizontal: scale(16),
-        paddingVertical: verticalScale(12),
+        borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
+        paddingHorizontal: FORM_CONSTANTS.INPUT_PADDING_HORIZONTAL,
+        paddingVertical: FORM_CONSTANTS.INPUT_PADDING_VERTICAL,
         fontSize: moderateScale(14),
         color: COLORS.gray900,
         backgroundColor: COLORS.white,
-        fontFamily: 'Poppins-Regular',
         marginBottom: verticalScale(4),
+    },
+    inputError: {
+        borderColor: COLORS.error,
+        borderWidth: 2,
     },
     textArea: {
         minHeight: verticalScale(120),
         textAlignVertical: 'top',
-        paddingTop: verticalScale(12),
+        paddingTop: FORM_CONSTANTS.INPUT_PADDING_VERTICAL,
     },
     errorText: {
         color: COLORS.error,
@@ -390,7 +1004,7 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         borderWidth: 1.5,
         borderColor: COLORS.gray300,
-        borderRadius: moderateScale(12),
+        borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
         padding: scale(16),
         backgroundColor: COLORS.white,
         marginBottom: verticalScale(12),
@@ -406,13 +1020,13 @@ const styles = StyleSheet.create({
     photoPreview: {
         position: 'relative',
         marginBottom: verticalScale(16),
-        borderRadius: moderateScale(12),
+        borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
         overflow: 'hidden',
     },
     photoImage: {
         width: '100%',
         height: verticalScale(200),
-        borderRadius: moderateScale(12),
+        borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
     },
     removePhotoButton: {
         position: 'absolute',
@@ -424,9 +1038,9 @@ const styles = StyleSheet.create({
     },
     infoContainer: {
         backgroundColor: COLORS.primary + '08',
-        borderRadius: moderateScale(12),
+        borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
         padding: scale(16),
-        marginTop: verticalScale(16),
+        marginTop: FORM_CONSTANTS.SECTION_MARGIN_TOP,
         marginBottom: verticalScale(16),
         borderWidth: 1,
         borderColor: COLORS.primary + '20',
@@ -454,13 +1068,17 @@ const styles = StyleSheet.create({
     disclaimerContainer: {
         flexDirection: 'row',
         backgroundColor: COLORS.warning + '10',
-        borderRadius: moderateScale(12),
+        borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
         padding: scale(16),
         marginTop: verticalScale(8),
         marginBottom: verticalScale(20),
         borderWidth: 1,
         borderColor: COLORS.warning + '30',
         gap: scale(12),
+    },
+    disclaimerError: {
+        borderColor: COLORS.error,
+        borderWidth: 2,
     },
     checkbox: {
         marginTop: verticalScale(2),
@@ -493,8 +1111,8 @@ const styles = StyleSheet.create({
         flex: 1,
         borderWidth: 1.5,
         borderColor: COLORS.primary,
-        borderRadius: moderateScale(12),
-        paddingVertical: verticalScale(14),
+        borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
+        paddingVertical: FORM_CONSTANTS.INPUT_PADDING_VERTICAL,
         justifyContent: 'center',
         alignItems: 'center',
         backgroundColor: COLORS.white,
@@ -504,7 +1122,7 @@ const styles = StyleSheet.create({
     },
     submitButtonWrapper: {
         flex: 1,
-        borderRadius: moderateScale(12),
+        borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
         overflow: 'hidden',
     },
     submitButton: {
@@ -512,7 +1130,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         gap: scale(8),
-        paddingVertical: verticalScale(14),
+        paddingVertical: FORM_CONSTANTS.INPUT_PADDING_VERTICAL,
     },
     submitButtonText: {
         color: COLORS.white,
@@ -523,7 +1141,7 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         borderWidth: 1.5,
         borderColor: COLORS.gray300,
-        borderRadius: moderateScale(12),
+        borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
         padding: scale(16),
         backgroundColor: COLORS.white,
         marginBottom: verticalScale(4),

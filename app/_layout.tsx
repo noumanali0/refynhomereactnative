@@ -16,6 +16,13 @@ import * as SplashScreen from "expo-splash-screen";
 import { restoreSession } from '@/store/slices/authSlice';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
+import { connectSocket, disconnectSocket, resetDispatchState, restoreActiveJob } from '@/store/slices/dispatchSlice';
+import { defineBackgroundLocationTask } from '@/services/backgroundLocationService';
+
+// Initialize background location task at app startup
+// MUST be called before any navigation renders
+defineBackgroundLocationTask();
+
 SplashScreen.preventAutoHideAsync();
 // import { useAppSelector } from "@/store/hooks";
 // import LoadingSpinner from "@/components/common/LoadingSpinner";
@@ -27,6 +34,7 @@ function RootLayoutNav() {
   const dispatch = useAppDispatch();
 
   const { isAuthenticated, user, isLoading, vendorOnboardingStatus } = useAppSelector((s) => s.auth);
+  const activeJobId = useAppSelector((s) => s.dispatch.activeJobId);
   const [isInitialized, setIsInitialized] = useState(false);
 
   const role = user?.role;
@@ -40,7 +48,12 @@ function RootLayoutNav() {
   useEffect(() => {
     const initializeAuth = async () => {
       try {
-        await dispatch(restoreSession()).unwrap();
+        const session = await dispatch(restoreSession()).unwrap();
+
+        // If vendor, restore any active job from storage
+        if (session?.role === 'vendor') {
+          await dispatch(restoreActiveJob()).unwrap();
+        }
       } catch (error) {
         // No session to restore, user needs to login
         console.log('No session to restore');
@@ -95,14 +108,30 @@ function RootLayoutNav() {
           if (role === "customer") {
             router.replace("/(customer)/(home)");
           } else if (role === "vendor" && vendorVerified) {
-            router.replace("/(vendor)/(servicerequests)");
+            // If vendor has active job, redirect directly to that job's details
+            if (activeJobId) {
+              router.replace({
+                pathname: "/(vendor)/(servicerequests)/websocket-request-details",
+                params: { id: activeJobId.toString() },
+              } as any);
+            } else {
+              router.replace("/(vendor)/(servicerequests)");
+            }
           }
         } else if (!inAuth && !inCustomer && !inVendor && !inShared) {
           // Authenticated but not in any valid segment (e.g., on root after session restore)
           if (role === "customer") {
             router.replace("/(customer)/(home)");
           } else if (role === "vendor" && vendorVerified) {
-            router.replace("/(vendor)/(servicerequests)");
+            // If vendor has active job, redirect directly to that job's details
+            if (activeJobId) {
+              router.replace({
+                pathname: "/(vendor)/(servicerequests)/websocket-request-details",
+                params: { id: activeJobId.toString() },
+              } as any);
+            } else {
+              router.replace("/(vendor)/(servicerequests)");
+            }
           } else if (role === "vendor" && vendorPendingVerification) {
             router.replace("/(shared)/pending-verification");
           } else if (role === "vendor" && vendorNeedsOnboarding) {
@@ -119,16 +148,24 @@ function RootLayoutNav() {
     }, 100);
 
     return () => clearTimeout(redirectTimeout);
-  }, [isAuthenticated, role, segments, isLoading, isInitialized]);
+  }, [isAuthenticated, role, segments, isLoading, isInitialized, activeJobId]);
 
-  // TODO: Uncomment when socket implementation is ready
-  // useEffect(() => {
-  //   if (isAuthenticated && userId && role) {
-  //     const socket = SocketManager.getInstance();
-  //     socket.connect(userId, role);
-  //     return () => socket.disconnect();
-  //   }
-  // }, [isAuthenticated, userId, role]);
+  // WebSocket connection management
+  useEffect(() => {
+    if (isAuthenticated && userId && role) {
+      // Connect to WebSocket when authenticated
+      dispatch(connectSocket());
+
+      return () => {
+        // Disconnect and reset state on unmount
+        dispatch(disconnectSocket());
+        dispatch(resetDispatchState());
+      };
+    } else if (!isAuthenticated) {
+      // Reset dispatch state when logged out
+      dispatch(resetDispatchState());
+    }
+  }, [isAuthenticated, userId, role]);
 
   return <Slot />;
 }

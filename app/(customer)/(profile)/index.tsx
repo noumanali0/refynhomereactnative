@@ -1,5 +1,5 @@
 // app/(customer)/(profile)/index.tsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
     View,
     Image,
@@ -8,6 +8,7 @@ import {
     Modal,
     ScrollView,
     Alert,
+    ActivityIndicator,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -18,8 +19,9 @@ import useImagePicker from "@/hooks/useImagePicker";
 import { moderateScale } from "react-native-size-matters";
 import AppHeader from "@/components/common/AppHeader";
 import Text from "@/components/common/Text";
-import { useAppDispatch } from "@/hooks/useAppDispatch";
-import { logoutUser } from "@/store/slices/authSlice";
+import { useAppDispatch, useAppSelector } from "@/hooks/useAppDispatch";
+import { logoutUser, fetchUserProfile } from "@/store/slices/authSlice";
+import { COLORS } from "@/constants/colors";
 
 export default function ProfileScreen() {
     const router = useRouter();
@@ -27,6 +29,19 @@ export default function ProfileScreen() {
     const { imageUri, pickImage } = useImagePicker();
     const [deleteModal, setDeleteModal] = useState(false);
     const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+    // Get user from Redux store
+    const { user, isLoading } = useAppSelector((state) => state.auth);
+
+    // Fetch latest profile on mount
+    useEffect(() => {
+        dispatch(fetchUserProfile());
+    }, [dispatch]);
+
+    // Get user display info
+    const userName = user?.name || `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'User';
+    const userPhone = user?.phone || user?.phoneNumber || '';
+    const userProfilePhoto = user?.profilePhoto || imageUri;
 
     const handleLogout = () => {
         Alert.alert(
@@ -79,8 +94,8 @@ export default function ProfileScreen() {
                     <TouchableOpacity onPress={pickImage} style={styles.avatarWrapper}>
                         <GradientBorder radius={60} style={styles.avatarBorder}>
                             <View style={styles.avatarInner}>
-                                {imageUri ? (
-                                    <Image source={{ uri: imageUri }} style={styles.avatar} />
+                                {userProfilePhoto ? (
+                                    <Image source={{ uri: userProfilePhoto }} style={styles.avatar} />
                                 ) : (
                                     <View style={styles.placeholderAvatar}>
                                         <Ionicons name="person" size={50} color="#fff" />
@@ -97,8 +112,17 @@ export default function ProfileScreen() {
                         </LinearGradient>
                     </TouchableOpacity>
 
-                    <Text type="body2" style={styles.name}>Masood Ahmed</Text>
-                    <Text type="body" style={styles.email}>masood@example.com</Text>
+                    {isLoading ? (
+                        <ActivityIndicator size="small" color={COLORS.white} style={{ marginVertical: 10 }} />
+                    ) : (
+                        <>
+                            <Text type="body2" style={styles.name}>{userName}</Text>
+                            <Text type="body" style={styles.email}>{userPhone}</Text>
+                            {user?.city && (
+                                <Text type="body" style={styles.email}>{user.city}</Text>
+                            )}
+                        </>
+                    )}
                 </LinearGradient>
 
                 {/* Profile Settings Section */}

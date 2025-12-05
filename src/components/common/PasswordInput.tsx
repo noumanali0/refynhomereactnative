@@ -10,12 +10,12 @@ import {
   View,
   TextInput,
   TouchableOpacity,
-  Text,
   StyleSheet,
   TextInputProps,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { moderateScale } from 'react-native-size-matters';
+import Text from './Text';
 
 // ============================================================================
 // TYPES
@@ -198,7 +198,6 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: moderateScale(16),
     color: '#1F2937',
-    fontFamily: 'System',
   },
   toggleButton: {
     padding: moderateScale(4),

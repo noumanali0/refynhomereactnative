@@ -16,14 +16,18 @@
       "supportsTablet": true,
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "RefynHome needs your location to show nearby service vendors and provide accurate arrival times.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location to provide real-time service tracking."
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location to provide real-time service tracking even when the app is in the background.",
+        "UIBackgroundModes": ["location", "fetch"]
       }
     },
     "android": {
       "permissions": [
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION",
-        "FOREGROUND_SERVICE"
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.RECORD_AUDIO"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -31,20 +35,27 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "useNextNotificationsApi": true
+      "package": "com.masood979899.RefynHome",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDKE8TyUf0gDUZFK0S-Cc1HgYms-VAdoAE"
+        }
+      }
     },
     "plugins": [
       "expo-router",
       [
         "expo-location",
         {
-          "locationAlwaysAndWhenInUsePermission": "Allow ServiceApp to use your location for tracking services."
+          "locationAlwaysAndWhenInUsePermission": "Allow Refyn Home to track your location while you're en route to customers.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true
         }
       ],
       [
         "expo-notifications",
         {
-          "icon": "./assets/notification-icon.png",
+          "icon": "./assets/adaptive-icon.png",
           "color": "#FF0000"
         }
       ],
@@ -58,6 +69,13 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "7a3ee123-d1a2-450e-abec-70c92c577477"
+      }
+    },
+    "owner": "masood979899"
   }
 }

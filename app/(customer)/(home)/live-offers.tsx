@@ -1,4 +1,4 @@
-// LiveOffersScreen.tsx - PRODUCTION GRADE WITH ENHANCED UI
+// LiveOffersScreen.tsx - Optimized WebSocket Integrated Version
 import React, {
     useCallback,
     useEffect,
@@ -8,11 +8,14 @@ import React, {
 } from "react";
 import {
     View,
-    Text,
     StyleSheet,
     TouchableOpacity,
     ActivityIndicator,
     Platform,
+    Alert,
+    FlatList,
+    Animated,
+    Linking,
 } from "react-native";
 import MapView, {
     Marker,
@@ -20,495 +23,837 @@ import MapView, {
     UrlTile,
     Polyline,
 } from "react-native-maps";
-import * as Location from "expo-location";
-import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
+import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { useDispatch, useSelector } from "react-redux";
-import { MapPin, X, User } from "lucide-react-native";
+import { MapPin, X, Navigation } from "lucide-react-native";
 import { LinearGradient } from "expo-linear-gradient";
-import { moderateScale } from "react-native-size-matters";
+import { moderateScale, scale, verticalScale } from "react-native-size-matters";
+import { Ionicons } from "@expo/vector-icons";
 
+import Text from "@/components/common/Text";
+import { SocketStatusIndicator } from "@/components/common/SocketStatusIndicator";
+import RatingModal from "@/components/common/RatingModal";
+import { COLORS } from "@/constants/colors";
+import { serviceRequestApi, type CreateServiceRequestParams } from "@/services/serviceRequestApi";
+import type { AppDispatch, RootState } from "@/store";
+import type { SocketProposal, Coordinates } from "@/types/socket";
 import {
-    startReceivingOffers,
-    addOffer,
-    acceptOffer,
-    cancelRequest,
-    updateVendorLocation,
-    removeOffersByIds,
-    VendorOffer,
-    Coordinate,
-    removeOutOfRangeOffers,
-} from "../../../src/store/slices/offersSlice";
-import { RootState } from "../../../src/store";
-import { useBackHandlerExit } from "../../../src/hooks/useBackHandlerExit";
-import {
-    generateRandomOffer,
-    simulateVendorMovement,
-} from "../../../src/utils/mockOffers";
-import { VendorOfferCard } from "../../../src/components/customer/VendorOfferCard";
-import RatingModal from "../../../src/components/common/RatingModal";
-import { OffersList } from "../VendorOfferList";
-import { Slider } from "@miblanchard/react-native-slider";
-import { setupPushNotifications, sendLocalNotification, sendOfferNotification, clearAllOfferNotifications } from "../../../src/utils/notifications";
-import debounce from "lodash.debounce";
+    selectConnectionStatus,
+    selectIsConnected,
+    selectProposalsByRequestId,
+    selectVendorLocation,
+    selectCustomerRequests,
+    acceptProposal,
+    declineProposal,
+    connectSocket,
+    selectCompletedService,
+    clearCompletedService,
+} from "@/store/slices/dispatchSlice";
+import { clearReviewState } from "@/store/slices/reviewSlice";
+import { useVendorProximity } from "@/hooks/useVendorProximity";
+import { useRouteTracking } from "@/hooks/useRouteTracking";
+import { resetArrivalNotification } from "@/utils/notifications";
 
-type Coordinates = { latitude: number; longitude: number };
+// ============================================================================
+// Constants
+// ============================================================================
 
-interface LocalVendorState {
-    currentLocation: Coordinate;
-    lastDistanceReportedAt: number;
-    distanceMoved: number;
+const CONSTANTS = {
+    /** Distance in meters to consider vendor as "arrived" */
+    VENDOR_ARRIVAL_THRESHOLD_M: 100,
+    /** Default request timeout in seconds (5 minutes) */
+    REQUEST_TIMEOUT_SECONDS: 300,
+    /** Map edge padding for fitToCoordinates */
+    MAP_EDGE_PADDING: { top: 100, right: 100, bottom: 400, left: 100 },
+    /** Map delta for initial region */
+    MAP_DELTA: 0.02,
+    /** Height of each proposal card for FlatList optimization */
+    PROPOSAL_CARD_HEIGHT: 280,
+    /** FlatList initial render count */
+    FLATLIST_INITIAL_NUM: 3,
+    /** FlatList batching period in ms */
+    FLATLIST_BATCH_PERIOD: 50,
+    /** Proposal timer total seconds */
+    PROPOSAL_TIMER_TOTAL: 30,
+    /** Urgent threshold for proposal timer */
+    PROPOSAL_URGENT_THRESHOLD: 10,
+} as const;
+
+const SNAP_POINTS = ["25%", "50%", "85%"];
+const SNAP_POINTS_ACCEPTED = ["25%", "45%"];
+
+// ============================================================================
+// Proposal Card Component
+// ============================================================================
+
+interface ProposalCardProps {
+    proposal: SocketProposal;
+    onAccept: (id: number) => void;
+    onDecline: (id: number) => void;
+    isAccepting: boolean;
+    isDeclining: boolean;
 }
 
-const BATCH_SIZE = 3;
-const TIMER_DURATION = 20;
-const GENERATE_INTERVAL_MS = 4000;
-const MOVEMENT_INTERVAL_MS = 2000;
-const ARRIVAL_THRESHOLD_METERS = 20;
-const MOVEMENT_SPEED = 0.0002;
-const ROUTE_UPDATE_THRESHOLD_METERS = 50;
+const ProposalCard = React.memo(({
+    proposal,
+    onAccept,
+    onDecline,
+    isAccepting,
+    isDeclining,
+}: ProposalCardProps) => {
+    const [timeLeft, setTimeLeft] = useState(proposal.remaining_expiry_time);
+    const pulseAnim = useRef(new Animated.Value(1)).current;
+    const progressAnim = useRef(new Animated.Value(1)).current;
+    const isMountedRef = useRef(true);
+
+    const isUrgent = timeLeft <= CONSTANTS.PROPOSAL_URGENT_THRESHOLD && proposal.status === 'pending';
+    const isPending = proposal.status === 'pending';
+    const progress = timeLeft / CONSTANTS.PROPOSAL_TIMER_TOTAL;
+
+    // Track mounted state for safe state updates
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
+
+    // Timer effect with mounted check
+    useEffect(() => {
+        setTimeLeft(proposal.remaining_expiry_time);
+        if (proposal.status !== 'pending') return;
+
+        const interval = setInterval(() => {
+            if (isMountedRef.current) {
+                setTimeLeft((prev) => Math.max(0, prev - 1));
+            }
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, [proposal.remaining_expiry_time, proposal.status]);
+
+    // Pulse animation
+    useEffect(() => {
+        if (isUrgent) {
+            Animated.loop(
+                Animated.sequence([
+                    Animated.timing(pulseAnim, {
+                        toValue: 1.02,
+                        duration: 500,
+                        useNativeDriver: true,
+                    }),
+                    Animated.timing(pulseAnim, {
+                        toValue: 1,
+                        duration: 500,
+                        useNativeDriver: true,
+                    }),
+                ])
+            ).start();
+        } else {
+            pulseAnim.setValue(1);
+        }
+    }, [isUrgent, pulseAnim]);
+
+    // Progress animation
+    useEffect(() => {
+        Animated.timing(progressAnim, {
+            toValue: progress,
+            duration: 300,
+            useNativeDriver: false,
+        }).start();
+    }, [progress, progressAnim]);
+
+    const progressWidth = progressAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: ['0%', '100%'],
+    });
+
+    const priceText = useMemo(() => {
+        if (!proposal.price_quote) return 'To be discussed';
+        return `PKR ${proposal.price_quote.toLocaleString()}`;
+    }, [proposal.price_quote]);
+
+    const etaText = useMemo(() => {
+        if (!proposal.eta_minutes) return 'ASAP';
+        if (proposal.eta_minutes < 60) return `${proposal.eta_minutes} min`;
+        const hours = Math.floor(proposal.eta_minutes / 60);
+        const mins = proposal.eta_minutes % 60;
+        return `${hours}h ${mins}m`;
+    }, [proposal.eta_minutes]);
+
+    const handleAccept = useCallback(() => {
+        onAccept(proposal.id);
+    }, [onAccept, proposal.id]);
+
+    const handleDecline = useCallback(() => {
+        Alert.alert(
+            'Decline Proposal',
+            'Are you sure you want to decline this proposal?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Decline',
+                    style: 'destructive',
+                    onPress: () => onDecline(proposal.id),
+                },
+            ]
+        );
+    }, [onDecline, proposal.id]);
+
+    const getStatusBadge = () => {
+        switch (proposal.status) {
+            case 'accepted':
+                return { color: COLORS.success, text: 'Accepted', icon: 'checkmark-circle' };
+            case 'declined':
+                return { color: COLORS.error, text: 'Declined', icon: 'close-circle' };
+            case 'expired':
+                return { color: COLORS.gray500, text: 'Expired', icon: 'time' };
+            case 'withdrawn':
+                return { color: COLORS.warning, text: 'Withdrawn', icon: 'remove-circle' };
+            default:
+                return null;
+        }
+    };
+
+    const statusBadge = getStatusBadge();
+
+    return (
+        <Animated.View
+            style={[
+                styles.proposalCard,
+                isUrgent && { transform: [{ scale: pulseAnim }] },
+            ]}
+        >
+            {/* Progress Bar */}
+            {isPending && (
+                <View style={styles.progressBarContainer}>
+                    <Animated.View
+                        style={[
+                            styles.progressBar,
+                            {
+                                width: progressWidth,
+                                backgroundColor: isUrgent ? COLORS.error : COLORS.success,
+                            },
+                        ]}
+                    />
+                </View>
+            )}
+
+            {/* Header */}
+            <View style={styles.proposalHeader}>
+                <View style={styles.vendorInfo}>
+                    <View style={styles.avatarContainer}>
+                        {proposal.vendor?.profile_photo_url ? (
+                            <View style={styles.avatar}>
+                                <Text style={styles.avatarText}>
+                                    {proposal.vendor.full_name?.charAt(0)?.toUpperCase() || 'V'}
+                                </Text>
+                            </View>
+                        ) : (
+                            <LinearGradient
+                                colors={[COLORS.primary, COLORS.accent]}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 1 }}
+                                style={styles.avatar}
+                            >
+                                <Text style={styles.avatarTextWhite}>
+                                    {proposal.vendor?.full_name?.charAt(0)?.toUpperCase() || 'V'}
+                                </Text>
+                            </LinearGradient>
+                        )}
+                        {proposal.vendor?.verified && (
+                            <View style={styles.verifiedBadge}>
+                                <Ionicons name="checkmark" size={10} color={COLORS.white} />
+                            </View>
+                        )}
+                    </View>
+
+                    <View style={styles.vendorDetails}>
+                        <Text type="subtitle" style={styles.vendorName}>
+                            {proposal.vendor?.full_name || 'Vendor'}
+                        </Text>
+                        <View style={styles.ratingRow}>
+                            <Ionicons name="star" size={14} color={COLORS.warning} />
+                            <Text style={styles.ratingText}>
+                                {proposal.vendor?.average_rating?.toFixed(1) || '0.0'}
+                            </Text>
+                            <Text style={styles.reviewsText}>
+                                ({proposal.vendor?.total_reviews || 0} reviews)
+                            </Text>
+                        </View>
+                    </View>
+                </View>
+
+                {/* Timer or Status Badge */}
+                {isPending ? (
+                    <View style={[styles.timerBadge, isUrgent && styles.timerBadgeUrgent]}>
+                        <Ionicons name={isUrgent ? 'timer' : 'time'} size={14} color={COLORS.white} />
+                        <Text style={styles.proposalTimerText}>{timeLeft}s</Text>
+                    </View>
+                ) : statusBadge ? (
+                    <View style={[styles.statusBadge, { backgroundColor: statusBadge.color + '20' }]}>
+                        <Ionicons name={statusBadge.icon as any} size={14} color={statusBadge.color} />
+                        <Text style={[styles.statusText, { color: statusBadge.color }]}>
+                            {statusBadge.text}
+                        </Text>
+                    </View>
+                ) : null}
+            </View>
+
+            {/* Message */}
+            {proposal.message ? (
+                <View style={styles.messageContainer}>
+                    <Ionicons name="chatbubble-outline" size={14} color={COLORS.gray500} />
+                    <Text style={styles.messageText} numberOfLines={2}>
+                        "{proposal.message}"
+                    </Text>
+                </View>
+            ) : null}
+
+            {/* Metrics */}
+            <View style={styles.metricsContainer}>
+                <View style={styles.metricBox}>
+                    <Ionicons name="cash-outline" size={18} color={COLORS.success} />
+                    <View style={styles.metricContent}>
+                        <Text style={styles.metricLabel}>Price</Text>
+                        <Text style={styles.priceValue}>{priceText}</Text>
+                    </View>
+                </View>
+
+                <View style={styles.metricDivider} />
+
+                <View style={styles.metricBox}>
+                    <Ionicons name="time-outline" size={18} color={COLORS.primary} />
+                    <View style={styles.metricContent}>
+                        <Text style={styles.metricLabel}>ETA</Text>
+                        <Text style={styles.metricValue}>{etaText}</Text>
+                    </View>
+                </View>
+
+                <View style={styles.metricDivider} />
+
+                <View style={styles.metricBox}>
+                    <Ionicons name="navigate-outline" size={18} color={COLORS.accent} />
+                    <View style={styles.metricContent}>
+                        <Text style={styles.metricLabel}>Distance</Text>
+                        <Text style={styles.metricValue}>
+                            {proposal.vendor?.distance_km?.toFixed(1) || '0.0'} km
+                        </Text>
+                    </View>
+                </View>
+            </View>
+
+            {/* Actions */}
+            {isPending && timeLeft > 0 && (
+                <View style={styles.actionContainer}>
+                    <TouchableOpacity
+                        style={styles.declineButton}
+                        onPress={handleDecline}
+                        disabled={isDeclining || isAccepting}
+                        activeOpacity={0.8}
+                    >
+                        <Ionicons name="close" size={20} color={COLORS.error} />
+                        <Text style={styles.declineText}>Decline</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={[styles.acceptButton, (isAccepting || isDeclining) && styles.buttonDisabled]}
+                        onPress={handleAccept}
+                        disabled={isDeclining || isAccepting}
+                        activeOpacity={0.8}
+                    >
+                        <LinearGradient
+                            colors={[COLORS.success, '#059669']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={styles.acceptGradient}
+                        >
+                            {isAccepting ? (
+                                <ActivityIndicator size="small" color={COLORS.white} />
+                            ) : (
+                                <>
+                                    <Ionicons name="checkmark" size={20} color={COLORS.white} />
+                                    <Text style={styles.acceptText}>Accept</Text>
+                                </>
+                            )}
+                        </LinearGradient>
+                    </TouchableOpacity>
+                </View>
+            )}
+        </Animated.View>
+    );
+}, (prevProps, nextProps) => {
+    return (
+        prevProps.proposal.id === nextProps.proposal.id &&
+        prevProps.proposal.status === nextProps.proposal.status &&
+        prevProps.proposal.remaining_expiry_time === nextProps.proposal.remaining_expiry_time &&
+        prevProps.isAccepting === nextProps.isAccepting &&
+        prevProps.isDeclining === nextProps.isDeclining
+    );
+});
+
+// ============================================================================
+// Main Component
+// ============================================================================
 
 export default function LiveOffersScreen() {
     const router = useRouter();
-    const dispatch = useDispatch();
+    const params = useLocalSearchParams<{
+        requestId?: string;
+        latitude?: string;
+        longitude?: string;
+        address?: string;
+    }>();
+    const dispatch = useDispatch<AppDispatch>();
     const mapRef = useRef<MapView | null>(null);
     const bottomSheetRef = useRef<BottomSheet | null>(null);
 
-    const { offers, acceptedOffer, isReceivingOffers } = useSelector(
-        (s: RootState) => s.offers
+    // Redux state
+    const connectionStatus = useSelector(selectConnectionStatus);
+    const isConnected = useSelector(selectIsConnected);
+    const customerRequests = useSelector(selectCustomerRequests);
+    const vendorLocation = useSelector(selectVendorLocation);
+    console.log("🚀 ~ LiveOffersScreen ~ vendorLocation:", vendorLocation)
+    const completedService = useSelector(selectCompletedService);
+
+    // Get current request and its proposals
+    const requestId = params.requestId ? parseInt(params.requestId, 10) : null;
+    const currentRequest = useMemo(() => {
+        if (requestId) {
+            return customerRequests.find(r => r?.id === requestId);
+        }
+        return customerRequests[0];
+    }, [customerRequests, requestId]);
+
+    // Use requestId directly from params OR from currentRequest
+    const effectiveRequestId = requestId || currentRequest?.id;
+
+    const proposals = useSelector((state: RootState) =>
+        effectiveRequestId ? selectProposalsByRequestId(state, effectiveRequestId) : []
     );
 
-    const [userLocation, setUserLocation] = useState<Coordinates | null>(null);
-    const [locationLoading, setLocationLoading] = useState(true);
-    const [locationError, setLocationError] = useState<string | null>(null);
-    const [routeCoords, setRouteCoords] = useState<Coordinates[]>([]);
-    const [vendorArrived, setVendorArrived] = useState(false);
+    // Filter active proposals (pending or accepted)
+    const activeProposals = useMemo(() => {
+        return proposals.filter(p => p.status === 'pending' || p.status === 'accepted');
+    }, [proposals]);
+
+    const acceptedProposal = useMemo(() => {
+        return proposals.find(p => p.status === 'accepted');
+    }, [proposals]);
+
+    // Local state
+    const [acceptingId, setAcceptingId] = useState<number | null>(null);
+    const [decliningId, setDecliningId] = useState<number | null>(null);
+
+    // Request expiry timer state
+    const [requestTimeLeft, setRequestTimeLeft] = useState<number>(CONSTANTS.REQUEST_TIMEOUT_SECONDS);
+    const [requestExpired, setRequestExpired] = useState<boolean>(false);
+    const [isRetrying, setIsRetrying] = useState<boolean>(false);
+
+    // Mounted state ref for main component
+    const isMountedRef = useRef(true);
+
+    // Store original request params for retry
+    const [originalRequestParams, setOriginalRequestParams] = useState<CreateServiceRequestParams | null>(null);
+
+    // Rating modal state
     const [showRatingModal, setShowRatingModal] = useState(false);
-    const [distanceToUser, setDistanceToUser] = useState<number | null>(null);
-    const [vendorLocalState, setVendorLocalState] = useState<LocalVendorState | null>(null);
-    const [radiusKm, setRadiusKm] = useState<number>(5);
 
-    useBackHandlerExit();
-
-    const generateIntervalRef = useRef<NodeJS.Timeout | null>(null);
-    const movementIntervalRef = useRef<NodeJS.Timeout | null>(null);
-    const routeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const offersLengthRef = useRef(offers.length);
-    const lastRouteUpdatePositionRef = useRef<Coordinates | null>(null);
-
-    const handleRadiusChange = useCallback((value: number | number[]) => {
-        if (Array.isArray(value)) value = value[0];
-        const clamped = Math.max(1, Math.min(value, 20));
-        setRadiusKm(clamped);
-    }, []);
-
-    const getOutOfRangeIds = useCallback(
-        (offers: VendorOffer[], radiusKm: number) => offers.filter(o => o.distance > radiusKm).map(o => o.id),
-        []
-    );
-
-    const debouncedRemove = useMemo(
-        () =>
-            debounce((ids: string[]) => {
-                if (ids.length) dispatch(removeOutOfRangeOffers(ids));
-            }, 400),
-        [dispatch]
-    );
-
-    const getDistanceInMeters = useCallback((a: Coordinates, b: Coordinates): number => {
-        const R = 6371e3;
-        const toRad = (v: number) => (v * Math.PI) / 180;
-        const dLat = toRad(b.latitude - a.latitude);
-        const dLon = toRad(b.longitude - a.longitude);
-        const lat1 = toRad(a.latitude);
-        const lat2 = toRad(b.latitude);
-        const aa =
-            Math.sin(dLat / 2) ** 2 +
-            Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-        const c = 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1 - aa));
-        return R * c;
-    }, []);
-
-    useEffect(() => {
-        setupPushNotifications();
-    }, []);
-
-    const getUserLocation = useCallback(async () => {
-        try {
-            const { status } = await Location.requestForegroundPermissionsAsync();
-            if (status !== "granted") throw new Error("Location permission denied");
-
-            const loc = await Location.getCurrentPositionAsync({
-                accuracy: Location.Accuracy.High,
-            });
-
-            const coords = {
-                latitude: loc.coords.latitude,
-                longitude: loc.coords.longitude,
+    // Service address coordinates (from params first, then currentRequest)
+    const serviceLocation = useMemo<Coordinates | null>(() => {
+        // First try from URL params (passed from create screen)
+        if (params.latitude && params.longitude) {
+            const lat = parseFloat(params.latitude);
+            const lng = parseFloat(params.longitude);
+            if (!isNaN(lat) && !isNaN(lng)) {
+                return { latitude: lat, longitude: lng };
+            }
+        }
+        // Fallback to currentRequest
+        if (currentRequest?.latitude && currentRequest?.longitude) {
+            return {
+                latitude: currentRequest.latitude,
+                longitude: currentRequest.longitude,
             };
-            setUserLocation(coords);
-            dispatch(startReceivingOffers());
+        }
+        return null;
+    }, [params.latitude, params.longitude, currentRequest?.latitude, currentRequest?.longitude]);
 
+    // Service address text (from params or currentRequest)
+    const serviceAddress = params.address || currentRequest?.address_line || 'Service Location';
+
+    // =========================================================================
+    // Route Tracking Hook - Uses optimized useRouteTracking
+    // =========================================================================
+    const handleFirstRouteFetch = useCallback((route: Coordinates[]) => {
+        if (route.length > 2) {
+            mapRef.current?.fitToCoordinates(route, {
+                edgePadding: CONSTANTS.MAP_EDGE_PADDING,
+                animated: true,
+            });
+        }
+    }, []);
+
+    const {
+        routeCoords,
+        isLoading: isRouteLoading,
+        refreshRoute,
+    } = useRouteTracking({
+        vendorLocation,
+        serviceLocation,
+        enabled: !!acceptedProposal && !!vendorLocation && !!serviceLocation,
+        onFirstRouteFetch: handleFirstRouteFetch,
+    });
+
+    // Debug: Log vendor location updates
+    useEffect(() => {
+        if (__DEV__ && vendorLocation) {
+            console.log('[LiveOffers] Vendor location updated from Redux:', vendorLocation);
+        }
+    }, [vendorLocation]);
+
+    // Debug: Log route updates
+    useEffect(() => {
+        if (__DEV__ && routeCoords.length > 0) {
+            console.log('[LiveOffers] Route updated:', routeCoords.length, 'points');
+        }
+    }, [routeCoords]);
+
+    // Vendor proximity detection (100m arrival notification)
+    const { hasArrived: vendorHasArrived, formattedDistance } = useVendorProximity({
+        vendorLocation,
+        serviceLocation,
+        requestId: effectiveRequestId ?? null,
+        vendorName: acceptedProposal?.vendor?.full_name || 'Vendor',
+        enabled: !!acceptedProposal && !!vendorLocation && !!serviceLocation,
+        onArrival: () => {
+            console.log('[LiveOffers] Vendor arrived within 100m');
+        },
+    });
+
+    // Animation for waiting state
+    const pulseAnim = useRef(new Animated.Value(1)).current;
+
+    // Pulse animation for waiting state
+    useEffect(() => {
+        if (activeProposals.length === 0 && !acceptedProposal) {
+            const pulse = Animated.loop(
+                Animated.sequence([
+                    Animated.timing(pulseAnim, {
+                        toValue: 1.1,
+                        duration: 1000,
+                        useNativeDriver: true,
+                    }),
+                    Animated.timing(pulseAnim, {
+                        toValue: 1,
+                        duration: 1000,
+                        useNativeDriver: true,
+                    }),
+                ])
+            );
+            pulse.start();
+            return () => pulse.stop();
+        } else {
+            pulseAnim.setValue(1);
+        }
+    }, [activeProposals.length, acceptedProposal, pulseAnim]);
+
+    // Store original request params for retry functionality
+    useEffect(() => {
+        if (currentRequest && !originalRequestParams) {
+            setOriginalRequestParams({
+                category: currentRequest.category?.id ?? (currentRequest.category as unknown as number),
+                problem_title: currentRequest.problem_title,
+                description: currentRequest.description,
+                address_line: currentRequest.address_line,
+                latitude: currentRequest.latitude,
+                longitude: currentRequest.longitude,
+                location_source: currentRequest.location_source,
+                radius_km: currentRequest.radius_km,
+            });
+        }
+    }, [currentRequest, originalRequestParams]);
+
+    // Track mounted state for safe state updates in main component
+    useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+        };
+    }, []);
+
+    // Request expiry timer effect with mounted state check
+    useEffect(() => {
+        // Skip if proposal already accepted
+        if (acceptedProposal) return;
+
+        // Get expiry from currentRequest
+        if (!currentRequest?.expires_at && !effectiveRequestId) return;
+
+        const calculateTimeLeft = () => {
+            if (currentRequest?.expires_at) {
+                const expiresAt = new Date(currentRequest.expires_at).getTime();
+                return Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+            }
+            return requestTimeLeft;
+        };
+
+        if (isMountedRef.current) {
+            setRequestTimeLeft(calculateTimeLeft());
+        }
+
+        const interval = setInterval(() => {
+            if (!isMountedRef.current) return;
+
+            const remaining = calculateTimeLeft();
+            setRequestTimeLeft(remaining);
+            if (remaining <= 0 && !acceptedProposal) {
+                setRequestExpired(true);
+            }
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, [currentRequest?.expires_at, effectiveRequestId, acceptedProposal]);
+
+    // Connect socket on mount if not connected
+    useEffect(() => {
+        if (!isConnected && connectionStatus !== 'connecting') {
+            dispatch(connectSocket());
+        }
+    }, [dispatch, isConnected, connectionStatus]);
+
+    // Handle service completion - Show rating modal
+    useEffect(() => {
+        if (completedService && completedService.requestId === effectiveRequestId) {
+            console.log('[LiveOffers] Service completed, showing rating modal');
+            setShowRatingModal(true);
+        }
+    }, [completedService, effectiveRequestId]);
+
+    // Handle rating modal close
+    const handleRatingClose = useCallback(() => {
+        setShowRatingModal(false);
+        dispatch(clearCompletedService());
+        dispatch(clearReviewState());
+        if (effectiveRequestId) {
+            resetArrivalNotification(effectiveRequestId);
+        }
+        router.replace('/(customer)/(home)/');
+    }, [dispatch, effectiveRequestId, router]);
+
+    // Animate map to service location when available
+    useEffect(() => {
+        if (serviceLocation && !acceptedProposal) {
             mapRef.current?.animateToRegion({
-                ...coords,
-                latitudeDelta: 0.05,
-                longitudeDelta: 0.05,
+                ...serviceLocation,
+                latitudeDelta: CONSTANTS.MAP_DELTA,
+                longitudeDelta: CONSTANTS.MAP_DELTA,
             }, 1000);
-        } catch (err: any) {
-            setLocationError(err?.message || "Failed to get location");
+        }
+    }, [serviceLocation, acceptedProposal]);
+
+    // Handlers
+    const handleAcceptProposal = useCallback(async (proposalId: number) => {
+        try {
+            setAcceptingId(proposalId);
+            await dispatch(acceptProposal(proposalId)).unwrap();
+            bottomSheetRef.current?.snapToIndex(0);
+        } catch (err: unknown) {
+            const errorMessage = err instanceof Error ? err.message : 'Failed to accept proposal. Please try again.';
+            Alert.alert('Error', errorMessage);
         } finally {
-            setLocationLoading(false);
+            setAcceptingId(null);
         }
     }, [dispatch]);
 
-    useEffect(() => {
-        getUserLocation();
-    }, [getUserLocation]);
-
-    const fetchRoute = useCallback(async (start: Coordinates, end: Coordinates): Promise<Coordinates[]> => {
+    const handleDeclineProposal = useCallback(async (proposalId: number) => {
         try {
-            const url = `https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson`;
-            const res = await fetch(url);
-            if (!res.ok) return [start, end];
-            const data = await res.json();
-            if (!data?.routes?.length) return [start, end];
-            return data.routes[0].geometry.coordinates.map(
-                ([lng, lat]: [number, number]) => ({
-                    latitude: lat,
-                    longitude: lng,
-                })
-            );
-        } catch (e) {
-            console.warn("fetchRoute error:", e);
-            return [start, end];
+            setDecliningId(proposalId);
+            await dispatch(declineProposal(proposalId)).unwrap();
+        } catch (err: unknown) {
+            const errorMessage = err instanceof Error ? err.message : 'Failed to decline proposal.';
+            Alert.alert('Error', errorMessage);
+        } finally {
+            setDecliningId(null);
         }
-    }, []);
-
-    const debouncedFetchRoute = useCallback(
-        (start: Coordinates, end: Coordinates, delay = 700) =>
-            new Promise<Coordinates[]>((resolve) => {
-                if (routeTimeoutRef.current) clearTimeout(routeTimeoutRef.current);
-                routeTimeoutRef.current = setTimeout(async () => {
-                    const r = await fetchRoute(start, end);
-                    resolve(r);
-                }, delay);
-            }),
-        [fetchRoute]
-    );
-
-    const handleAcceptOffer = useCallback(
-        async (offer: VendorOffer) => {
-            dispatch(acceptOffer(offer));
-            setVendorLocalState({
-                currentLocation: offer.coordinates,
-                lastDistanceReportedAt: 0,
-                distanceMoved: 0,
-            });
-            if (userLocation) {
-                const route = await debouncedFetchRoute(offer.coordinates, userLocation);
-                setRouteCoords(route);
-                lastRouteUpdatePositionRef.current = offer.coordinates;
-
-                if (route?.length > 2) {
-                    mapRef.current?.fitToCoordinates(route, {
-                        edgePadding: { top: 100, right: 100, bottom: 400, left: 100 },
-                        animated: true,
-                    });
-                }
-            }
-            bottomSheetRef.current?.snapToIndex(0);
-        },
-        [dispatch, userLocation, debouncedFetchRoute]
-    );
-
-    const updateRouteIfNeeded = useCallback(
-        async (newVendorLocation: Coordinates) => {
-            if (!userLocation || !lastRouteUpdatePositionRef.current) return;
-
-            const distanceFromLastUpdate = getDistanceInMeters(
-                lastRouteUpdatePositionRef.current,
-                newVendorLocation
-            );
-
-            if (distanceFromLastUpdate >= ROUTE_UPDATE_THRESHOLD_METERS) {
-                const newRoute = await fetchRoute(newVendorLocation, userLocation);
-                setRouteCoords(newRoute);
-                lastRouteUpdatePositionRef.current = newVendorLocation;
-            }
-        },
-        [userLocation, getDistanceInMeters, fetchRoute]
-    );
-
-    useEffect(() => {
-        offersLengthRef.current = offers.length;
-    }, [offers.length]);
-
-    useEffect(() => {
-        return () => {
-            clearAllOfferNotifications();
-        };
-    }, []);
-
-    useEffect(() => {
-        if (!userLocation || !isReceivingOffers || acceptedOffer) {
-            if (generateIntervalRef.current) {
-                clearInterval(generateIntervalRef.current);
-                generateIntervalRef.current = null;
-            }
-            return;
-        }
-
-        generateIntervalRef.current = setInterval(() => {
-            if (offersLengthRef.current < BATCH_SIZE) {
-                const offer = generateRandomOffer(userLocation, radiusKm);
-                const dist = getDistanceInMeters(userLocation, offer.coordinates) / 1000;
-                if (dist <= radiusKm) {
-                    dispatch(addOffer({
-                        ...offer,
-                        createdAt: Date.now(),
-                        expiryTime: Date.now() + TIMER_DURATION * 1000,
-                    }));
-                    sendOfferNotification(offer);
-                }
-            }
-        }, GENERATE_INTERVAL_MS);
-
-        return () => {
-            if (generateIntervalRef.current) {
-                clearInterval(generateIntervalRef.current);
-                generateIntervalRef.current = null;
-            }
-        };
-    }, [userLocation, isReceivingOffers, acceptedOffer, dispatch, radiusKm, getDistanceInMeters]);
-
-    useEffect(() => {
-        if (!offers?.length) return;
-        const outOfRangeIds = getOutOfRangeIds(offers, radiusKm);
-        debouncedRemove(outOfRangeIds);
-        return () => debouncedRemove.cancel();
-    }, [offers, radiusKm, getOutOfRangeIds, debouncedRemove]);
-
-    const filteredOffers = useMemo(() => {
-        if (!userLocation) return [];
-        return offers.filter(offer => {
-            const distance = getDistanceInMeters(userLocation, offer.coordinates);
-            return distance <= radiusKm * 1000;
-        });
-    }, [offers, userLocation, radiusKm, getDistanceInMeters]);
-
-    useEffect(() => {
-        if (!acceptedOffer || !userLocation || !vendorLocalState || vendorArrived) {
-            return;
-        }
-
-        setVendorArrived(false);
-
-        const movementInterval = setInterval(() => {
-            setVendorLocalState((prevState) => {
-                if (!prevState) return null;
-
-                const newLocation = simulateVendorMovement(
-                    prevState.currentLocation,
-                    userLocation,
-                    0.0002
-                );
-
-                const distanceMoved = getDistanceInMeters(prevState.currentLocation, newLocation);
-                const totalDistanceMoved = prevState.distanceMoved + distanceMoved;
-                const distanceToCustomer = getDistanceInMeters(newLocation, userLocation);
-
-                if (distanceToCustomer === 0) {
-                    console.log("✅ Vendor arrived at destination");
-                    sendLocalNotification("Vendor Arrived", `${acceptedOffer.name} has reached your location!`);
-                    setVendorArrived(true);
-                    clearInterval(movementInterval);
-                }
-
-                if (totalDistanceMoved >= 50 || distanceToCustomer < 100) {
-                    console.log(`✓ DISPATCH at ${totalDistanceMoved.toFixed(0)}m - Distance to user: ${distanceToCustomer.toFixed(0)}m`);
-                    dispatch(
-                        updateVendorLocation({
-                            id: acceptedOffer.id,
-                            coordinates: newLocation,
-                            distance: Number((distanceToCustomer / 1000).toFixed(2)),
-                            eta: Math.max(Math.round(distanceToCustomer / 250), 1),
-                        })
-                    );
-
-                    return {
-                        currentLocation: newLocation,
-                        lastDistanceReportedAt: Date.now(),
-                        distanceMoved: 0,
-                    };
-                }
-                updateRouteIfNeeded(newLocation);
-
-                console.log(`~ Moving: ${totalDistanceMoved.toFixed(0)}m total, ${distanceToCustomer.toFixed(0)}m to user`);
-
-                return {
-                    currentLocation: newLocation,
-                    lastDistanceReportedAt: prevState.lastDistanceReportedAt,
-                    distanceMoved: totalDistanceMoved,
-                };
-            });
-        }, 2000);
-        return () => clearInterval(movementInterval);
-    }, [acceptedOffer, userLocation, dispatch, getDistanceInMeters, updateRouteIfNeeded, vendorLocalState, vendorArrived]);
+    }, [dispatch]);
 
     const handleCancelRequest = useCallback(() => {
-        dispatch(cancelRequest());
-        router.back();
-    }, [dispatch, router]);
-
-    const renderMarkers = useMemo(() => {
-        if (!userLocation) return null;
-        const markers: React.ReactNode[] = [];
-
-        markers.push(
-            <Marker key="user" coordinate={userLocation} title="Your Location">
-                <LinearGradient
-                    colors={['#2563EB', '#F97316']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.userMarker}
-                >
-                    <MapPin size={24} color="#fff" />
-                </LinearGradient>
-            </Marker>
+        Alert.alert(
+            'Cancel Request',
+            'Are you sure you want to cancel this request?',
+            [
+                { text: 'No', style: 'cancel' },
+                {
+                    text: 'Yes, Cancel',
+                    style: 'destructive',
+                    onPress: () => router.back(),
+                },
+            ]
         );
+    }, [router]);
 
-        if (acceptedOffer) {
-            markers.push(
+    // Handle retry request - create new request with same parameters
+    const handleRetryRequest = useCallback(async () => {
+        if (!originalRequestParams) {
+            Alert.alert('Error', 'Request details not available. Please create a new request.');
+            return;
+        }
+
+        try {
+            setIsRetrying(true);
+            // Create new request with same parameters
+            const response = await serviceRequestApi.create(originalRequestParams);
+
+            // Reset state for new request
+            setRequestExpired(false);
+            setRequestTimeLeft(CONSTANTS.REQUEST_TIMEOUT_SECONDS);
+
+            // Navigate to new live-offers screen with new request ID
+            router.replace({
+                pathname: "/(customer)/(home)/live-offers",
+                params: {
+                    requestId: response.request.id.toString(),
+                    latitude: originalRequestParams.latitude.toString(),
+                    longitude: originalRequestParams.longitude.toString(),
+                    address: originalRequestParams.address_line,
+                },
+            });
+
+            Alert.alert('Success', 'Request re-submitted! Finding nearby vendors...');
+        } catch (error: unknown) {
+            const errorMessage = error instanceof Error ? error.message : 'Failed to retry request';
+            Alert.alert('Error', errorMessage);
+        } finally {
+            setIsRetrying(false);
+        }
+    }, [originalRequestParams, router]);
+
+    /**
+     * Renders map markers
+     */
+    function renderMarkers(): React.ReactNode {
+        if (!serviceLocation) return null;
+
+        return (
+            <>
+                {/* Service Address marker (destination - where customer wants service) */}
                 <Marker
-                    key={acceptedOffer.id}
-                    coordinate={acceptedOffer.coordinates}
-                    title={`${acceptedOffer.name} (Accepted)`}
+                    key="service-location"
+                    coordinate={serviceLocation}
+                    title="Service Location"
+                    description={serviceAddress}
                 >
                     <LinearGradient
-                        colors={['#F97316', '#2563EB']}
+                        colors={[COLORS.primary, COLORS.accent]}
                         start={{ x: 0, y: 0 }}
                         end={{ x: 1, y: 1 }}
-                        style={styles.acceptedVendorMarker}
+                        style={styles.userMarker}
                     >
-                        <User size={24} color="#fff" />
+                        <MapPin size={24} color={COLORS.white} />
                     </LinearGradient>
                 </Marker>
-            );
-        } else {
-            filteredOffers.forEach((o) => {
-                markers.push(
-                    <Marker key={o.id} coordinate={o.coordinates} title={o.name}>
+
+                {/* Vendor live location marker (only after acceptance and when vendor shares location) */}
+                {acceptedProposal && vendorLocation && (
+                    <Marker
+                        key={`vendor-${acceptedProposal.id}`}
+                        coordinate={vendorLocation}
+                        title={acceptedProposal.vendor?.full_name || 'Vendor'}
+                        description={vendorHasArrived ? "Vendor has arrived!" : "Vendor is on the way"}
+                    >
                         <LinearGradient
-                            colors={['#10b981', '#059669']}
+                            colors={vendorHasArrived ? [COLORS.success, '#059669'] : [COLORS.warning, '#d97706']}
                             start={{ x: 0, y: 0 }}
                             end={{ x: 1, y: 1 }}
-                            style={styles.vendorMarker}
+                            style={styles.acceptedVendorMarker}
                         >
-                            <User size={20} color="#fff" />
+                            <Navigation size={24} color={COLORS.white} />
                         </LinearGradient>
                     </Marker>
-                );
-            });
-        }
+                )}
+            </>
+        );
+    }
 
-        return markers;
-    }, [userLocation, filteredOffers, acceptedOffer]);
+    // Render proposal item
+    const renderProposalItem = useCallback(({ item }: { item: SocketProposal }) => (
+        <ProposalCard
+            proposal={item}
+            onAccept={handleAcceptProposal}
+            onDecline={handleDeclineProposal}
+            isAccepting={acceptingId === item.id}
+            isDeclining={decliningId === item.id}
+        />
+    ), [handleAcceptProposal, handleDeclineProposal, acceptingId, decliningId]);
 
-    useEffect(() => {
-        if (!isReceivingOffers) {
-            if (generateIntervalRef.current) {
-                clearInterval(generateIntervalRef.current);
-                generateIntervalRef.current = null;
-            }
-            if (movementIntervalRef.current) {
-                clearInterval(movementIntervalRef.current);
-                movementIntervalRef.current = null;
-            }
-        }
-    }, [isReceivingOffers]);
+    const keyExtractor = useCallback((item: SocketProposal) => item.id.toString(), []);
 
-    if (locationLoading) {
+    const getItemLayout = useCallback((_: ArrayLike<SocketProposal> | null | undefined, index: number) => ({
+        length: CONSTANTS.PROPOSAL_CARD_HEIGHT,
+        offset: CONSTANTS.PROPOSAL_CARD_HEIGHT * index,
+        index,
+    }), []);
+
+    // Loading state - show while waiting for service location
+    if (!serviceLocation) {
         return (
             <View style={styles.centerContainer}>
                 <LinearGradient
-                    colors={['#2563EB', '#F97316']}
+                    colors={[COLORS.primary, COLORS.accent]}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
                     style={styles.loadingGradient}
                 >
-                    <ActivityIndicator size="large" color="#fff" />
-                    <Text style={styles.loadingText}>Getting your location...</Text>
+                    <ActivityIndicator size="large" color={COLORS.white} />
+                    <Text style={styles.loadingText}>Loading service request...</Text>
                 </LinearGradient>
             </View>
         );
     }
 
-    if (locationError || !userLocation) {
-        return (
-            <View style={styles.centerContainer}>
-                <View style={styles.errorContainer}>
-                    <Text style={styles.errorText}>
-                        {locationError || "Location unavailable"}
-                    </Text>
-                    <TouchableOpacity
-                        style={styles.retryButton}
-                        onPress={getUserLocation}
-                        activeOpacity={0.8}
-                    >
-                        <LinearGradient
-                            colors={['#2563EB', '#F97316']}
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 0 }}
-                            style={styles.retryButtonInner}
-                        >
-                            <Text style={styles.retryButtonText}>Retry</Text>
-                        </LinearGradient>
-                    </TouchableOpacity>
-                </View>
-            </View>
-        );
-    }
-
-    const radiusSelector = (
-        <View style={styles.radiusContainer}>
-            <LinearGradient
-                colors={['rgba(255,255,255,0.98)', 'rgba(255,255,255,0.95)']}
-                style={styles.radiusGradient}
-            >
-                <Text style={styles.radiusLabel}>
-                    Search Radius: <Text style={styles.radiusValue}>{radiusKm.toFixed(1)} km</Text>
-                </Text>
-                <Slider
-                    value={radiusKm}
-                    onValueChange={handleRadiusChange}
-                    minimumValue={1}
-                    maximumValue={20}
-                    step={0.5}
-                    minimumTrackTintColor="#2563EB"
-                    maximumTrackTintColor="#e2e8f0"
-                    thumbTintColor="#F97316"
-                    containerStyle={styles.sliderContainer}
-                />
-            </LinearGradient>
-        </View>
-    );
-
     return (
         <GestureHandlerRootView style={styles.container}>
-            {radiusSelector}
-            <RatingModal
-                visible={showRatingModal}
-                onClose={() => setShowRatingModal(false)}
-            />
+            {/* Header */}
+            <View style={styles.headerContainer}>
+                <LinearGradient
+                    colors={[COLORS.primary, COLORS.accent]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.header}
+                >
+                    <TouchableOpacity
+                        style={styles.backButton}
+                        onPress={() => router.back()}
+                        activeOpacity={0.8}
+                    >
+                        <Ionicons name="arrow-back" size={24} color={COLORS.white} />
+                    </TouchableOpacity>
+
+                    <View style={styles.headerTitleContainer}>
+                        <Text type="subtitle" style={styles.headerTitle}>
+                            {currentRequest?.category?.name || 'Service Request'}
+                        </Text>
+                        <Text style={styles.headerSubtitle}>
+                            {currentRequest?.problem_title || 'Finding vendors...'}
+                        </Text>
+                    </View>
+
+                    <SocketStatusIndicator showLabel={false} size="medium" style={styles.statusIndicator} />
+                </LinearGradient>
+            </View>
+
+            {/* Map */}
             <MapView
-                ref={(r) => (mapRef.current = r)}
+                ref={mapRef}
                 style={styles.map}
                 provider={PROVIDER_DEFAULT}
                 initialRegion={{
-                    ...userLocation,
-                    latitudeDelta: 0.05,
-                    longitudeDelta: 0.05,
+                    ...serviceLocation,
+                    latitudeDelta: CONSTANTS.MAP_DELTA,
+                    longitudeDelta: CONSTANTS.MAP_DELTA,
                 }}
             >
                 {Platform.OS === "web" && (
@@ -517,260 +862,431 @@ export default function LiveOffersScreen() {
                         maximumZ={19}
                     />
                 )}
-                {routeCoords?.length > 0 && (
+                {routeCoords.length > 0 && (
                     <Polyline
                         coordinates={routeCoords}
-                        strokeColor="#2563EB"
+                        strokeColor={COLORS.primary}
                         strokeWidth={5}
                         lineDashPattern={[1]}
                     />
                 )}
-                {renderMarkers}
+                {renderMarkers()}
             </MapView>
 
-            <TouchableOpacity
-                style={styles.cancelButton}
-                onPress={handleCancelRequest}
-                activeOpacity={0.8}
-            >
-                <LinearGradient
-                    colors={['#ef4444', '#dc2626']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.cancelButtonInner}
-                >
-                    <X size={20} color="#fff" />
-                    <Text style={styles.cancelButtonText}>Cancel Request</Text>
-                </LinearGradient>
-            </TouchableOpacity>
+            {/* Vendor Tracking Info (when route is being tracked) */}
+            {acceptedProposal && vendorLocation && (
+                <View style={styles.trackingInfoCard}>
+                    <View style={styles.trackingInfoRow}>
+                        <View style={styles.trackingInfoItem}>
+                            <Ionicons name="navigate" size={18} color={COLORS.primary} />
+                            <Text style={styles.trackingInfoLabel}>Distance</Text>
+                            <Text type="bodySemiBold" style={styles.trackingInfoValue}>
+                                {formattedDistance || 'Calculating...'}
+                            </Text>
+                        </View>
+                        {isRouteLoading && (
+                            <ActivityIndicator size="small" color={COLORS.primary} style={styles.routeLoader} />
+                        )}
+                        <TouchableOpacity onPress={refreshRoute} style={styles.refreshButton}>
+                            <Ionicons name="refresh" size={18} color={COLORS.primary} />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            )}
 
+            {/* Cancel Button */}
+            {!acceptedProposal && (
+                <TouchableOpacity
+                    style={styles.cancelButton}
+                    onPress={handleCancelRequest}
+                    activeOpacity={0.8}
+                >
+                    <LinearGradient
+                        colors={[COLORS.error, '#dc2626']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.cancelButtonInner}
+                    >
+                        <X size={20} color={COLORS.white} />
+                        <Text style={styles.cancelButtonText}>Cancel Request</Text>
+                    </LinearGradient>
+                </TouchableOpacity>
+            )}
+
+            {/* Bottom Sheet */}
             <BottomSheet
-                ref={(r) => (bottomSheetRef.current = r)}
+                ref={bottomSheetRef}
                 index={1}
-                snapPoints={acceptedOffer ? ["25%", "40%"] : ["25%", "60%"]}
+                snapPoints={acceptedProposal ? SNAP_POINTS_ACCEPTED : SNAP_POINTS}
                 enablePanDownToClose={false}
                 backgroundStyle={styles.bottomSheetBackground}
                 handleIndicatorStyle={styles.bottomSheetHandle}
             >
-                <BottomSheetScrollView contentContainerStyle={styles.bottomSheetContent}>
-                    {acceptedOffer ? (
-                        <View>
-                            <View style={styles.sheetTitleContainer}>
-                                <LinearGradient
-                                    colors={['#2563EB', '#F97316']}
-                                    start={{ x: 0, y: 0 }}
-                                    end={{ x: 1, y: 0 }}
-                                    style={styles.sheetTitleGradient}
-                                >
-                                    <Text style={styles.sheetTitle}>Vendor on the way</Text>
-                                </LinearGradient>
-                            </View>
-                            <VendorOfferCard offer={acceptedOffer} isAccepted />
-                            <View style={styles.statusContainer}>
-                                {!vendorArrived ? (
-                                    <>
-                                        <LinearGradient
-                                            colors={['#2563EB', '#F97316']}
-                                            start={{ x: 0, y: 0 }}
-                                            end={{ x: 1, y: 1 }}
-                                            style={styles.loadingIndicator}
-                                        >
-                                            <ActivityIndicator size="small" color="#fff" />
-                                        </LinearGradient>
-                                        <View style={{ flex: 1 }}>
-                                            <Text style={styles.statusText}>
-                                                {acceptedOffer.name} is heading to your location...
-                                            </Text>
-                                            {acceptedOffer.distance !== undefined && (
-                                                <Text style={styles.statusTextSmall}>
-                                                    {acceptedOffer.distance} km away • ETA {acceptedOffer.eta} min
-                                                </Text>
-                                            )}
-                                        </View>
-                                    </>
-                                ) : (
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={[styles.statusText, { color: "#22c55e" }]}>
-                                            ✓ {acceptedOffer.name} has arrived!
-                                        </Text>
-                                        <TouchableOpacity
-                                            style={styles.arrivedButton}
-                                            onPress={() => setShowRatingModal(true)}
-                                            activeOpacity={0.8}
-                                        >
-                                            <LinearGradient
-                                                colors={['#22c55e', '#16a34a']}
-                                                start={{ x: 0, y: 0 }}
-                                                end={{ x: 1, y: 0 }}
-                                                style={styles.arrivedButtonInner}
-                                            >
-                                                <Text style={styles.arrivedButtonText}>Mark as Complete</Text>
-                                            </LinearGradient>
-                                        </TouchableOpacity>
-                                    </View>
-                                )}
-                            </View>
-                        </View>
-                    ) : (
-                        <View>
-                            <View style={styles.sheetTitleContainer}>
-                                <LinearGradient
-                                    colors={['#2563EB', '#F97316']}
-                                    start={{ x: 0, y: 0 }}
-                                    end={{ x: 1, y: 0 }}
-                                    style={styles.sheetTitleGradient}
-                                >
-                                    <Text style={styles.sheetTitle}>
-                                        {offers.length === 0
-                                            ? "Waiting for offers..."
-                                            : `${offers.length} Offers Received`}
-                                    </Text>
-                                </LinearGradient>
-                            </View>
+                <BottomSheetView style={styles.bottomSheetContent}>
+                    {/* Title */}
+                    <View style={styles.sheetTitleContainer}>
+                        <LinearGradient
+                            colors={[COLORS.primary, COLORS.accent]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={styles.sheetTitleGradient}
+                        >
+                            <Text type="subtitle" style={styles.sheetTitle}>
+                                {acceptedProposal
+                                    ? vendorHasArrived
+                                        ? 'Vendor Arrived!'
+                                        : 'Vendor on the way'
+                                    : activeProposals.length === 0
+                                        ? 'Waiting for proposals...'
+                                        : `${activeProposals.length} Proposal${activeProposals.length > 1 ? 's' : ''} Received`
+                                }
+                            </Text>
+                        </LinearGradient>
+                    </View>
 
-                            {offers.length === 0 ? (
-                                <View style={styles.emptyState}>
-                                    <LinearGradient
-                                        colors={['#2563EB', '#F97316']}
-                                        start={{ x: 0, y: 0 }}
-                                        end={{ x: 1, y: 1 }}
-                                        style={styles.emptyGradient}
-                                    >
-                                        <ActivityIndicator size="large" color="#fff" />
-                                    </LinearGradient>
-                                    <Text style={styles.emptyText}>
-                                        Nearby vendors are reviewing your request
+                    {/* Content */}
+                    {acceptedProposal ? (
+                        // Accepted state
+                        <View style={styles.acceptedContainer}>
+                            <ProposalCard
+                                proposal={acceptedProposal}
+                                onAccept={() => { }}
+                                onDecline={() => { }}
+                                isAccepting={false}
+                                isDeclining={false}
+                            />
+
+                            {/* Vendor Contact Info */}
+                            {acceptedProposal.vendor?.phone && (
+                                <TouchableOpacity
+                                    style={styles.contactCard}
+                                    onPress={() => Linking.openURL(`tel:${acceptedProposal.vendor?.phone}`)}
+                                    activeOpacity={0.8}
+                                >
+                                    <Ionicons name="call" size={20} color={COLORS.success} />
+                                    <Text style={styles.contactText}>
+                                        Call Vendor: {acceptedProposal.vendor.phone}
                                     </Text>
+                                </TouchableOpacity>
+                            )}
+
+                            {/* Vendor Arrival Badge (100m proximity) */}
+                            {vendorHasArrived && (
+                                <View style={styles.arrivalBadge}>
+                                    <Ionicons name="location" size={16} color={COLORS.white} />
+                                    <Text style={styles.arrivalText}>Vendor Arrived!</Text>
+                                </View>
+                            )}
+
+                            {/* Live Tracking Status */}
+                            {vendorLocation ? (
+                                <View style={styles.trackingInfo}>
+                                    <LinearGradient
+                                        colors={[COLORS.primary + '10', COLORS.accent + '10']}
+                                        start={{ x: 0, y: 0 }}
+                                        end={{ x: 1, y: 0 }}
+                                        style={styles.trackingCard}
+                                    >
+                                        <View style={styles.trackingRow}>
+                                            <View style={styles.trackingItem}>
+                                                <Ionicons name="navigate" size={20} color={COLORS.primary} />
+                                                <Text style={styles.trackingLabel}>Distance</Text>
+                                                <Text type="subtitle" style={styles.trackingValue}>
+                                                    {formattedDistance || `${acceptedProposal.vendor?.distance_km?.toFixed(1) || '0.0'} km`}
+                                                </Text>
+                                            </View>
+                                            <View style={styles.trackingDivider} />
+                                            <View style={styles.trackingItem}>
+                                                <Ionicons name="time" size={20} color={COLORS.accent} />
+                                                <Text style={styles.trackingLabel}>ETA</Text>
+                                                <Text type="subtitle" style={styles.trackingValue}>
+                                                    {acceptedProposal.eta_minutes || '~'} min
+                                                </Text>
+                                            </View>
+                                        </View>
+                                    </LinearGradient>
                                 </View>
                             ) : (
-                                <OffersList
-                                    offers={filteredOffers}
-                                    onAccept={handleAcceptOffer}
-                                    onExpire={(id) => dispatch(removeOffersByIds(id))}
-                                />
+                                <View style={styles.waitingForLocationContainer}>
+                                    <ActivityIndicator size="small" color={COLORS.primary} />
+                                    <Text style={styles.waitingForLocationText}>
+                                        Waiting for vendor location...
+                                    </Text>
+                                </View>
                             )}
                         </View>
+                    ) : activeProposals.length === 0 ? (
+                        // Waiting state or Expired state
+                        <View style={styles.emptyState}>
+                            {requestExpired ? (
+                                // Request expired - show retry button
+                                <>
+                                    <View style={styles.expiredIconContainer}>
+                                        <Ionicons name="time-outline" size={64} color={COLORS.warning} />
+                                    </View>
+                                    <Text type="body" style={styles.emptyTitle}>
+                                        Request Expired
+                                    </Text>
+                                    <Text style={styles.emptyText}>
+                                        No vendors responded in time. Would you like to try again?
+                                    </Text>
+                                    <TouchableOpacity
+                                        style={styles.retryButton}
+                                        onPress={handleRetryRequest}
+                                        disabled={isRetrying}
+                                        activeOpacity={0.8}
+                                    >
+                                        <LinearGradient
+                                            colors={[COLORS.primary, COLORS.accent]}
+                                            start={{ x: 0, y: 0 }}
+                                            end={{ x: 1, y: 0 }}
+                                            style={styles.retryGradient}
+                                        >
+                                            {isRetrying ? (
+                                                <ActivityIndicator color={COLORS.white} size="small" />
+                                            ) : (
+                                                <>
+                                                    <Ionicons name="refresh" size={20} color={COLORS.white} />
+                                                    <Text style={styles.retryText}>Retry Request</Text>
+                                                </>
+                                            )}
+                                        </LinearGradient>
+                                    </TouchableOpacity>
+                                </>
+                            ) : (
+                                // Still waiting for vendors
+                                <>
+                                    <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+                                        <LinearGradient
+                                            colors={[COLORS.primary, COLORS.accent]}
+                                            start={{ x: 0, y: 0 }}
+                                            end={{ x: 1, y: 1 }}
+                                            style={styles.emptyGradient}
+                                        >
+                                            <ActivityIndicator size="large" color={COLORS.white} />
+                                        </LinearGradient>
+                                    </Animated.View>
+                                    <Text type="body" style={styles.emptyTitle}>
+                                        Finding nearby vendors...
+                                    </Text>
+                                    <View style={styles.timerContainer}>
+                                        <Ionicons name="time" size={18} color={COLORS.gray500} />
+                                        <Text style={styles.timerText}>
+                                            {Math.floor(requestTimeLeft / 60)}:{(requestTimeLeft % 60).toString().padStart(2, '0')}
+                                        </Text>
+                                    </View>
+                                    <Text style={styles.emptyText}>
+                                        Nearby vendors are reviewing your request.
+                                    </Text>
+                                    {!isConnected && (
+                                        <View style={styles.connectionWarning}>
+                                            <Ionicons name="warning" size={16} color={COLORS.warning} />
+                                            <Text style={styles.connectionWarningText}>
+                                                Connecting to server...
+                                            </Text>
+                                        </View>
+                                    )}
+                                </>
+                            )}
+                        </View>
+                    ) : (
+                        // Proposals list
+                        <FlatList
+                            data={activeProposals}
+                            renderItem={renderProposalItem}
+                            keyExtractor={keyExtractor}
+                            getItemLayout={getItemLayout}
+                            showsVerticalScrollIndicator={false}
+                            contentContainerStyle={styles.proposalsList}
+                            removeClippedSubviews={true}
+                            maxToRenderPerBatch={5}
+                            windowSize={5}
+                            initialNumToRender={CONSTANTS.FLATLIST_INITIAL_NUM}
+                            updateCellsBatchingPeriod={CONSTANTS.FLATLIST_BATCH_PERIOD}
+                            ListEmptyComponent={
+                                <View style={styles.emptyState}>
+                                    <Text style={styles.emptyText}>No proposals yet</Text>
+                                </View>
+                            }
+                        />
                     )}
-                </BottomSheetScrollView>
+                </BottomSheetView>
             </BottomSheet>
+            {/* Rating Modal - Shows when service is completed */}
+            {completedService && (
+                <RatingModal
+                    visible={showRatingModal}
+                    onClose={handleRatingClose}
+                    onSuccess={handleRatingClose}
+                    serviceRequestId={completedService.requestId}
+                    vendorName={completedService.vendorName}
+                />
+            )}
         </GestureHandlerRootView>
     );
 }
 
+// ============================================================================
+// Styles
+// ============================================================================
+
 const styles = StyleSheet.create({
-    container: { flex: 1 },
-    map: { flex: 1 },
+    container: {
+        flex: 1,
+        backgroundColor: COLORS.gray50,
+    },
+    map: {
+        flex: 1,
+    },
     centerContainer: {
         flex: 1,
         justifyContent: "center",
         alignItems: "center",
-        backgroundColor: "#f8fafc",
-        padding: 20,
+        backgroundColor: COLORS.gray50,
+        padding: scale(20),
     },
+
+    // Header
+    headerContainer: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        zIndex: 10,
+    },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingTop: verticalScale(50),
+        paddingBottom: verticalScale(16),
+        paddingHorizontal: scale(16),
+    },
+    backButton: {
+        width: moderateScale(40),
+        height: moderateScale(40),
+        borderRadius: moderateScale(20),
+        backgroundColor: 'rgba(255,255,255,0.2)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    headerTitleContainer: {
+        flex: 1,
+        marginLeft: scale(12),
+    },
+    headerTitle: {
+        color: COLORS.white,
+        fontSize: moderateScale(18),
+        fontWeight: '700',
+    },
+    headerSubtitle: {
+        color: 'rgba(255,255,255,0.8)',
+        fontSize: moderateScale(13),
+        marginTop: verticalScale(2),
+    },
+    statusIndicator: {
+        marginLeft: scale(12),
+    },
+
+    // Loading
     loadingGradient: {
         padding: moderateScale(40),
-        borderRadius: 24,
+        borderRadius: moderateScale(24),
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 16,
-        shadowColor: '#000',
+        gap: verticalScale(16),
+        shadowColor: COLORS.black,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 8,
         elevation: 8,
     },
     loadingText: {
-        marginTop: 16,
         fontSize: moderateScale(16),
-        color: "#fff",
+        color: COLORS.white,
         fontWeight: '600',
     },
-    errorContainer: {
-        backgroundColor: '#fff',
-        padding: moderateScale(32),
-        borderRadius: 24,
-        alignItems: 'center',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
-        shadowRadius: 12,
-        elevation: 8,
-    },
-    errorText: {
-        fontSize: moderateScale(16),
-        color: "#ef4444",
-        textAlign: "center",
-        marginBottom: 20,
-        fontWeight: '600',
-    },
-    retryButton: {
-        borderRadius: 12,
-        overflow: 'hidden',
-        shadowColor: '#2563EB',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 8,
-        elevation: 4,
-    },
-    retryButtonInner: {
-        paddingHorizontal: 32,
-        paddingVertical: 14,
-    },
-    retryButtonText: {
-        color: "#fff",
-        fontSize: moderateScale(16),
-        fontWeight: "700",
-    },
+
+    // Map markers
     userMarker: {
-        width: 48,
-        height: 48,
-        borderRadius: 24,
+        width: moderateScale(48),
+        height: moderateScale(48),
+        borderRadius: moderateScale(24),
         justifyContent: "center",
         alignItems: "center",
         borderWidth: 3,
-        borderColor: "#fff",
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.3,
-        shadowRadius: 6,
-        elevation: 8,
-    },
-    vendorMarker: {
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        justifyContent: "center",
-        alignItems: "center",
-        borderWidth: 3,
-        borderColor: "#fff",
-        shadowColor: '#000',
+        borderColor: COLORS.white,
+        shadowColor: COLORS.black,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 6,
         elevation: 8,
     },
     acceptedVendorMarker: {
-        width: 52,
-        height: 52,
-        borderRadius: 26,
+        width: moderateScale(52),
+        height: moderateScale(52),
+        borderRadius: moderateScale(26),
         justifyContent: "center",
         alignItems: "center",
         borderWidth: 4,
-        borderColor: "#fff",
-        shadowColor: '#000',
+        borderColor: COLORS.white,
+        shadowColor: COLORS.black,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.4,
         shadowRadius: 8,
         elevation: 10,
     },
+
+    // Tracking info card
+    trackingInfoCard: {
+        position: 'absolute',
+        top: verticalScale(120),
+        left: scale(16),
+        right: scale(16),
+        backgroundColor: COLORS.white,
+        borderRadius: moderateScale(12),
+        padding: scale(12),
+        shadowColor: COLORS.black,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+        elevation: 4,
+    },
+    trackingInfoRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    trackingInfoItem: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: scale(8),
+    },
+    trackingInfoLabel: {
+        fontSize: moderateScale(12),
+        color: COLORS.gray500,
+    },
+    trackingInfoValue: {
+        fontSize: moderateScale(14),
+        color: COLORS.gray900,
+    },
+    routeLoader: {
+        marginHorizontal: scale(8),
+    },
+    refreshButton: {
+        padding: scale(8),
+        backgroundColor: COLORS.primary + '15',
+        borderRadius: moderateScale(8),
+    },
+
+    // Cancel button
     cancelButton: {
         position: "absolute",
-        top: moderateScale(50),
-        left: moderateScale(16),
-        right: moderateScale(16),
-        borderRadius: 16,
+        bottom: verticalScale(280),
+        left: scale(16),
+        right: scale(16),
+        borderRadius: moderateScale(12),
         overflow: 'hidden',
-        shadowColor: '#ef4444',
+        shadowColor: COLORS.error,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 8,
@@ -780,84 +1296,56 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "center",
-        paddingVertical: moderateScale(14),
-        gap: 8,
+        paddingVertical: verticalScale(14),
+        gap: scale(8),
     },
     cancelButtonText: {
-        color: "#fff",
+        color: COLORS.white,
         fontSize: moderateScale(16),
         fontWeight: "700",
     },
-    radiusContainer: {
-        position: "absolute",
-        top: moderateScale(120),
-        left: moderateScale(16),
-        right: moderateScale(16),
-        borderRadius: 16,
-        overflow: 'hidden',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.15,
-        shadowRadius: 12,
-        elevation: 8,
-        zIndex: 10,
-    },
-    radiusGradient: {
-        padding: moderateScale(16),
-        borderRadius: 16,
-    },
-    radiusLabel: {
-        fontSize: moderateScale(15),
-        fontWeight: "600",
-        marginBottom: moderateScale(12),
-        color: "#334155",
-    },
-    radiusValue: {
-        color: '#2563EB',
-        fontWeight: '700',
-        fontSize: moderateScale(16),
-    },
-    sliderContainer: {
-        height: moderateScale(40),
-    },
+
+    // Bottom sheet
     bottomSheetBackground: {
-        backgroundColor: '#fff',
-        borderTopLeftRadius: 24,
-        borderTopRightRadius: 24,
-        shadowColor: '#000',
+        backgroundColor: COLORS.white,
+        borderTopLeftRadius: moderateScale(24),
+        borderTopRightRadius: moderateScale(24),
+        shadowColor: COLORS.black,
         shadowOffset: { width: 0, height: -4 },
         shadowOpacity: 0.1,
         shadowRadius: 12,
         elevation: 16,
     },
     bottomSheetHandle: {
-        backgroundColor: '#cbd5e1',
+        backgroundColor: COLORS.gray300,
         width: moderateScale(40),
-        height: moderateScale(4),
-        borderRadius: 2,
+        height: verticalScale(4),
+        borderRadius: moderateScale(2),
     },
     bottomSheetContent: {
-        padding: moderateScale(20),
-        paddingBottom: moderateScale(40),
+        flex: 1,
+        paddingHorizontal: scale(20),
     },
     sheetTitleContainer: {
-        marginBottom: moderateScale(16),
-        borderRadius: 12,
+        marginBottom: verticalScale(16),
+        borderRadius: moderateScale(12),
         overflow: 'hidden',
     },
     sheetTitleGradient: {
-        paddingVertical: moderateScale(12),
-        paddingHorizontal: moderateScale(16),
+        paddingVertical: verticalScale(12),
+        paddingHorizontal: scale(16),
     },
     sheetTitle: {
-        fontSize: moderateScale(20),
-        fontWeight: "800",
-        color: "#fff",
+        fontSize: moderateScale(18),
+        fontWeight: "700",
+        color: COLORS.white,
         textAlign: 'center',
     },
+
+    // Empty state
     emptyState: {
         alignItems: "center",
-        paddingVertical: moderateScale(48),
+        paddingVertical: verticalScale(32),
     },
     emptyGradient: {
         width: moderateScale(80),
@@ -865,1849 +1353,402 @@ const styles = StyleSheet.create({
         borderRadius: moderateScale(40),
         justifyContent: 'center',
         alignItems: 'center',
-        marginBottom: moderateScale(20),
-        shadowColor: '#2563EB',
+        marginBottom: verticalScale(20),
+        shadowColor: COLORS.primary,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 8,
         elevation: 8,
     },
+    emptyTitle: {
+        fontSize: moderateScale(18),
+        fontWeight: '600',
+        color: COLORS.gray900,
+        marginBottom: verticalScale(8),
+    },
     emptyText: {
-        marginTop: moderateScale(16),
-        fontSize: moderateScale(15),
-        color: "#64748b",
+        fontSize: moderateScale(14),
+        color: COLORS.gray500,
         textAlign: "center",
-        fontWeight: '500',
-        paddingHorizontal: moderateScale(32),
-        lineHeight: moderateScale(22),
+        paddingHorizontal: scale(32),
+        lineHeight: moderateScale(20),
     },
-    statusContainer: {
-        flexDirection: "row",
-        alignItems: "center",
-        marginTop: moderateScale(16),
-        padding: moderateScale(16),
-        backgroundColor: "rgba(37, 99, 235, 0.05)",
-        borderRadius: 16,
-        gap: 12,
-        borderWidth: 1,
-        borderColor: 'rgba(37, 99, 235, 0.1)',
-    },
-    loadingIndicator: {
-        width: moderateScale(40),
-        height: moderateScale(40),
-        borderRadius: moderateScale(20),
-        justifyContent: 'center',
+    connectionWarning: {
+        flexDirection: 'row',
         alignItems: 'center',
-        shadowColor: '#2563EB',
+        marginTop: verticalScale(16),
+        padding: scale(12),
+        backgroundColor: COLORS.warning + '15',
+        borderRadius: moderateScale(8),
+        gap: scale(8),
+    },
+    connectionWarningText: {
+        fontSize: moderateScale(13),
+        color: COLORS.warning,
+        fontWeight: '500',
+    },
+
+    // Timer container for waiting state
+    timerContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: COLORS.gray100,
+        paddingHorizontal: scale(16),
+        paddingVertical: verticalScale(8),
+        borderRadius: moderateScale(20),
+        marginVertical: verticalScale(12),
+        gap: scale(6),
+    },
+    timerText: {
+        fontSize: moderateScale(16),
+        fontWeight: '600',
+        color: COLORS.gray700,
+    },
+
+    // Expired state
+    expiredIconContainer: {
+        marginBottom: verticalScale(16),
+    },
+
+    // Retry button
+    retryButton: {
+        marginTop: verticalScale(20),
+        borderRadius: moderateScale(12),
+        overflow: 'hidden',
+        shadowColor: COLORS.primary,
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.3,
         shadowRadius: 4,
         elevation: 4,
     },
-    statusText: {
-        fontSize: moderateScale(15),
-        color: "#2563EB",
-        fontWeight: "600",
-        lineHeight: moderateScale(20),
+    retryGradient: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: verticalScale(14),
+        paddingHorizontal: scale(24),
+        gap: scale(8),
     },
-    statusTextSmall: {
+    retryText: {
+        color: COLORS.white,
+        fontWeight: '600',
+        fontSize: moderateScale(15),
+    },
+
+    // Vendor contact card
+    contactCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: COLORS.success + '15',
+        padding: scale(16),
+        borderRadius: moderateScale(12),
+        marginTop: verticalScale(12),
+        gap: scale(10),
+    },
+    contactText: {
+        color: COLORS.success,
+        fontWeight: '600',
+        fontSize: moderateScale(15),
+    },
+
+    // Waiting for location
+    waitingForLocationContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: scale(16),
+        backgroundColor: COLORS.gray100,
+        borderRadius: moderateScale(12),
+        marginTop: verticalScale(16),
+        gap: scale(10),
+    },
+    waitingForLocationText: {
+        fontSize: moderateScale(14),
+        color: COLORS.gray600,
+    },
+
+    // Proposals list
+    proposalsList: {
+        paddingBottom: verticalScale(20),
+    },
+
+    // Proposal card
+    proposalCard: {
+        backgroundColor: COLORS.white,
+        borderRadius: moderateScale(16),
+        marginBottom: verticalScale(16),
+        shadowColor: COLORS.black,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.08,
+        shadowRadius: 12,
+        elevation: 4,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: COLORS.gray100,
+    },
+    progressBarContainer: {
+        height: verticalScale(4),
+        backgroundColor: COLORS.gray100,
+    },
+    progressBar: {
+        height: '100%',
+    },
+    proposalHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        padding: scale(16),
+        paddingBottom: verticalScale(12),
+    },
+    vendorInfo: {
+        flexDirection: 'row',
+        flex: 1,
+    },
+    avatarContainer: {
+        position: 'relative',
+    },
+    avatar: {
+        width: moderateScale(50),
+        height: moderateScale(50),
+        borderRadius: moderateScale(25),
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: COLORS.primary + '20',
+    },
+    avatarText: {
+        fontSize: moderateScale(20),
+        fontWeight: '700',
+        color: COLORS.primary,
+    },
+    avatarTextWhite: {
+        fontSize: moderateScale(20),
+        fontWeight: '700',
+        color: COLORS.white,
+    },
+    verifiedBadge: {
+        position: 'absolute',
+        bottom: 0,
+        right: 0,
+        backgroundColor: COLORS.success,
+        width: moderateScale(18),
+        height: moderateScale(18),
+        borderRadius: moderateScale(9),
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 2,
+        borderColor: COLORS.white,
+    },
+    vendorDetails: {
+        marginLeft: scale(12),
+        flex: 1,
+    },
+    vendorName: {
+        fontSize: moderateScale(16),
+        fontWeight: '700',
+        color: COLORS.gray900,
+        marginBottom: verticalScale(4),
+    },
+    ratingRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: scale(4),
+    },
+    ratingText: {
         fontSize: moderateScale(13),
-        color: "#64748b",
-        marginTop: 4,
+        fontWeight: '600',
+        color: COLORS.gray800,
+    },
+    reviewsText: {
+        fontSize: moderateScale(12),
+        color: COLORS.gray500,
+    },
+    timerBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: COLORS.success,
+        paddingHorizontal: scale(10),
+        paddingVertical: verticalScale(5),
+        borderRadius: moderateScale(16),
+        gap: scale(4),
+    },
+    timerBadgeUrgent: {
+        backgroundColor: COLORS.error,
+    },
+    proposalTimerText: {
+        fontSize: moderateScale(12),
+        fontWeight: '700',
+        color: COLORS.white,
+    },
+    statusBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: scale(10),
+        paddingVertical: verticalScale(5),
+        borderRadius: moderateScale(16),
+        gap: scale(4),
+    },
+    statusText: {
+        fontSize: moderateScale(12),
+        fontWeight: '600',
+    },
+    messageContainer: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        paddingHorizontal: scale(16),
+        paddingBottom: verticalScale(12),
+        gap: scale(8),
+    },
+    messageText: {
+        flex: 1,
+        fontSize: moderateScale(13),
+        color: COLORS.gray600,
+        fontStyle: 'italic',
+        lineHeight: moderateScale(18),
+    },
+    metricsContainer: {
+        flexDirection: 'row',
+        paddingHorizontal: scale(16),
+        paddingVertical: verticalScale(12),
+        backgroundColor: COLORS.gray50,
+    },
+    metricBox: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: scale(6),
+    },
+    metricDivider: {
+        width: 1,
+        backgroundColor: COLORS.gray200,
+        marginHorizontal: scale(6),
+    },
+    metricContent: {
+        flex: 1,
+    },
+    metricLabel: {
+        fontSize: moderateScale(9),
+        color: COLORS.gray500,
         fontWeight: '500',
     },
-    arrivedButton: {
-        borderRadius: 12,
+    metricValue: {
+        fontSize: moderateScale(11),
+        fontWeight: '700',
+        color: COLORS.gray900,
+        marginTop: verticalScale(1),
+    },
+    priceValue: {
+        fontSize: moderateScale(11),
+        fontWeight: '700',
+        color: COLORS.success,
+        marginTop: verticalScale(1),
+    },
+    actionContainer: {
+        flexDirection: 'row',
+        padding: scale(16),
+        paddingTop: verticalScale(12),
+        gap: scale(12),
+    },
+    declineButton: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: verticalScale(12),
+        borderRadius: moderateScale(10),
+        borderWidth: 1.5,
+        borderColor: COLORS.error,
+        gap: scale(6),
+    },
+    declineText: {
+        fontSize: moderateScale(14),
+        fontWeight: '600',
+        color: COLORS.error,
+    },
+    acceptButton: {
+        flex: 2,
+        borderRadius: moderateScale(10),
         overflow: 'hidden',
-        marginTop: moderateScale(12),
-        shadowColor: '#22c55e',
-        shadowOffset: { width: 0, height: 4 },
+        shadowColor: COLORS.success,
+        shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.3,
-        shadowRadius: 8,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    buttonDisabled: {
+        opacity: 0.6,
+    },
+    acceptGradient: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: verticalScale(12),
+        gap: scale(6),
+    },
+    acceptText: {
+        fontSize: moderateScale(14),
+        fontWeight: '700',
+        color: COLORS.white,
+    },
+
+    // Accepted state
+    acceptedContainer: {
+        flex: 1,
+    },
+    trackingInfo: {
+        marginTop: verticalScale(16),
+    },
+    trackingCard: {
+        borderRadius: moderateScale(16),
+        padding: scale(16),
+        borderWidth: 1,
+        borderColor: COLORS.primary + '20',
+    },
+    trackingRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        alignItems: 'center',
+    },
+    trackingItem: {
+        alignItems: 'center',
+        flex: 1,
+    },
+    trackingDivider: {
+        width: 1,
+        height: verticalScale(40),
+        backgroundColor: COLORS.gray200,
+    },
+    trackingLabel: {
+        fontSize: moderateScale(12),
+        color: COLORS.gray500,
+        marginTop: verticalScale(4),
+    },
+    trackingValue: {
+        fontSize: moderateScale(18),
+        fontWeight: '700',
+        color: COLORS.gray900,
+        marginTop: verticalScale(2),
+    },
+
+    // Vendor arrival badge
+    arrivalBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: COLORS.success,
+        paddingVertical: verticalScale(8),
+        paddingHorizontal: scale(16),
+        borderRadius: moderateScale(20),
+        marginTop: verticalScale(12),
+        gap: scale(6),
+        shadowColor: COLORS.success,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3,
+        shadowRadius: 4,
         elevation: 4,
     },
-    arrivedButtonInner: {
-        paddingVertical: moderateScale(14),
-        alignItems: "center",
-        justifyContent: 'center',
-    },
-    arrivedButtonText: {
-        color: "#fff",
-        fontSize: moderateScale(16),
-        fontWeight: "700",
+    arrivalText: {
+        fontSize: moderateScale(14),
+        fontWeight: '600',
+        color: COLORS.white,
     },
 });
-
-
-
-
-// // LiveOffersScreen.tsx - PRODUCTION GRADE WITH ENHANCED UI
-// import React, {
-//     useCallback,
-//     useEffect,
-//     useMemo,
-//     useRef,
-//     useState,
-// } from "react";
-// import {
-//     View,
-//     Text,
-//     StyleSheet,
-//     TouchableOpacity,
-//     ActivityIndicator,
-//     Platform,
-// } from "react-native";
-// import MapView, {
-//     Marker,
-//     PROVIDER_DEFAULT,
-//     UrlTile,
-//     Polyline,
-// } from "react-native-maps";
-// import * as Location from "expo-location";
-// import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-// import { GestureHandlerRootView } from "react-native-gesture-handler";
-// import { useRouter } from "expo-router";
-// import { useDispatch, useSelector } from "react-redux";
-// import { MapPin, X, User } from "lucide-react-native";
-// import { LinearGradient } from "expo-linear-gradient";
-// import { moderateScale } from "react-native-size-matters";
-
-// import {
-//     startReceivingOffers,
-//     addOffer,
-//     acceptOffer,
-//     cancelRequest,
-//     updateVendorLocation,
-//     removeOffersByIds,
-//     VendorOffer,
-//     Coordinate,
-//     removeOutOfRangeOffers,
-// } from "../../../src/store/slices/offersSlice";
-// import { RootState } from "../../../src/store";
-// import { useBackHandlerExit } from "../../../src/hooks/useBackHandlerExit";
-// import {
-//     generateRandomOffer,
-//     simulateVendorMovement,
-// } from "../../../src/utils/mockOffers";
-// import { VendorOfferCard } from "../../../src/components/customer/VendorOfferCard";
-// import RatingModal from "../../../src/components/common/RatingModal";
-// import { OffersList } from "../VendorOfferList";
-// import { Slider } from "@miblanchard/react-native-slider";
-// import { setupPushNotifications, sendLocalNotification, sendOfferNotification, clearAllOfferNotifications } from "../../../src/utils/notifications";
-// import debounce from "lodash.debounce";
-
-// type Coordinates = { latitude: number; longitude: number };
-
-// interface LocalVendorState {
-//     currentLocation: Coordinate;
-//     lastDistanceReportedAt: number;
-//     distanceMoved: number;
-// }
-
-// const BATCH_SIZE = 3;
-// const TIMER_DURATION = 20;
-// const GENERATE_INTERVAL_MS = 4000;
-// const MOVEMENT_INTERVAL_MS = 2000;
-// const ARRIVAL_THRESHOLD_METERS = 20;
-// const MOVEMENT_SPEED = 0.0002;
-// const ROUTE_UPDATE_THRESHOLD_METERS = 50;
-
-// export default function LiveOffersScreen() {
-//     const router = useRouter();
-//     const dispatch = useDispatch();
-//     const mapRef = useRef<MapView | null>(null);
-//     const bottomSheetRef = useRef<BottomSheet | null>(null);
-
-//     const { offers, acceptedOffer, isReceivingOffers } = useSelector(
-//         (s: RootState) => s.offers
-//     );
-
-//     const [userLocation, setUserLocation] = useState<Coordinates | null>(null);
-//     const [locationLoading, setLocationLoading] = useState(true);
-//     const [locationError, setLocationError] = useState<string | null>(null);
-//     const [routeCoords, setRouteCoords] = useState<Coordinates[]>([]);
-//     const [vendorArrived, setVendorArrived] = useState(false);
-//     const [showRatingModal, setShowRatingModal] = useState(false);
-//     const [distanceToUser, setDistanceToUser] = useState<number | null>(null);
-//     const [vendorLocalState, setVendorLocalState] = useState<LocalVendorState | null>(null);
-//     const [radiusKm, setRadiusKm] = useState<number>(5);
-
-//     useBackHandlerExit();
-
-//     const generateIntervalRef = useRef<NodeJS.Timeout | null>(null);
-//     const movementIntervalRef = useRef<NodeJS.Timeout | null>(null);
-//     const routeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-//     const offersLengthRef = useRef(offers.length);
-//     const lastRouteUpdatePositionRef = useRef<Coordinates | null>(null);
-
-//     const handleRadiusChange = useCallback((value: number | number[]) => {
-//         if (Array.isArray(value)) value = value[0];
-//         const clamped = Math.max(1, Math.min(value, 20));
-//         setRadiusKm(clamped);
-//     }, []);
-
-//     const getOutOfRangeIds = useCallback(
-//         (offers: VendorOffer[], radiusKm: number) => offers.filter(o => o.distance > radiusKm).map(o => o.id),
-//         []
-//     );
-
-//     const debouncedRemove = useMemo(
-//         () =>
-//             debounce((ids: string[]) => {
-//                 if (ids.length) dispatch(removeOutOfRangeOffers(ids));
-//             }, 400),
-//         [dispatch]
-//     );
-
-//     const getDistanceInMeters = useCallback((a: Coordinates, b: Coordinates): number => {
-//         const R = 6371e3;
-//         const toRad = (v: number) => (v * Math.PI) / 180;
-//         const dLat = toRad(b.latitude - a.latitude);
-//         const dLon = toRad(b.longitude - a.longitude);
-//         const lat1 = toRad(a.latitude);
-//         const lat2 = toRad(b.latitude);
-//         const aa =
-//             Math.sin(dLat / 2) ** 2 +
-//             Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-//         const c = 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1 - aa));
-//         return R * c;
-//     }, []);
-
-//     useEffect(() => {
-//         setupPushNotifications();
-//     }, []);
-
-//     const getUserLocation = useCallback(async () => {
-//         try {
-//             const { status } = await Location.requestForegroundPermissionsAsync();
-//             if (status !== "granted") throw new Error("Location permission denied");
-
-//             const loc = await Location.getCurrentPositionAsync({
-//                 accuracy: Location.Accuracy.High,
-//             });
-
-//             const coords = {
-//                 latitude: loc.coords.latitude,
-//                 longitude: loc.coords.longitude,
-//             };
-//             setUserLocation(coords);
-//             dispatch(startReceivingOffers());
-
-//             mapRef.current?.animateToRegion({
-//                 ...coords,
-//                 latitudeDelta: 0.05,
-//                 longitudeDelta: 0.05,
-//             }, 1000);
-//         } catch (err: any) {
-//             setLocationError(err?.message || "Failed to get location");
-//         } finally {
-//             setLocationLoading(false);
-//         }
-//     }, [dispatch]);
-
-//     useEffect(() => {
-//         getUserLocation();
-//     }, [getUserLocation]);
-
-//     const fetchRoute = useCallback(async (start: Coordinates, end: Coordinates): Promise<Coordinates[]> => {
-//         try {
-//             const url = `https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson`;
-//             const res = await fetch(url);
-//             if (!res.ok) return [start, end];
-//             const data = await res.json();
-//             if (!data?.routes?.length) return [start, end];
-//             return data.routes[0].geometry.coordinates.map(
-//                 ([lng, lat]: [number, number]) => ({
-//                     latitude: lat,
-//                     longitude: lng,
-//                 })
-//             );
-//         } catch (e) {
-//             console.warn("fetchRoute error:", e);
-//             return [start, end];
-//         }
-//     }, []);
-
-//     const debouncedFetchRoute = useCallback(
-//         (start: Coordinates, end: Coordinates, delay = 700) =>
-//             new Promise<Coordinates[]>((resolve) => {
-//                 if (routeTimeoutRef.current) clearTimeout(routeTimeoutRef.current);
-//                 routeTimeoutRef.current = setTimeout(async () => {
-//                     const r = await fetchRoute(start, end);
-//                     resolve(r);
-//                 }, delay);
-//             }),
-//         [fetchRoute]
-//     );
-
-//     const handleAcceptOffer = useCallback(
-//         async (offer: VendorOffer) => {
-//             dispatch(acceptOffer(offer));
-//             setVendorLocalState({
-//                 currentLocation: offer.coordinates,
-//                 lastDistanceReportedAt: 0,
-//                 distanceMoved: 0,
-//             });
-//             if (userLocation) {
-//                 const route = await debouncedFetchRoute(offer.coordinates, userLocation);
-//                 setRouteCoords(route);
-//                 lastRouteUpdatePositionRef.current = offer.coordinates;
-
-//                 if (route?.length > 2) {
-//                     mapRef.current?.fitToCoordinates(route, {
-//                         edgePadding: { top: 100, right: 100, bottom: 400, left: 100 },
-//                         animated: true,
-//                     });
-//                 }
-//             }
-//             bottomSheetRef.current?.snapToIndex(0);
-//         },
-//         [dispatch, userLocation, debouncedFetchRoute]
-//     );
-
-//     const updateRouteIfNeeded = useCallback(
-//         async (newVendorLocation: Coordinates) => {
-//             if (!userLocation || !lastRouteUpdatePositionRef.current) return;
-
-//             const distanceFromLastUpdate = getDistanceInMeters(
-//                 lastRouteUpdatePositionRef.current,
-//                 newVendorLocation
-//             );
-
-//             if (distanceFromLastUpdate >= ROUTE_UPDATE_THRESHOLD_METERS) {
-//                 const newRoute = await fetchRoute(newVendorLocation, userLocation);
-//                 setRouteCoords(newRoute);
-//                 lastRouteUpdatePositionRef.current = newVendorLocation;
-//             }
-//         },
-//         [userLocation, getDistanceInMeters, fetchRoute]
-//     );
-
-//     useEffect(() => {
-//         offersLengthRef.current = offers.length;
-//     }, [offers.length]);
-
-//     useEffect(() => {
-//         return () => {
-//             clearAllOfferNotifications();
-//         };
-//     }, []);
-
-//     useEffect(() => {
-//         if (!userLocation || !isReceivingOffers || acceptedOffer) {
-//             if (generateIntervalRef.current) {
-//                 clearInterval(generateIntervalRef.current);
-//                 generateIntervalRef.current = null;
-//             }
-//             return;
-//         }
-
-//         generateIntervalRef.current = setInterval(() => {
-//             if (offersLengthRef.current < BATCH_SIZE) {
-//                 const offer = generateRandomOffer(userLocation, radiusKm);
-//                 const dist = getDistanceInMeters(userLocation, offer.coordinates) / 1000;
-//                 if (dist <= radiusKm) {
-//                     dispatch(addOffer({
-//                         ...offer,
-//                         createdAt: Date.now(),
-//                         expiryTime: Date.now() + TIMER_DURATION * 1000,
-//                     }));
-//                     sendOfferNotification(offer);
-//                 }
-//             }
-//         }, GENERATE_INTERVAL_MS);
-
-//         return () => {
-//             if (generateIntervalRef.current) {
-//                 clearInterval(generateIntervalRef.current);
-//                 generateIntervalRef.current = null;
-//             }
-//         };
-//     }, [userLocation, isReceivingOffers, acceptedOffer, dispatch, radiusKm, getDistanceInMeters]);
-
-//     useEffect(() => {
-//         if (!offers?.length) return;
-//         const outOfRangeIds = getOutOfRangeIds(offers, radiusKm);
-//         debouncedRemove(outOfRangeIds);
-//         return () => debouncedRemove.cancel();
-//     }, [offers, radiusKm, getOutOfRangeIds, debouncedRemove]);
-
-//     const filteredOffers = useMemo(() => {
-//         if (!userLocation) return [];
-//         return offers.filter(offer => {
-//             const distance = getDistanceInMeters(userLocation, offer.coordinates);
-//             return distance <= radiusKm * 1000;
-//         });
-//     }, [offers, userLocation, radiusKm, getDistanceInMeters]);
-
-//     useEffect(() => {
-//         if (!acceptedOffer || !userLocation || !vendorLocalState || vendorArrived) {
-//             return;
-//         }
-
-//         setVendorArrived(false);
-
-//         const movementInterval = setInterval(() => {
-//             setVendorLocalState((prevState) => {
-//                 if (!prevState) return null;
-
-//                 const newLocation = simulateVendorMovement(
-//                     prevState.currentLocation,
-//                     userLocation,
-//                     0.0002
-//                 );
-
-//                 const distanceMoved = getDistanceInMeters(prevState.currentLocation, newLocation);
-//                 const totalDistanceMoved = prevState.distanceMoved + distanceMoved;
-//                 const distanceToCustomer = getDistanceInMeters(newLocation, userLocation);
-
-//                 if (distanceToCustomer === 0) {
-//                     console.log("✅ Vendor arrived at destination");
-//                     sendLocalNotification("Vendor Arrived", `${acceptedOffer.name} has reached your location!`);
-//                     setVendorArrived(true);
-//                     clearInterval(movementInterval);
-//                 }
-
-//                 if (totalDistanceMoved >= 50 || distanceToCustomer < 100) {
-//                     console.log(`✓ DISPATCH at ${totalDistanceMoved.toFixed(0)}m - Distance to user: ${distanceToCustomer.toFixed(0)}m`);
-//                     dispatch(
-//                         updateVendorLocation({
-//                             id: acceptedOffer.id,
-//                             coordinates: newLocation,
-//                             distance: Number((distanceToCustomer / 1000).toFixed(2)),
-//                             eta: Math.max(Math.round(distanceToCustomer / 250), 1),
-//                         })
-//                     );
-
-//                     return {
-//                         currentLocation: newLocation,
-//                         lastDistanceReportedAt: Date.now(),
-//                         distanceMoved: 0,
-//                     };
-//                 }
-//                 updateRouteIfNeeded(newLocation);
-
-//                 console.log(`~ Moving: ${totalDistanceMoved.toFixed(0)}m total, ${distanceToCustomer.toFixed(0)}m to user`);
-
-//                 return {
-//                     currentLocation: newLocation,
-//                     lastDistanceReportedAt: prevState.lastDistanceReportedAt,
-//                     distanceMoved: totalDistanceMoved,
-//                 };
-//             });
-//         }, 2000);
-//         return () => clearInterval(movementInterval);
-//     }, [acceptedOffer, userLocation, dispatch, getDistanceInMeters, updateRouteIfNeeded, vendorLocalState, vendorArrived]);
-
-//     const handleCancelRequest = useCallback(() => {
-//         dispatch(cancelRequest());
-//         router.back();
-//     }, [dispatch, router]);
-
-//     const renderMarkers = useMemo(() => {
-//         if (!userLocation) return null;
-//         const markers: React.ReactNode[] = [];
-
-//         markers.push(
-//             <Marker key="user" coordinate={userLocation} title="Your Location">
-//                 <LinearGradient
-//                     colors={['#2563EB', '#F97316']}
-//                     start={{ x: 0, y: 0 }}
-//                     end={{ x: 1, y: 1 }}
-//                     style={styles.userMarker}
-//                 >
-//                     <MapPin size={24} color="#fff" />
-//                 </LinearGradient>
-//             </Marker>
-//         );
-
-//         if (acceptedOffer) {
-//             markers.push(
-//                 <Marker
-//                     key={acceptedOffer.id}
-//                     coordinate={acceptedOffer.coordinates}
-//                     title={`${acceptedOffer.name} (Accepted)`}
-//                 >
-//                     <LinearGradient
-//                         colors={['#F97316', '#2563EB']}
-//                         start={{ x: 0, y: 0 }}
-//                         end={{ x: 1, y: 1 }}
-//                         style={styles.acceptedVendorMarker}
-//                     >
-//                         <User size={24} color="#fff" />
-//                     </LinearGradient>
-//                 </Marker>
-//             );
-//         } else {
-//             filteredOffers.forEach((o) => {
-//                 markers.push(
-//                     <Marker key={o.id} coordinate={o.coordinates} title={o.name}>
-//                         <LinearGradient
-//                             colors={['#10b981', '#059669']}
-//                             start={{ x: 0, y: 0 }}
-//                             end={{ x: 1, y: 1 }}
-//                             style={styles.vendorMarker}
-//                         >
-//                             <User size={20} color="#fff" />
-//                         </LinearGradient>
-//                     </Marker>
-//                 );
-//             });
-//         }
-
-//         return markers;
-//     }, [userLocation, filteredOffers, acceptedOffer]);
-
-//     useEffect(() => {
-//         if (!isReceivingOffers) {
-//             if (generateIntervalRef.current) {
-//                 clearInterval(generateIntervalRef.current);
-//                 generateIntervalRef.current = null;
-//             }
-//             if (movementIntervalRef.current) {
-//                 clearInterval(movementIntervalRef.current);
-//                 movementIntervalRef.current = null;
-//             }
-//         }
-//     }, [isReceivingOffers]);
-
-//     if (locationLoading) {
-//         return (
-//             <View style={styles.centerContainer}>
-//                 <LinearGradient
-//                     colors={['#2563EB', '#F97316']}
-//                     start={{ x: 0, y: 0 }}
-//                     end={{ x: 1, y: 1 }}
-//                     style={styles.loadingGradient}
-//                 >
-//                     <ActivityIndicator size="large" color="#fff" />
-//                     <Text style={styles.loadingText}>Getting your location...</Text>
-//                 </LinearGradient>
-//             </View>
-//         );
-//     }
-
-//     if (locationError || !userLocation) {
-//         return (
-//             <View style={styles.centerContainer}>
-//                 <View style={styles.errorContainer}>
-//                     <Text style={styles.errorText}>
-//                         {locationError || "Location unavailable"}
-//                     </Text>
-//                     <TouchableOpacity
-//                         style={styles.retryButton}
-//                         onPress={getUserLocation}
-//                         activeOpacity={0.8}
-//                     >
-//                         <LinearGradient
-//                             colors={['#2563EB', '#F97316']}
-//                             start={{ x: 0, y: 0 }}
-//                             end={{ x: 1, y: 0 }}
-//                             style={styles.retryButtonInner}
-//                         >
-//                             <Text style={styles.retryButtonText}>Retry</Text>
-//                         </LinearGradient>
-//                     </TouchableOpacity>
-//                 </View>
-//             </View>
-//         );
-//     }
-
-//     const radiusSelector = (
-//         <View style={styles.radiusContainer}>
-//             <LinearGradient
-//                 colors={['rgba(255,255,255,0.98)', 'rgba(255,255,255,0.95)']}
-//                 style={styles.radiusGradient}
-//             >
-//                 <Text style={styles.radiusLabel}>
-//                     Search Radius: <Text style={styles.radiusValue}>{radiusKm.toFixed(1)} km</Text>
-//                 </Text>
-//                 <Slider
-//                     value={radiusKm}
-//                     onValueChange={handleRadiusChange}
-//                     minimumValue={1}
-//                     maximumValue={20}
-//                     step={0.5}
-//                     minimumTrackTintColor="#2563EB"
-//                     maximumTrackTintColor="#e2e8f0"
-//                     thumbTintColor="#F97316"
-//                     containerStyle={styles.sliderContainer}
-//                 />
-//             </LinearGradient>
-//         </View>
-//     );
-
-//     return (
-//         <GestureHandlerRootView style={styles.container}>
-//             {radiusSelector}
-//             <RatingModal
-//                 visible={showRatingModal}
-//                 onClose={() => setShowRatingModal(false)}
-//             />
-//             <MapView
-//                 ref={(r) => (mapRef.current = r)}
-//                 style={styles.map}
-//                 provider={PROVIDER_DEFAULT}
-//                 initialRegion={{
-//                     ...userLocation,
-//                     latitudeDelta: 0.05,
-//                     longitudeDelta: 0.05,
-//                 }}
-//             >
-//                 {Platform.OS === "web" && (
-//                     <UrlTile
-//                         urlTemplate="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-//                         maximumZ={19}
-//                     />
-//                 )}
-//                 {routeCoords?.length > 0 && (
-//                     <Polyline
-//                         coordinates={routeCoords}
-//                         strokeColor="#2563EB"
-//                         strokeWidth={5}
-//                         lineDashPattern={[1]}
-//                     />
-//                 )}
-//                 {renderMarkers}
-//             </MapView>
-
-//             <TouchableOpacity
-//                 style={styles.cancelButton}
-//                 onPress={handleCancelRequest}
-//                 activeOpacity={0.8}
-//             >
-//                 <LinearGradient
-//                     colors={['#ef4444', '#dc2626']}
-//                     start={{ x: 0, y: 0 }}
-//                     end={{ x: 1, y: 0 }}
-//                     style={styles.cancelButtonInner}
-//                 >
-//                     <X size={20} color="#fff" />
-//                     <Text style={styles.cancelButtonText}>Cancel Request</Text>
-//                 </LinearGradient>
-//             </TouchableOpacity>
-
-//             <BottomSheet
-//                 ref={(r) => (bottomSheetRef.current = r)}
-//                 index={1}
-//                 snapPoints={acceptedOffer ? ["25%", "40%"] : ["25%", "60%"]}
-//                 enablePanDownToClose={false}
-//                 backgroundStyle={styles.bottomSheetBackground}
-//                 handleIndicatorStyle={styles.bottomSheetHandle}
-//             >
-//                 <BottomSheetScrollView contentContainerStyle={styles.bottomSheetContent}>
-//                     {acceptedOffer ? (
-//                         <View>
-//                             <View style={styles.sheetTitleContainer}>
-//                                 <LinearGradient
-//                                     colors={['#2563EB', '#F97316']}
-//                                     start={{ x: 0, y: 0 }}
-//                                     end={{ x: 1, y: 0 }}
-//                                     style={styles.sheetTitleGradient}
-//                                 >
-//                                     <Text style={styles.sheetTitle}>Vendor on the way</Text>
-//                                 </LinearGradient>
-//                             </View>
-//                             <VendorOfferCard offer={acceptedOffer} isAccepted />
-//                             <View style={styles.statusContainer}>
-//                                 {!vendorArrived ? (
-//                                     <>
-//                                         <LinearGradient
-//                                             colors={['#2563EB', '#F97316']}
-//                                             start={{ x: 0, y: 0 }}
-//                                             end={{ x: 1, y: 1 }}
-//                                             style={styles.loadingIndicator}
-//                                         >
-//                                             <ActivityIndicator size="small" color="#fff" />
-//                                         </LinearGradient>
-//                                         <View style={{ flex: 1 }}>
-//                                             <Text style={styles.statusText}>
-//                                                 {acceptedOffer.name} is heading to your location...
-//                                             </Text>
-//                                             {acceptedOffer.distance !== undefined && (
-//                                                 <Text style={styles.statusTextSmall}>
-//                                                     {acceptedOffer.distance} km away • ETA {acceptedOffer.eta} min
-//                                                 </Text>
-//                                             )}
-//                                         </View>
-//                                     </>
-//                                 ) : (
-//                                     <View style={{ flex: 1 }}>
-//                                         <Text style={[styles.statusText, { color: "#22c55e" }]}>
-//                                             ✓ {acceptedOffer.name} has arrived!
-//                                         </Text>
-//                                         <TouchableOpacity
-//                                             style={styles.arrivedButton}
-//                                             onPress={() => setShowRatingModal(true)}
-//                                             activeOpacity={0.8}
-//                                         >
-//                                             <LinearGradient
-//                                                 colors={['#22c55e', '#16a34a']}
-//                                                 start={{ x: 0, y: 0 }}
-//                                                 end={{ x: 1, y: 0 }}
-//                                                 style={styles.arrivedButtonInner}
-//                                             >
-//                                                 <Text style={styles.arrivedButtonText}>Mark as Complete</Text>
-//                                             </LinearGradient>
-//                                         </TouchableOpacity>
-//                                     </View>
-//                                 )}
-//                             </View>
-//                         </View>
-//                     ) : (
-//                         <View>
-//                             <View style={styles.sheetTitleContainer}>
-//                                 <LinearGradient
-//                                     colors={['#2563EB', '#F97316']}
-//                                     start={{ x: 0, y: 0 }}
-//                                     end={{ x: 1, y: 0 }}
-//                                     style={styles.sheetTitleGradient}
-//                                 >
-//                                     <Text style={styles.sheetTitle}>
-//                                         {offers.length === 0
-//                                             ? "Waiting for offers..."
-//                                             : `${offers.length} Offers Received`}
-//                                     </Text>
-//                                 </LinearGradient>
-//                             </View>
-
-//                             {offers.length === 0 ? (
-//                                 <View style={styles.emptyState}>
-//                                     <LinearGradient
-//                                         colors={['#2563EB', '#F97316']}
-//                                         start={{ x: 0, y: 0 }}
-//                                         end={{ x: 1, y: 1 }}
-//                                         style={styles.emptyGradient}
-//                                     >
-//                                         <ActivityIndicator size="large" color="#fff" />
-//                                     </LinearGradient>
-//                                     <Text style={styles.emptyText}>
-//                                         Nearby vendors are reviewing your request
-//                                     </Text>
-//                                 </View>
-//                             ) : (
-//                                 <OffersList
-//                                     offers={filteredOffers}
-//                                     onAccept={handleAcceptOffer}
-//                                     onExpire={(id) => dispatch(removeOffersByIds(id))}
-//                                 />
-//                             )}
-//                         </View>
-//                     )}
-//                 </BottomSheetScrollView>
-//             </BottomSheet>
-//         </GestureHandlerRootView>
-//     );
-// }
-
-// const styles = StyleSheet.create({
-//     container: { flex: 1 },
-//     map: { flex: 1 },
-//     centerContainer: {
-//         flex: 1,
-//         justifyContent: "center",
-//         alignItems: "center",
-//         backgroundColor: "#f8fafc",
-//         padding: 20,
-//     },
-//     loadingGradient: {
-//         padding: moderateScale(40),
-//         borderRadius: 24,
-//         alignItems: 'center',
-//         justifyContent: 'center',
-//         gap: 16,
-//         shadowColor: '#000',
-//         shadowOffset: { width: 0, height: 4 },
-//         shadowOpacity: 0.3,
-//         shadowRadius: 8,
-//         elevation: 8,
-//     },
-//     loadingText: {
-//         marginTop: 16,
-//         fontSize: moderateScale(16),
-//         color: "#fff",
-//         fontWeight: '600',
-//     },
-//     errorContainer: {
-//         backgroundColor: '#fff',
-//         padding: moderateScale(32),
-//         borderRadius: 24,
-//         alignItems: 'center',
-//         shadowColor: '#000',
-//         shadowOffset: { width: 0, height: 4 },
-//         shadowOpacity: 0.1,
-//         shadowRadius: 12,
-//         elevation: 8,
-//     },
-//     errorText: {
-//         fontSize: moderateScale(16),
-//         color: "#ef4444",
-//         textAlign: "center",
-//         marginBottom: 20,
-//         fontWeight: '600',
-//     },
-//     retryButton: {
-//         borderRadius: 12,
-//         overflow: 'hidden',
-//         shadowColor: '#2563EB',
-//         shadowOffset: { width: 0, height: 4 },
-//         shadowOpacity: 0.3,
-//         shadowRadius: 8,
-//         elevation: 4,
-//     },
-//     retryButtonInner: {
-//         paddingHorizontal: 32,
-//         paddingVertical: 14,
-//     },
-//     retryButtonText: {
-//         color: "#fff",
-//         fontSize: moderateScale(16),
-//         fontWeight: "700",
-//     },
-//     userMarker: {
-//         width: 48,
-//         height: 48,
-//         borderRadius: 24,
-//         justifyContent: "center",
-//         alignItems: "center",
-//         borderWidth: 3,
-//         borderColor: "#fff",
-//         shadowColor: '#000',
-//         shadowOffset: { width: 0, height: 4 },
-//         shadowOpacity: 0.3,
-//         shadowRadius: 6,
-//         elevation: 8,
-//     },
-//     vendorMarker: {
-//         width: 40,
-//         height: 40,
-//         borderRadius: 20,
-//         justifyContent: "center",
-//         alignItems: "center",
-//         borderWidth: 3,
-//         borderColor: "#fff",
-//         shadowColor: '#000',
-//         shadowOffset: { width: 0, height: 4 },
-//         shadowOpacity: 0.3,
-//         shadowRadius: 6,
-//         elevation: 8,
-//     },
-//     acceptedVendorMarker: {
-//         width: 52,
-//         height: 52,
-//         borderRadius: 26,
-//         justifyContent: "center",
-//         alignItems: "center",
-//         borderWidth: 4,
-//         borderColor: "#fff",
-//         shadowColor: '#000',
-//         shadowOffset: { width: 0, height: 4 },
-//         shadowOpacity: 0.4,
-//         shadowRadius: 8,
-//         elevation: 10,
-//     },
-//     cancelButton: {
-//         position: "absolute",
-//         top: moderateScale(50),
-//         left: moderateScale(16),
-//         right: moderateScale(16),
-//         borderRadius: 16,
-//         overflow: 'hidden',
-//         shadowColor: '#ef4444',
-//         shadowOffset: { width: 0, height: 4 },
-//         shadowOpacity: 0.3,
-//         shadowRadius: 8,
-//         elevation: 8,
-//     },
-//     cancelButtonInner: {
-//         flexDirection: "row",
-//         alignItems: "center",
-//         justifyContent: "center",
-//         paddingVertical: moderateScale(14),
-//         gap: 8,
-//     },
-//     cancelButtonText: {
-//         color: "#fff",
-//         fontSize: moderateScale(16),
-//         fontWeight: "700",
-//     },
-//     radiusContainer: {
-//         position: "absolute",
-//         top: moderateScale(120),
-//         left: moderateScale(16),
-//         right: moderateScale(16),
-//         borderRadius: 16,
-//         overflow: 'hidden',
-//         shadowColor: '#000',
-//         shadowOffset: { width: 0, height: 4 }
-//     },
-//     radiusGradient: {
-//         paddingVertical: moderateScale(16),
-//         paddingHorizontal: moderateScale(20),
-//         borderRadius: 16,
-//         shadowColor: '#000',
-//         shadowOffset: { width: 0, height: 3 },
-//         shadowOpacity: 0.15,
-//         shadowRadius: 6,
-//         elevation: 6,
-//     },
-//     radiusLabel: {
-//         fontSize: moderateScale(14),
-//         fontWeight: '600',
-//         color: '#1e293b',
-//         marginBottom: 8,
-//     },
-//     radiusValue: {
-//         color: '#2563EB',
-//         fontWeight: '700',
-//     },
-//     sliderContainer: {
-//         marginTop: 4,
-//         height: 40,
-//         justifyContent: 'center',
-//     },
-
-//     bottomSheetBackground: {
-//         backgroundColor: '#ffffff',
-//         borderTopLeftRadius: 24,
-//         borderTopRightRadius: 24,
-//     },
-//     bottomSheetHandle: {
-//         backgroundColor: '#cbd5e1',
-//         width: 60,
-//         height: 6,
-//         borderRadius: 3,
-//         alignSelf: "center",
-//         marginVertical: 8,
-//     },
-//     bottomSheetContent: {
-//         padding: moderateScale(16),
-//         paddingBottom: moderateScale(40),
-//     },
-
-//     sheetTitleContainer: {
-//         marginBottom: 12,
-//     },
-//     sheetTitleGradient: {
-//         paddingVertical: moderateScale(10),
-//         paddingHorizontal: moderateScale(16),
-//         borderRadius: 12,
-//     },
-//     sheetTitle: {
-//         color: "#fff",
-//         fontSize: moderateScale(16),
-//         fontWeight: "700",
-//         textAlign: "center",
-//     },
-
-//     emptyState: {
-//         alignItems: "center",
-//         marginTop: moderateScale(12),
-//     },
-//     emptyGradient: {
-//         width: 80,
-//         height: 80,
-//         borderRadius: 40,
-//         alignItems: "center",
-//         justifyContent: "center",
-//         marginBottom: 12,
-//     },
-//     emptyText: {
-//         fontSize: moderateScale(14),
-//         color: "#475569",
-//         textAlign: "center",
-//         paddingHorizontal: 20,
-//         fontWeight: "500",
-//     },
-
-//     statusContainer: {
-//         flexDirection: "row",
-//         marginTop: 16,
-//         padding: 12,
-//         backgroundColor: "#f8fafc",
-//         borderRadius: 16,
-//         alignItems: "center",
-//         gap: 12,
-//         borderWidth: 1,
-//         borderColor: "#e2e8f0",
-//     },
-//     loadingIndicator: {
-//         width: 42,
-//         height: 42,
-//         borderRadius: 21,
-//         justifyContent: "center",
-//         alignItems: "center",
-//     },
-//     statusText: {
-//         fontSize: moderateScale(14),
-//         fontWeight: '600',
-//         color: "#1e293b",
-//     },
-//     statusTextSmall: {
-//         fontSize: moderateScale(12),
-//         color: "#64748b",
-//         marginTop: 4,
-//     },
-
-//     arrivedButton: {
-//         marginTop: 12,
-//         borderRadius: 12,
-//         overflow: "hidden",
-//     },
-//     arrivedButtonInner: {
-//         paddingVertical: 12,
-//         alignItems: "center",
-//         justifyContent: "center",
-//     },
-//     arrivedButtonText: {
-//         color: "#fff",
-//         fontSize: moderateScale(15),
-//         fontWeight: "700",
-//     },
-// });
-
-
-
-
-// // LiveOffersScreen.tsx - PRODUCTION GRADE WITH WORKING MOVEMENT
-// import React, {
-//     useCallback,
-//     useEffect,
-//     useMemo,
-//     useRef,
-//     useState,
-// } from "react";
-// import {
-//     View,
-//     Text,
-//     StyleSheet,
-//     TouchableOpacity,
-//     ActivityIndicator,
-//     Platform,
-// } from "react-native";
-// import MapView, {
-//     Marker,
-//     PROVIDER_DEFAULT,
-//     UrlTile,
-//     Polyline,
-// } from "react-native-maps";
-// import * as Location from "expo-location";
-// import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
-// import { GestureHandlerRootView } from "react-native-gesture-handler";
-// import { useRouter } from "expo-router";
-// import { useDispatch, useSelector } from "react-redux";
-// import { MapPin, X, User } from "lucide-react-native";
-
-// import {
-//     startReceivingOffers,
-//     addOffer,
-//     acceptOffer,
-//     cancelRequest,
-//     updateVendorLocation,
-//     removeOffersByIds,
-//     VendorOffer,
-//     Coordinate,
-//     removeOutOfRangeOffers,
-// } from "../../../src/store/slices/offersSlice";
-// import { RootState } from "../../../src/store";
-// import { useBackHandlerExit } from "../../../src/hooks/useBackHandlerExit";
-// import {
-//     generateRandomOffer,
-//     simulateVendorMovement,
-// } from "../../../src/utils/mockOffers";
-// import { VendorOfferCard } from "../../../src/components/customer/VendorOfferCard";
-// import RatingModal from "../../../src/components/common/RatingModal";
-// import { OffersList } from "../VendorOfferList";
-// import { Slider } from "@miblanchard/react-native-slider";
-// import { setupPushNotifications, sendLocalNotification, sendOfferNotification, clearAllOfferNotifications } from "../../../src/utils/notifications";
-// import debounce from "lodash.debounce";
-
-// type Coordinates = { latitude: number; longitude: number };
-
-// interface LocalVendorState {
-//     currentLocation: Coordinate;
-//     lastDistanceReportedAt: number;
-//     distanceMoved: number;
-// }
-
-// const BATCH_SIZE = 3;
-// const TIMER_DURATION = 20;
-// const GENERATE_INTERVAL_MS = 4000;
-// const MOVEMENT_INTERVAL_MS = 2000;
-// const ARRIVAL_THRESHOLD_METERS = 20;
-// const MOVEMENT_SPEED = 0.0002; // ~22 meters per update (same as your old code)
-// const ROUTE_UPDATE_THRESHOLD_METERS = 50;
-
-// export default function LiveOffersScreen() {
-//     const router = useRouter();
-//     const dispatch = useDispatch();
-//     const mapRef = useRef<MapView | null>(null);
-//     const bottomSheetRef = useRef<BottomSheet | null>(null);
-
-//     const { offers, acceptedOffer, isReceivingOffers } = useSelector(
-//         (s: RootState) => s.offers
-//     );
-
-//     const [userLocation, setUserLocation] = useState<Coordinates | null>(null);
-//     const [locationLoading, setLocationLoading] = useState(true);
-//     const [locationError, setLocationError] = useState<string | null>(null);
-//     const [routeCoords, setRouteCoords] = useState<Coordinates[]>([]);
-//     const [vendorArrived, setVendorArrived] = useState(false);
-//     const [showRatingModal, setShowRatingModal] = useState(false);
-//     const [distanceToUser, setDistanceToUser] = useState<number | null>(null);
-//     const [vendorLocalState, setVendorLocalState] = useState<LocalVendorState | null>(null);
-//     const [radiusKm, setRadiusKm] = useState<number>(5); // default 5km
-//     const radiusOptions = [5, 10, 20]; // km
-
-//     useBackHandlerExit();
-
-//     // ===== REFS FOR STABLE STATE =====
-//     const generateIntervalRef = useRef<NodeJS.Timeout | null>(null);
-//     const movementIntervalRef = useRef<NodeJS.Timeout | null>(null);
-//     const routeTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-//     const offersLengthRef = useRef(offers.length);
-//     const lastRouteUpdatePositionRef = useRef<Coordinates | null>(null);
-
-
-//     const handleRadiusChange = useCallback((value: number | number[]) => {
-//         if (Array.isArray(value)) value = value[0]; // slider returns array
-//         const clamped = Math.max(1, Math.min(value, 20)); // limit 1-20km
-//         setRadiusKm(clamped);
-//     }, []);
-
-
-//     // 🔹 Pure function: filters and returns out-of-range IDs
-//     const getOutOfRangeIds = useCallback(
-//         (offers: VendorOffer[], radiusKm: number) => offers.filter(o => o.distance > radiusKm).map(o => o.id),
-//         []
-//     );
-
-//     // 🔹 Debounced dispatcher to avoid flickering or redundant removes
-//     const debouncedRemove = useMemo(
-//         () =>
-//             debounce((ids: string[]) => {
-//                 if (ids.length) dispatch(removeOutOfRangeOffers(ids));
-//             }, 400),
-//         [dispatch]
-//     );
-
-
-//     // ===== HAVERSINE DISTANCE CALCULATION =====
-//     const getDistanceInMeters = useCallback((a: Coordinates, b: Coordinates): number => {
-//         const R = 6371e3;
-//         const toRad = (v: number) => (v * Math.PI) / 180;
-//         const dLat = toRad(b.latitude - a.latitude);
-//         const dLon = toRad(b.longitude - a.longitude);
-//         const lat1 = toRad(a.latitude);
-//         const lat2 = toRad(b.latitude);
-//         const aa =
-//             Math.sin(dLat / 2) ** 2 +
-//             Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-//         const c = 2 * Math.atan2(Math.sqrt(aa), Math.sqrt(1 - aa));
-//         return R * c;
-//     }, []);
-
-
-//     useEffect(() => {
-//         setupPushNotifications();
-//     }, []);
-//     // ===== LOCATION PERMISSION & FETCHING =====
-//     const getUserLocation = useCallback(async () => {
-//         try {
-//             const { status } = await Location.requestForegroundPermissionsAsync();
-//             if (status !== "granted") throw new Error("Location permission denied");
-
-//             const loc = await Location.getCurrentPositionAsync({
-//                 accuracy: Location.Accuracy.High,
-//             });
-
-//             const coords = {
-//                 latitude: loc.coords.latitude,
-//                 longitude: loc.coords.longitude,
-//             };
-//             setUserLocation(coords);
-//             dispatch(startReceivingOffers());
-
-//             mapRef.current?.animateToRegion({
-//                 ...coords,
-//                 latitudeDelta: 0.05,
-//                 longitudeDelta: 0.05,
-//             }, 1000);
-//         } catch (err: any) {
-//             setLocationError(err?.message || "Failed to get location");
-//         } finally {
-//             setLocationLoading(false);
-//         }
-//     }, [dispatch]);
-
-//     useEffect(() => {
-//         getUserLocation();
-//     }, [getUserLocation]);
-
-//     // ===== FETCH ROUTE FROM OSRM =====
-//     const fetchRoute = useCallback(async (start: Coordinates, end: Coordinates): Promise<Coordinates[]> => {
-//         try {
-//             const url = `https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson`;
-//             const res = await fetch(url);
-//             if (!res.ok) return [start, end];
-//             const data = await res.json();
-//             if (!data?.routes?.length) return [start, end];
-//             return data.routes[0].geometry.coordinates.map(
-//                 ([lng, lat]: [number, number]) => ({
-//                     latitude: lat,
-//                     longitude: lng,
-//                 })
-//             );
-//         } catch (e) {
-//             console.warn("fetchRoute error:", e);
-//             return [start, end];
-//         }
-//     }, []);
-
-//     // ===== DEBOUNCED ROUTE FETCH =====
-//     const debouncedFetchRoute = useCallback(
-//         (start: Coordinates, end: Coordinates, delay = 700) =>
-//             new Promise<Coordinates[]>((resolve) => {
-//                 if (routeTimeoutRef.current) clearTimeout(routeTimeoutRef.current);
-//                 routeTimeoutRef.current = setTimeout(async () => {
-//                     const r = await fetchRoute(start, end);
-//                     resolve(r);
-//                 }, delay);
-//             }),
-//         [fetchRoute]
-//     );
-
-//     // ===== HANDLE ACCEPT OFFER =====
-//     const handleAcceptOffer = useCallback(
-//         async (offer: VendorOffer) => {
-//             dispatch(acceptOffer(offer));
-//             setVendorLocalState({
-//                 currentLocation: offer.coordinates,
-//                 lastDistanceReportedAt: 0,
-//                 distanceMoved: 0,
-//             });
-//             if (userLocation) {
-//                 const route = await debouncedFetchRoute(offer.coordinates, userLocation);
-//                 setRouteCoords(route);
-//                 lastRouteUpdatePositionRef.current = offer.coordinates;
-
-//                 if (route?.length > 2) {
-//                     mapRef.current?.fitToCoordinates(route, {
-//                         edgePadding: { top: 100, right: 100, bottom: 400, left: 100 },
-//                         animated: true,
-//                     });
-//                 }
-//             }
-//             bottomSheetRef.current?.snapToIndex(0);
-//         },
-//         [dispatch, userLocation, debouncedFetchRoute]
-//     );
-
-//     // ===== UPDATE ROUTE IF VENDOR MOVED SIGNIFICANTLY =====
-//     const updateRouteIfNeeded = useCallback(
-//         async (newVendorLocation: Coordinates) => {
-//             if (!userLocation || !lastRouteUpdatePositionRef.current) return;
-
-//             const distanceFromLastUpdate = getDistanceInMeters(
-//                 lastRouteUpdatePositionRef.current,
-//                 newVendorLocation
-//             );
-
-//             if (distanceFromLastUpdate >= ROUTE_UPDATE_THRESHOLD_METERS) {
-//                 const newRoute = await fetchRoute(newVendorLocation, userLocation);
-//                 setRouteCoords(newRoute);
-//                 lastRouteUpdatePositionRef.current = newVendorLocation;
-//             }
-//         },
-//         [userLocation, getDistanceInMeters, fetchRoute]
-//     );
-
-//     // ===== TRACK OFFERS LENGTH =====
-//     useEffect(() => {
-//         offersLengthRef.current = offers.length;
-//     }, [offers.length]);
-
-//     useEffect(() => {
-//         return () => {
-//             clearAllOfferNotifications();
-//         };
-//     }, []);
-
-//     // ===== OFFER GENERATOR (ONLY IF NOT ACCEPTED) =====
-//     useEffect(() => {
-//         if (!userLocation || !isReceivingOffers || acceptedOffer) {
-//             if (generateIntervalRef.current) {
-//                 clearInterval(generateIntervalRef.current);
-//                 generateIntervalRef.current = null;
-//             }
-//             return;
-//         }
-
-//         generateIntervalRef.current = setInterval(() => {
-//             if (offersLengthRef.current < BATCH_SIZE) {
-//                 const offer = generateRandomOffer(userLocation, radiusKm);
-
-//                 // Optional: double-check distance
-//                 const dist = getDistanceInMeters(userLocation, offer.coordinates) / 1000;
-//                 if (dist <= radiusKm) {
-//                     dispatch(addOffer({
-//                         ...offer,
-//                         createdAt: Date.now(),
-//                         expiryTime: Date.now() + TIMER_DURATION * 1000,
-//                     }));
-//                     sendOfferNotification(offer);
-//                     // sendLocalNotification("New vendor offer available", `${offer.name} is nearby within ${radiusKm} km!`);
-//                 }
-//             }
-//         }, GENERATE_INTERVAL_MS);
-
-//         return () => {
-//             if (generateIntervalRef.current) {
-//                 clearInterval(generateIntervalRef.current);
-//                 generateIntervalRef.current = null;
-//             }
-//         };
-//     }, [userLocation, isReceivingOffers, acceptedOffer, dispatch, radiusKm]);
-
-//     // In your LiveOffers.tsx
-//     useEffect(() => {
-//         if (!offers?.length) return;
-//         const outOfRangeIds = getOutOfRangeIds(offers, radiusKm);
-//         debouncedRemove(outOfRangeIds);
-//         return () => debouncedRemove.cancel(); // cleanup
-//     }, [offers, radiusKm, getOutOfRangeIds, debouncedRemove]);
-
-//     // useEffect(() => {
-//     //     if (!offers?.length) return;
-
-//     //     const filteredOffers = offers.filter(o => o.distance <= radiusKm);
-
-//     //     // If some are out of range — remove them from Redux
-//     //     if (filteredOffers.length !== offers.length) {
-//     //         const outOfRangeIds = offers
-//     //             .filter(o => o.distance > radiusKm)
-//     //             .map(o => o.id);
-
-//     //         dispatch(removeOutOfRangeOffers(outOfRangeIds));
-//     //     }
-//     // }, [radiusKm, offers, dispatch]);
-
-
-//     const filteredOffers = useMemo(() => {
-//         if (!userLocation) return [];
-//         return offers.filter(offer => {
-//             const distance = getDistanceInMeters(userLocation, offer.coordinates);
-//             console.log("🚀 ~ LiveOffersScreen ~ distance:", distance <= radiusKm * 1000)
-//             return distance <= radiusKm * 1000;
-//         });
-//     }, [offers, userLocation, radiusKm]);
-//     console.log("🚀 ~ LiveOffersScreen ~ filteredOffers:", filteredOffers)
-
-
-//     // ===== VENDOR MOVEMENT SIMULATION (FIXED - SIMILAR TO OLD CODE) =====
-//     useEffect(() => {
-//         // Only run if we have an accepted offer and user location
-//         if (!acceptedOffer || !userLocation || !vendorLocalState || vendorArrived) {
-//             return;
-//         }
-
-//         // Reset arrival state
-//         setVendorArrived(false);
-
-//         // Movement simulation loop
-//         const movementInterval = setInterval(() => {
-//             setVendorLocalState((prevState) => {
-//                 if (!prevState) return null;
-
-//                 // Simulate vendor moving toward user
-//                 const newLocation = simulateVendorMovement(
-//                     prevState.currentLocation,
-//                     userLocation,
-//                     0.0002
-//                 );
-
-//                 // Calculate distance moved from previous position
-//                 const distanceMoved = getDistanceInMeters(prevState.currentLocation, newLocation);
-//                 const totalDistanceMoved = prevState.distanceMoved + distanceMoved;
-
-//                 // Calculate distance to user
-//                 const distanceToCustomer = getDistanceInMeters(newLocation, userLocation);
-//                 // const eta = calculateETARemaining(distanceToUser / 1000);
-//                 if (distanceToCustomer == 0) {
-//                     console.log("✅ Vendor arrived at destination");
-//                     sendLocalNotification("Vendor Arrived", `${acceptedOffer.name} has reached your location!`);
-//                     setVendorArrived(true);
-//                     clearInterval(movementInterval);
-//                     // if (movementInterval) {
-//                     //     clearInterval(movementInterval);
-//                     // }
-//                 }
-//                 // DISPATCH EVERY 50 METERS (or when closer than 100m)
-//                 if (totalDistanceMoved >= 50 || distanceToCustomer < 100) {
-//                     console.log(`✓ DISPATCH at ${totalDistanceMoved.toFixed(0)}m - Distance to user: ${distanceToCustomer.toFixed(0)}m`);
-//                     // const distanceToDestination = getDistanceInMeters(userLocation, newLocation);
-//                     dispatch(
-//                         updateVendorLocation({
-//                             id: acceptedOffer.id,
-//                             coordinates: newLocation,
-//                             distance: Number((distanceToCustomer / 1000).toFixed(2)),
-//                             eta: Math.max(Math.round(distanceToCustomer / 250), 1),
-//                         })
-//                     );
-
-//                     // Reset distance counter after dispatch
-//                     return {
-//                         currentLocation: newLocation,
-//                         lastDistanceReportedAt: Date.now(),
-//                         distanceMoved: 0, // Reset counter after 50m
-//                     };
-//                 }
-//                 updateRouteIfNeeded(newLocation);
-
-
-//                 // Update local state without dispatching
-//                 console.log(`~ Moving: ${totalDistanceMoved.toFixed(0)}m total, ${distanceToCustomer.toFixed(0)}m to user`);
-
-//                 return {
-//                     currentLocation: newLocation,
-//                     lastDistanceReportedAt: prevState.lastDistanceReportedAt,
-//                     distanceMoved: totalDistanceMoved,
-//                 };
-//             });
-//         }, 2000);
-//         return () => clearInterval(movementInterval);
-//         // movementIntervalRef.current = setInterval(() => {
-//         //     console.log("🔄 Movement interval tick");
-
-//         //     // CRITICAL: Read current vendor position from acceptedOffer in closure
-//         //     // This works because acceptedOffer is in the dependency array,
-//         //     // so the effect re-runs when Redux updates it
-//         //     const currentVendorPos = acceptedOffer.coordinates;
-
-//         //     console.log("📍 Current positions:", {
-//         //         vendor: currentVendorPos,
-//         //         user: userLocation,
-//         //     });
-
-//         //     // Simulate movement towards user
-//         //     const newLocation = simulateVendorMovement(
-//         //         currentVendorPos,
-//         //         userLocation,
-//         //         MOVEMENT_SPEED
-//         //     );
-
-//         //     // Calculate distances
-//         //     const moved = getDistanceInMeters(currentVendorPos, newLocation);
-//         //     const distanceToDestination = getDistanceInMeters(userLocation, newLocation);
-
-//         //     console.log("📊 Movement data:", {
-//         //         moved: moved.toFixed(2) + "m",
-//         //         distanceToUser: distanceToDestination.toFixed(2) + "m",
-//         //         newLocation,
-//         //     });
-
-//         //     // Update Redux state
-//         //     dispatch(
-//         //         updateVendorLocation({
-//         //             id: acceptedOffer.id,
-//         //             coordinates: newLocation,
-//         //             distance: Number((distanceToDestination / 1000).toFixed(2)),
-//         //             eta: Math.max(Math.round(distanceToDestination / 250), 1),
-//         //         })
-//         //     );
-
-//         //     // Update local UI state
-//         //     setDistanceToUser(distanceToDestination);
-
-//         //     // Update route if vendor moved significantly
-//         //     updateRouteIfNeeded(newLocation);
-
-//         //     // Check if vendor arrived
-//         //     if (distanceToDestination <= ARRIVAL_THRESHOLD_METERS) {
-//         //         console.log("✅ Vendor arrived at destination");
-//         //         setVendorArrived(true);
-
-//         //         if (movementIntervalRef.current) {
-//         //             clearInterval(movementIntervalRef.current);
-//         //             movementIntervalRef.current = null;
-//         //         }
-//         //     }
-//         // }, MOVEMENT_INTERVAL_MS);
-
-//         // CRITICAL: Cleanup when effect re-runs or unmounts
-//         // return () => {
-//         //     console.log("🧹 Cleaning up vendor movement interval");
-//         //     if (movementIntervalRef.current) {
-//         //         clearInterval(movementIntervalRef.current);
-//         //         movementIntervalRef.current = null;
-//         //     }
-//         // };
-//     }, [acceptedOffer, userLocation, dispatch, getDistanceInMeters, updateRouteIfNeeded, vendorLocalState]);
-//     // ☝️ acceptedOffer (full object) as dependency - this makes it re-run when coordinates update
-
-//     // ===== CANCEL REQUEST =====
-//     const handleCancelRequest = useCallback(() => {
-//         dispatch(cancelRequest());
-//         router.back();
-//     }, [dispatch, router]);
-
-//     // ===== RENDER MARKERS =====
-//     const renderMarkers = useMemo(() => {
-//         if (!userLocation) return null;
-//         const markers: React.ReactNode[] = [];
-
-//         // User marker
-//         markers.push(
-//             <Marker key="user" coordinate={userLocation} title="Your Location">
-//                 <View style={styles.userMarker}>
-//                     <MapPin size={24} color="#fff" />
-//                 </View>
-//             </Marker>
-//         );
-
-//         // Vendor markers
-//         if (acceptedOffer) {
-//             markers.push(
-//                 <Marker
-//                     key={acceptedOffer.id}
-//                     coordinate={acceptedOffer.coordinates}
-//                     title={`${acceptedOffer.name} (Accepted)`}
-//                 >
-//                     <View style={styles.acceptedVendorMarker}>
-//                         <User size={24} color="#fff" />
-//                     </View>
-//                 </Marker>
-//             );
-//         } else {
-//             filteredOffers.forEach((o) => {
-//                 markers.push(
-//                     <Marker key={o.id} coordinate={o.coordinates} title={o.name}>
-//                         <View style={styles.vendorMarker}>
-//                             <User size={20} color="#fff" />
-//                         </View>
-//                     </Marker>
-//                 );
-//             });
-//         }
-
-//         return markers;
-//     }, [userLocation, offers, acceptedOffer]);
-
-//     // ===== CLEANUP ON STOP RECEIVING =====
-//     useEffect(() => {
-//         if (!isReceivingOffers) {
-//             if (generateIntervalRef.current) {
-//                 clearInterval(generateIntervalRef.current);
-//                 generateIntervalRef.current = null;
-//             }
-//             if (movementIntervalRef.current) {
-//                 clearInterval(movementIntervalRef.current);
-//                 movementIntervalRef.current = null;
-//             }
-//         }
-//     }, [isReceivingOffers]);
-
-//     // ===== LOADING STATE =====
-//     if (locationLoading) {
-//         return (
-//             <View style={styles.centerContainer}>
-//                 <ActivityIndicator size="large" color="#007AFF" />
-//                 <Text style={styles.loadingText}>Getting your location...</Text>
-//             </View>
-//         );
-//     }
-
-//     // ===== ERROR STATE =====
-//     if (locationError || !userLocation) {
-//         return (
-//             <View style={styles.centerContainer}>
-//                 <Text style={styles.errorText}>
-//                     {locationError || "Location unavailable"}
-//                 </Text>
-//                 <TouchableOpacity style={styles.retryButton} onPress={getUserLocation}>
-//                     <Text style={styles.retryButtonText}>Retry</Text>
-//                 </TouchableOpacity>
-//             </View>
-//         );
-//     }
-
-
-//     // ===== RADIUS SLIDER UI =====
-//     const radiusSelector = (
-//         <View style={styles.radiusContainer}>
-//             <Text style={styles.radiusLabel}>Search Radius: {radiusKm.toFixed(1)} km</Text>
-//             <Slider
-//                 value={radiusKm}
-//                 onValueChange={handleRadiusChange}
-//                 minimumValue={1}
-//                 maximumValue={20}
-//                 step={0.5}
-//                 minimumTrackTintColor="#007AFF"
-//                 maximumTrackTintColor="#ccc"
-//                 thumbTintColor="#007AFF"
-//             />
-//         </View>
-//     );
-
-
-//     // ===== MAIN RENDER =====
-//     return (
-//         <GestureHandlerRootView style={styles.container}>
-//             {radiusSelector}
-//             <RatingModal
-//                 visible={showRatingModal}
-//                 onClose={() => setShowRatingModal(false)}
-//             />
-//             <MapView
-//                 ref={(r) => (mapRef.current = r)}
-//                 style={styles.map}
-//                 provider={PROVIDER_DEFAULT}
-//                 initialRegion={{
-//                     ...userLocation,
-//                     latitudeDelta: 0.05,
-//                     longitudeDelta: 0.05,
-//                 }}
-//             >
-//                 {Platform.OS === "web" && (
-//                     <UrlTile
-//                         urlTemplate="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-//                         maximumZ={19}
-//                     />
-//                 )}
-//                 {routeCoords?.length > 0 && (
-//                     <Polyline
-//                         coordinates={routeCoords}
-//                         strokeColor="#007AFF"
-//                         strokeWidth={4}
-//                     />
-//                 )}
-//                 {renderMarkers}
-//             </MapView>
-//             {/* <View style={styles.radiusSelector}>
-//                 {radiusOptions.map((r) => (
-//                     <TouchableOpacity
-//                         key={r}
-//                         style={[
-//                             styles.radiusButton,
-//                             radiusKm === r && styles.radiusButtonActive,
-//                         ]}
-//                         onPress={() => setRadiusKm(r)}
-//                     >
-//                         <Text style={radiusKm === r ? styles.radiusTextActive : styles.radiusText}>
-//                             {r} km
-//                         </Text>
-//                     </TouchableOpacity>
-//                 ))}
-//             </View> */}
-
-//             <TouchableOpacity style={styles.cancelButton} onPress={handleCancelRequest}>
-//                 <X size={20} color="#fff" />
-//                 <Text style={styles.cancelButtonText}>Cancel Request</Text>
-//             </TouchableOpacity>
-
-//             <BottomSheet
-//                 ref={(r) => (bottomSheetRef.current = r)}
-//                 index={1}
-//                 snapPoints={acceptedOffer ? ["25%", "40%"] : ["25%", "60%"]}
-//                 enablePanDownToClose={false}
-//             >
-//                 <BottomSheetScrollView contentContainerStyle={styles.bottomSheetContent}>
-//                     {acceptedOffer ? (
-//                         <View>
-//                             <Text style={styles.sheetTitle}>Vendor on the way</Text>
-//                             <VendorOfferCard offer={acceptedOffer} isAccepted />
-//                             <View style={styles.statusContainer}>
-//                                 {!vendorArrived ? (
-//                                     <>
-//                                         <ActivityIndicator size="small" color="#007AFF" />
-//                                         <View style={{ flex: 1 }}>
-//                                             <Text style={styles.statusText}>
-//                                                 {acceptedOffer.name} is heading to your location...
-//                                             </Text>
-//                                             {distanceToUser !== null && (
-//                                                 <Text style={styles.statusTextSmall}>
-//                                                     {Math.round(distanceToUser)} m away • ETA {acceptedOffer.eta} min
-//                                                 </Text>
-//                                             )}
-//                                         </View>
-//                                     </>
-//                                 ) : (
-//                                     <View style={{ flex: 1 }}>
-//                                         <Text style={[styles.statusText, { color: "#22c55e" }]}>
-//                                             ✓ {acceptedOffer.name} has arrived!
-//                                         </Text>
-//                                         <TouchableOpacity
-//                                             style={[styles.arrivedButton, { backgroundColor: "#34D399" }]}
-//                                             onPress={() => setShowRatingModal(true)}
-//                                         >
-//                                             <Text style={styles.arrivedButtonText}>Mark as Complete</Text>
-//                                         </TouchableOpacity>
-//                                     </View>
-//                                 )}
-//                             </View>
-//                         </View>
-//                     ) : (
-//                         <View>
-//                             <Text style={styles.sheetTitle}>
-//                                 {offers.length === 0
-//                                     ? "Waiting for offers..."
-//                                     : `${offers.length} Offers Received`}
-//                             </Text>
-
-//                             {offers.length === 0 ? (
-//                                 <View style={styles.emptyState}>
-//                                     <ActivityIndicator size="large" color="#007AFF" />
-//                                     <Text style={styles.emptyText}>
-//                                         Nearby vendors are reviewing your request
-//                                     </Text>
-//                                 </View>
-//                             ) : (
-//                                 <OffersList
-//                                     offers={filteredOffers}
-//                                     onAccept={handleAcceptOffer}
-//                                     onExpire={(id) => dispatch(removeOffersByIds(id))}
-//                                 />
-//                             )}
-//                         </View>
-//                     )}
-//                 </BottomSheetScrollView>
-//             </BottomSheet>
-//         </GestureHandlerRootView >
-//     );
-// }
-
-// // ===== STYLES =====
-// const styles = StyleSheet.create({
-//     container: { flex: 1 },
-//     map: { flex: 1 },
-//     centerContainer: {
-//         flex: 1,
-//         justifyContent: "center",
-//         alignItems: "center",
-//         backgroundColor: "#fff",
-//         padding: 20,
-//     },
-//     loadingText: { marginTop: 16, fontSize: 16, color: "#666" },
-//     errorText: { fontSize: 16, color: "#FF3B30", textAlign: "center", marginBottom: 20 },
-//     retryButton: {
-//         backgroundColor: "#007AFF",
-//         paddingHorizontal: 24,
-//         paddingVertical: 12,
-//         borderRadius: 8,
-//     },
-//     retryButtonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-//     userMarker: {
-//         width: 40,
-//         height: 40,
-//         borderRadius: 20,
-//         backgroundColor: "#007AFF",
-//         justifyContent: "center",
-//         alignItems: "center",
-//         borderWidth: 3,
-//         borderColor: "#fff",
-//         elevation: 5,
-//     },
-//     vendorMarker: {
-//         width: 36,
-//         height: 36,
-//         borderRadius: 18,
-//         backgroundColor: "#00A86B",
-//         justifyContent: "center",
-//         alignItems: "center",
-//         borderWidth: 2,
-//         borderColor: "#fff",
-//         elevation: 5,
-//     },
-//     acceptedVendorMarker: {
-//         width: 44,
-//         height: 44,
-//         borderRadius: 22,
-//         backgroundColor: "#FF9500",
-//         justifyContent: "center",
-//         alignItems: "center",
-//         borderWidth: 3,
-//         borderColor: "#fff",
-//         elevation: 5,
-//     },
-//     cancelButton: {
-//         position: "absolute",
-//         top: 50,
-//         left: 16,
-//         right: 16,
-//         backgroundColor: "#FF3B30",
-//         flexDirection: "row",
-//         alignItems: "center",
-//         justifyContent: "center",
-//         paddingVertical: 12,
-//         borderRadius: 12,
-//         elevation: 5,
-//         gap: 8,
-//     },
-//     cancelButtonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-//     bottomSheetContent: { padding: 16, paddingBottom: 40 },
-//     sheetTitle: { fontSize: 20, fontWeight: "700", color: "#000", marginBottom: 16 },
-//     emptyState: { alignItems: "center", paddingVertical: 40 },
-//     emptyText: { marginTop: 16, fontSize: 16, color: "#666", textAlign: "center" },
-//     statusContainer: {
-//         flexDirection: "row",
-//         alignItems: "center",
-//         marginTop: 16,
-//         padding: 16,
-//         backgroundColor: "#F0F8FF",
-//         borderRadius: 12,
-//         gap: 12,
-//     },
-//     statusText: { fontSize: 14, color: "#007AFF", fontWeight: "600" },
-//     statusTextSmall: { fontSize: 13, color: "#666", marginTop: 4 },
-//     radiusSelector: {
-//         position: "absolute",
-//         top: 100,
-//         left: 16,
-//         right: 16,
-//         flexDirection: "row",
-//         justifyContent: "space-around",
-//         backgroundColor: "#fff",
-//         padding: 8,
-//         borderRadius: 12,
-//         elevation: 5,
-//         zIndex: 10,
-//     },
-//     radiusButton: {
-//         paddingHorizontal: 12,
-//         paddingVertical: 6,
-//         borderRadius: 8,
-//         backgroundColor: "#f0f0f0",
-//     },
-//     radiusButtonActive: {
-//         backgroundColor: "#007AFF",
-//     },
-//     radiusText: { color: "#333", fontWeight: "600" },
-//     radiusTextActive: { color: "#fff", fontWeight: "700" },
-//     radiusContainer: {
-//         position: "absolute",
-//         top: 100,
-//         left: 16,
-//         right: 16,
-//         backgroundColor: "#fff",
-//         padding: 16,
-//         borderRadius: 12,
-//         elevation: 5,
-//         zIndex: 10,
-//     },
-//     radiusLabel: {
-//         fontSize: 16,
-//         fontWeight: "600",
-//         marginBottom: 8,
-//         color: "#333",
-//     },
-//     arrivedButton: {
-//         backgroundColor: "#007AFF",
-//         borderRadius: 10,
-//         paddingVertical: 12,
-//         alignItems: "center",
-//         marginTop: 16,
-//     },
-//     arrivedButtonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
-
-
-// });

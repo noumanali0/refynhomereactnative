@@ -6,6 +6,9 @@ import { Platform } from "react-native";
 // ✅ Maintain in-memory map of offerId → notificationId
 const activeNotifications: Record<string, string> = {};
 
+// ✅ Maintain in-memory map of requestId → notificationId for service requests
+const activeServiceRequestNotifications: Record<string, string> = {};
+
 // ✅ 1. Configure how notifications behave when the app is in the foreground
 Notifications.setNotificationHandler({
     handleNotification: async () => ({
@@ -125,6 +128,118 @@ export async function sendLocalNotification(
         },
         trigger: null, // immediate
     });
+}
+
+// ✅ 7. Send service request notification & store ID for later removal
+export async function sendServiceRequestNotification(request: {
+    id: number;
+    category: string;
+    title: string;
+    address: string;
+}) {
+    try {
+        const notificationId = await Notifications.scheduleNotificationAsync({
+            content: {
+                title: "🔔 New Service Request!",
+                body: `${request.category} • ${request.title}\n${request.address}`,
+                sound: "default",
+                priority: Notifications.AndroidNotificationPriority.HIGH,
+                data: { requestId: request.id, type: 'service_request' },
+            },
+            trigger: null,
+        });
+        activeServiceRequestNotifications[request.id.toString()] = notificationId;
+        console.log(`📩 Notification sent for service request ${request.id}`);
+        return notificationId;
+    } catch (err) {
+        console.warn("❌ Failed to send service request notification:", err);
+        return null;
+    }
+}
+
+// ✅ 8. Remove specific service request notification by requestId
+export async function removeServiceRequestNotification(requestId: number | string) {
+    try {
+        const key = requestId.toString();
+        const notifId = activeServiceRequestNotifications[key];
+        if (notifId) {
+            await Notifications.dismissNotificationAsync(notifId);
+            delete activeServiceRequestNotifications[key];
+            console.log(`🧹 Removed notification for service request ${requestId}`);
+        }
+    } catch (err) {
+        console.warn("⚠️ Failed to remove service request notification:", err);
+    }
+}
+
+// ✅ 9. Clear all service request notifications
+export async function clearAllServiceRequestNotifications() {
+    try {
+        const keys = Object.keys(activeServiceRequestNotifications);
+        for (const key of keys) {
+            const notifId = activeServiceRequestNotifications[key];
+            if (notifId) {
+                await Notifications.dismissNotificationAsync(notifId);
+            }
+            delete activeServiceRequestNotifications[key];
+        }
+        console.log("🧼 Cleared all service request notifications");
+    } catch (err) {
+        console.warn("⚠️ Failed to clear service request notifications:", err);
+    }
+}
+
+// ============================================================================
+// Vendor Arrival Notifications (100m proximity)
+// ============================================================================
+
+// Track arrival notification state to prevent duplicates
+const arrivalNotificationSent: Record<string, boolean> = {};
+
+// ✅ 10. Send vendor arrival notification (when vendor is within 100m)
+export async function sendVendorArrivalNotification(params: {
+    requestId: number;
+    vendorName: string;
+}): Promise<string | null> {
+    const key = params.requestId.toString();
+
+    // Prevent duplicate notifications for the same request
+    if (arrivalNotificationSent[key]) {
+        console.log(`📍 Arrival notification already sent for request ${params.requestId}`);
+        return null;
+    }
+
+    try {
+        const id = await Notifications.scheduleNotificationAsync({
+            content: {
+                title: "🚗 Vendor Arriving!",
+                body: `${params.vendorName} is almost at your location`,
+                sound: "default",
+                priority: Notifications.AndroidNotificationPriority.HIGH,
+                data: { requestId: params.requestId, type: 'vendor_arrival' },
+            },
+            trigger: null,
+        });
+
+        arrivalNotificationSent[key] = true;
+        console.log(`📍 Arrival notification sent for request ${params.requestId}`);
+        return id;
+    } catch (err) {
+        console.warn("❌ Failed to send vendor arrival notification:", err);
+        return null;
+    }
+}
+
+// ✅ 11. Reset arrival notification state (call when request completes or changes)
+export function resetArrivalNotification(requestId: number | string): void {
+    const key = requestId.toString();
+    delete arrivalNotificationSent[key];
+    console.log(`🔄 Reset arrival notification state for request ${requestId}`);
+}
+
+// ✅ 12. Check if arrival notification was already sent
+export function hasArrivalNotificationBeenSent(requestId: number | string): boolean {
+    return !!arrivalNotificationSent[requestId.toString()];
 }
 
 

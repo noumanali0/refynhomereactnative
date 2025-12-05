@@ -402,7 +402,6 @@ const styles = StyleSheet.create({
   date: {
     color: COLORS.gray500,
     opacity: 1,
-    fontFamily: "Plus-Jakarrta-Sans",
   },
 });
 

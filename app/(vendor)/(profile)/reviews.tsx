@@ -45,16 +45,26 @@ export default function ReviewsScreen() {
     const [sortBy, setSortBy] = useState<SortOption>('latest');
     const [filterByStar, setFilterByStar] = useState<FilterOption>('all');
 
-    // Get current vendor
+    // Get current vendor from auth state
     const currentUser = useSelector((state: RootState) => state.auth.user);
-    const allVendors = useSelector((state: RootState) => state.vendor.vendors);
-    const vendorProfile = useMemo(() => {
-        return allVendors.find(v => v.id === currentUser?.uid) || allVendors[0];
-    }, [allVendors, currentUser]);
 
-    // Get all reviews for this vendor
-    const allReviews = useSelector((state: RootState) => state.review.reviews);
+    // Extract vendor profile from user data
+    const vendorProfile = useMemo(() => {
+        if (!currentUser) return null;
+        const profile = (currentUser as any).vendorProfile || (currentUser as any).vendor_profile;
+        return {
+            id: currentUser.uid || (currentUser as any).id,
+            name: `${(currentUser as any).first_name || ''} ${(currentUser as any).last_name || ''}`.trim() || 'Vendor',
+            rating: profile?.average_rating || 0,
+            totalReviews: profile?.total_reviews || 0,
+        };
+    }, [currentUser]);
+
+    // Get all reviews for this vendor - safely access with fallback
+    // TODO: Fetch reviews from /api/vendors/{id}/reviews/ endpoint
+    const allReviews = useSelector((state: RootState) => state.review?.reviews) || [];
     const vendorReviews = useMemo(() => {
+        if (!allReviews || !Array.isArray(allReviews)) return [];
         return allReviews.filter(r => r.vendorId === vendorProfile?.id);
     }, [allReviews, vendorProfile]);
 

@@ -215,7 +215,6 @@ const styles = StyleSheet.create({
         height: moderateScale(50),
         fontSize: moderateScale(15),
         color: "#1f2937",
-        fontFamily: "Poppins"
     },
     updateButton: {
         marginTop: moderateScale(10),

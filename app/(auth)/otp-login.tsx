@@ -408,7 +408,6 @@ const styles = StyleSheet.create({
     input: {
         flex: 1,
         fontSize: moderateScale(16),
-        fontWeight: '600',
         color: '#0f172a',
         letterSpacing: 2,
         textAlign: 'center',

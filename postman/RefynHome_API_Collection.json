@@ -1,0 +1,451 @@
+{
+  "info": {
+    "name": "RefynHome API Collection",
+    "_postman_id": "refynhome-api-collection",
+    "description": "Complete API collection for RefynHome - Customer & Vendor testing",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://192.168.100.14:8000/api"
+    },
+    {
+      "key": "customer_token",
+      "value": ""
+    },
+    {
+      "key": "vendor_token",
+      "value": ""
+    },
+    {
+      "key": "customer_phone",
+      "value": "+923001234567"
+    },
+    {
+      "key": "vendor_phone",
+      "value": "+923009876543"
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Customer Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.collectionVariables.set('customer_token', jsonData.access);",
+                  "    console.log('Customer token saved!');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"phone\": \"{{customer_phone}}\",\n    \"password\": \"Test@1234\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login/",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login", ""]
+            }
+          }
+        },
+        {
+          "name": "Vendor Login",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.collectionVariables.set('vendor_token', jsonData.access);",
+                  "    console.log('Vendor token saved!');",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"phone\": \"{{vendor_phone}}\",\n    \"password\": \"Test@1234\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/login/",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "login", ""]
+            }
+          }
+        },
+        {
+          "name": "Customer Signup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"phone\": \"{{customer_phone}}\",\n    \"password\": \"Test@1234\",\n    \"first_name\": \"Test\",\n    \"last_name\": \"Customer\",\n    \"role\": \"customer\",\n    \"address\": \"123 Test Street\",\n    \"city\": \"Lahore\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/signup/",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "signup", ""]
+            }
+          }
+        },
+        {
+          "name": "Vendor Signup",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"phone\": \"{{vendor_phone}}\",\n    \"password\": \"Test@1234\",\n    \"first_name\": \"Test\",\n    \"last_name\": \"Vendor\",\n    \"role\": \"vendor\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/auth/signup/",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "signup", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Customer Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{customer_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/me/",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "me", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Vendor Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{vendor_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/auth/me/",
+              "host": ["{{base_url}}"],
+              "path": ["auth", "me", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Categories",
+      "item": [
+        {
+          "name": "List All Categories",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{customer_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/core/categories/",
+              "host": ["{{base_url}}"],
+              "path": ["core", "categories", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Customer - Service Requests",
+      "item": [
+        {
+          "name": "Create Service Request",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.collectionVariables.set('service_request_id', jsonData.id);",
+                  "    console.log('Service Request ID saved: ' + jsonData.id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{customer_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"category\": 1,\n    \"title\": \"AC Not Cooling\",\n    \"description\": \"My AC is running but not cooling properly. It was working fine yesterday.\",\n    \"address\": \"House 123, Block A, DHA Phase 5\",\n    \"city\": \"Lahore\",\n    \"latitude\": 31.4697,\n    \"longitude\": 74.2728,\n    \"urgency\": \"normal\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/core/service-requests/",
+              "host": ["{{base_url}}"],
+              "path": ["core", "service-requests", ""]
+            }
+          }
+        },
+        {
+          "name": "Get My Service Requests",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{customer_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/core/customers/service-requests/",
+              "host": ["{{base_url}}"],
+              "path": ["core", "customers", "service-requests", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Service Request Detail",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{customer_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/core/service-requests/{{service_request_id}}/",
+              "host": ["{{base_url}}"],
+              "path": ["core", "service-requests", "{{service_request_id}}", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Proposals for Request",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{customer_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/core/service-requests/{{service_request_id}}/proposals/",
+              "host": ["{{base_url}}"],
+              "path": ["core", "service-requests", "{{service_request_id}}", "proposals", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Customer Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{customer_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/core/customers/dashboard/",
+              "host": ["{{base_url}}"],
+              "path": ["core", "customers", "dashboard", ""]
+            }
+          }
+        },
+        {
+          "name": "Accept Proposal",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{customer_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"proposal_id\": 1\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/core/customers/proposals/accept/",
+              "host": ["{{base_url}}"],
+              "path": ["core", "customers", "proposals", "accept", ""]
+            }
+          }
+        },
+        {
+          "name": "Decline Proposal",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{customer_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"proposal_id\": 1\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/core/customers/proposals/decline/",
+              "host": ["{{base_url}}"],
+              "path": ["core", "customers", "proposals", "decline", ""]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Vendor - Service Requests",
+      "item": [
+        {
+          "name": "Get Vendor Dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{vendor_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/core/vendors/dashboard/",
+              "host": ["{{base_url}}"],
+              "path": ["core", "vendors", "dashboard", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Nearby Service Requests",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{vendor_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/core/vendors/service-requests/",
+              "host": ["{{base_url}}"],
+              "path": ["core", "vendors", "service-requests", ""]
+            }
+          }
+        },
+        {
+          "name": "Get Nearby Vendors for Request",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{customer_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/core/service-requests/{{service_request_id}}/nearby-vendors/",
+              "host": ["{{base_url}}"],
+              "path": ["core", "service-requests", "{{service_request_id}}", "nearby-vendors", ""]
+            }
+          }
+        },
+        {
+          "name": "Create Proposal (Vendor)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{vendor_token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n    \"service_request\": 1,\n    \"price\": 2500,\n    \"estimated_duration\": \"2 hours\",\n    \"message\": \"I can fix your AC today. I have 5 years experience in AC repair.\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/core/vendors/proposals/",
+              "host": ["{{base_url}}"],
+              "path": ["core", "vendors", "proposals", ""]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

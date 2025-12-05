@@ -4,74 +4,68 @@
  *
  * Displays customer's service request history with filtering by status,
  * date range selection, and detailed service information.
+ * Integrated with backend API for real data.
  */
 
-import React, { useState, useMemo } from 'react';
-import { View, ScrollView, TouchableOpacity, StyleSheet, FlatList, RefreshControl } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, ScrollView, TouchableOpacity, StyleSheet, FlatList, RefreshControl, ActivityIndicator } from 'react-native';
 import Text from '@/components/common/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { moderateScale, scale, verticalScale } from 'react-native-size-matters';
-import { ServiceCard } from '@/components/customer/ServiceCard';
+import { ServiceHistoryCard } from '@/components/customer/ServiceHistoryCard';
 import { COLORS } from '@/constants/colors';
-import { mockActiveServices } from '@/mock/services';
+import { useDispatch, useSelector } from 'react-redux';
+import { AppDispatch } from '@/store';
+import {
+    fetchServiceHistory,
+    refreshServiceHistory,
+    setFilter,
+    selectFilteredHistory,
+    selectHistoryStats,
+    selectIsLoading,
+    selectIsRefreshing,
+    selectHistoryError,
+    selectCurrentFilter,
+} from '@/store/slices/serviceHistorySlice';
+import { fetchFavoriteVendors } from '@/store/slices/vendorSlice';
 
 type FilterType = 'all' | 'active' | 'completed' | 'cancelled';
 
 export default function CustomerHistoryScreen() {
-    const [refreshing, setRefreshing] = useState(false);
-    const [activeFilter, setActiveFilter] = useState<FilterType>('all');
+    const dispatch = useDispatch<AppDispatch>();
 
-    // Mock data - replace with actual data from Redux/API
-    const allServices = mockActiveServices;
+    // Redux state
+    const filteredServices = useSelector(selectFilteredHistory);
+    const stats = useSelector(selectHistoryStats);
+    const isLoading = useSelector(selectIsLoading);
+    const isRefreshing = useSelector(selectIsRefreshing);
+    const error = useSelector(selectHistoryError);
+    const activeFilter = useSelector(selectCurrentFilter);
 
-    // Calculate stats
-    const stats = useMemo(() => {
-        const active = allServices.filter(s => s.status === 'active' || s.status === 'pending').length;
-        const completed = allServices.filter(s => s.status === 'completed').length;
-        const thisMonth = allServices.filter(s => {
-            // Mock: In real app, check createdAt date
-            return true;
-        }).length;
+    // Fetch data on mount
+    useEffect(() => {
+        dispatch(fetchServiceHistory());
+        dispatch(fetchFavoriteVendors());
+    }, [dispatch]);
 
-        return {
-            totalActive: active,
-            totalCompleted: completed,
-            thisMonth,
-        };
-    }, [allServices]);
+    // Handle filter change
+    const handleFilterChange = useCallback((filter: FilterType) => {
+        dispatch(setFilter(filter));
+    }, [dispatch]);
 
-    // Filter services based on active filter
-    const filteredServices = useMemo(() => {
-        if (activeFilter === 'all') return allServices;
-        if (activeFilter === 'active') {
-            return allServices.filter(s => s.status === 'active' || s.status === 'pending');
-        }
-        return allServices.filter(s => s.status === activeFilter);
-    }, [allServices, activeFilter]);
-
-    // Sort by date (most recent first)
-    const sortedServices = useMemo(() => {
-        return [...filteredServices].sort((a, b) => {
-            // Mock: In real app, sort by actual date
-            return 0;
-        });
-    }, [filteredServices]);
+    // Handle refresh
+    const onRefresh = useCallback(() => {
+        dispatch(refreshServiceHistory());
+    }, [dispatch]);
 
     // Get count for each filter
     const getFilterCount = (filter: FilterType): number => {
-        if (filter === 'all') return allServices.length;
-        if (filter === 'active') {
-            return allServices.filter(s => s.status === 'active' || s.status === 'pending').length;
-        }
-        return allServices.filter(s => s.status === filter).length;
-    };
-
-    // Handle refresh
-    const onRefresh = async () => {
-        setRefreshing(true);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        setRefreshing(false);
+        if (filter === 'all') return stats.total;
+        if (filter === 'active') return stats.active;
+        if (filter === 'completed') return stats.completed;
+        if (filter === 'cancelled') return stats.cancelled;
+        return 0;
     };
 
     // Render filter tab
@@ -83,7 +77,7 @@ export default function CustomerHistoryScreen() {
             <TouchableOpacity
                 key={filter}
                 style={[styles.filterTab, isActive && styles.filterTabActive]}
-                onPress={() => setActiveFilter(filter)}
+                onPress={() => handleFilterChange(filter)}
                 activeOpacity={0.7}
             >
                 <View style={[styles.filterIcon, isActive && { backgroundColor: color + '20' }]}>
@@ -98,27 +92,56 @@ export default function CustomerHistoryScreen() {
     };
 
     // Render empty state
-    const renderEmptyState = () => (
-        <View style={styles.emptyState}>
-            <View style={styles.emptyIconContainer}>
-                <Ionicons name="document-text-outline" size={60} color={COLORS.gray400} />
+    const renderEmptyState = () => {
+        if (isLoading) {
+            return (
+                <View style={styles.loadingState}>
+                    <ActivityIndicator size="large" color={COLORS.primary} />
+                    <Text style={styles.loadingText}>Loading your service history...</Text>
+                </View>
+            );
+        }
+
+        if (error) {
+            return (
+                <View style={styles.emptyState}>
+                    <View style={styles.emptyIconContainer}>
+                        <Ionicons name="alert-circle-outline" size={60} color={COLORS.error} />
+                    </View>
+                    <Text type="title" style={styles.emptyTitle}>Error Loading History</Text>
+                    <Text type="body2" style={styles.emptyMessage}>{error}</Text>
+                    <TouchableOpacity
+                        style={styles.clearFilterButton}
+                        onPress={() => dispatch(fetchServiceHistory())}
+                    >
+                        <Text type="button" style={styles.clearFilterText}>Try Again</Text>
+                    </TouchableOpacity>
+                </View>
+            );
+        }
+
+        return (
+            <View style={styles.emptyState}>
+                <View style={styles.emptyIconContainer}>
+                    <Ionicons name="document-text-outline" size={60} color={COLORS.gray400} />
+                </View>
+                <Text type="title" style={styles.emptyTitle}>No Service History</Text>
+                <Text type="body2" style={styles.emptyMessage}>
+                    {activeFilter === 'all'
+                        ? 'Start requesting services to build your history.'
+                        : `No ${activeFilter} services found.\nTry a different filter.`}
+                </Text>
+                {activeFilter !== 'all' && (
+                    <TouchableOpacity
+                        style={styles.clearFilterButton}
+                        onPress={() => handleFilterChange('all')}
+                    >
+                        <Text type="button" style={styles.clearFilterText}>View All History</Text>
+                    </TouchableOpacity>
+                )}
             </View>
-            <Text type="title" style={styles.emptyTitle}>No Service History</Text>
-            <Text type="body2" style={styles.emptyMessage}>
-                {activeFilter === 'all'
-                    ? 'Start requesting services to build your history.'
-                    : `No ${activeFilter} services found.\nTry a different filter.`}
-            </Text>
-            {activeFilter !== 'all' && (
-                <TouchableOpacity
-                    style={styles.clearFilterButton}
-                    onPress={() => setActiveFilter('all')}
-                >
-                    <Text type="button" style={styles.clearFilterText}>View All History</Text>
-                </TouchableOpacity>
-            )}
-        </View>
-    );
+        );
+    };
 
     return (
         <View style={styles.container}>
@@ -181,15 +204,20 @@ export default function CustomerHistoryScreen() {
 
             {/* History List */}
             <FlatList
-                data={sortedServices}
+                data={filteredServices}
                 renderItem={({ item }) => (
-                    <ServiceCard service={item} vendorOffer={{}} />
+                    <ServiceHistoryCard request={item} />
                 )}
-                keyExtractor={(item) => item.id}
+                keyExtractor={(item) => item.id.toString()}
                 contentContainerStyle={styles.listContent}
                 ListEmptyComponent={renderEmptyState}
                 refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+                    <RefreshControl
+                        refreshing={isRefreshing}
+                        onRefresh={onRefresh}
+                        colors={[COLORS.primary]}
+                        tintColor={COLORS.primary}
+                    />
                 }
                 showsVerticalScrollIndicator={false}
             />
@@ -256,4 +284,6 @@ const styles = StyleSheet.create({
     emptyMessage: { color: COLORS.gray600, textAlign: 'center', lineHeight: moderateScale(20) },
     clearFilterButton: { marginTop: verticalScale(20), paddingVertical: verticalScale(10), paddingHorizontal: scale(20), backgroundColor: COLORS.primary, borderRadius: moderateScale(10) },
     clearFilterText: { color: COLORS.white },
+    loadingState: { alignItems: 'center', paddingVertical: verticalScale(80), paddingHorizontal: scale(32) },
+    loadingText: { color: COLORS.gray600, marginTop: verticalScale(16), fontSize: moderateScale(14) },
 });
