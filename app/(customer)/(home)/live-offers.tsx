@@ -16,6 +16,8 @@ import {
     FlatList,
     Animated,
     Linking,
+    AppState,
+    AppStateStatus,
 } from "react-native";
 import MapView, {
     Marker,
@@ -55,6 +57,12 @@ import { clearReviewState } from "@/store/slices/reviewSlice";
 import { useVendorProximity } from "@/hooks/useVendorProximity";
 import { useRouteTracking } from "@/hooks/useRouteTracking";
 import { resetArrivalNotification } from "@/utils/notifications";
+import {
+    updateCustomerActiveServiceAcceptance,
+    clearCustomerActiveService,
+    getCancelDisableRemaining,
+    CANCEL_DISABLE_DURATION_MS,
+} from "@/services/customerActiveServiceService";
 
 // ============================================================================
 // Constants
@@ -461,6 +469,13 @@ export default function LiveOffersScreen() {
     // Rating modal state
     const [showRatingModal, setShowRatingModal] = useState(false);
 
+    // Cancel disable state (1 minute after accepting proposal)
+    const [cancelDisableTimeLeft, setCancelDisableTimeLeft] = useState<number>(0);
+    const [acceptedAt, setAcceptedAt] = useState<number | null>(null);
+    const cancelTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+    const backgroundTimeRef = useRef<number | null>(null);
+
     // Service address coordinates (from params first, then currentRequest)
     const serviceLocation = useMemo<Coordinates | null>(() => {
         // First try from URL params (passed from create screen)
@@ -584,6 +599,88 @@ export default function LiveOffersScreen() {
         };
     }, []);
 
+    // =========================================================================
+    // Cancel Disable Timer - 1 minute countdown after accepting proposal
+    // =========================================================================
+
+    // Restore cancel timer from persisted storage on mount (for app kill recovery)
+    useEffect(() => {
+        const restoreCancelTimer = async () => {
+            try {
+                const remaining = await getCancelDisableRemaining();
+                if (remaining > 0 && acceptedProposal) {
+                    setCancelDisableTimeLeft(remaining);
+                    // Calculate acceptedAt from remaining time
+                    const calculatedAcceptedAt = Date.now() - (CANCEL_DISABLE_DURATION_MS - remaining * 1000);
+                    setAcceptedAt(calculatedAcceptedAt);
+                }
+            } catch (error) {
+                if (__DEV__) console.error('[LiveOffers] Failed to restore cancel timer:', error);
+            }
+        };
+
+        if (acceptedProposal) {
+            restoreCancelTimer();
+        }
+    }, [acceptedProposal]);
+
+    // Cancel disable countdown timer
+    useEffect(() => {
+        if (!acceptedAt || cancelDisableTimeLeft <= 0) return;
+
+        cancelTimerRef.current = setInterval(() => {
+            if (!isMountedRef.current) return;
+
+            const elapsed = Date.now() - acceptedAt;
+            const remaining = Math.max(0, Math.ceil((CANCEL_DISABLE_DURATION_MS - elapsed) / 1000));
+
+            setCancelDisableTimeLeft(remaining);
+
+            if (remaining <= 0 && cancelTimerRef.current) {
+                clearInterval(cancelTimerRef.current);
+                cancelTimerRef.current = null;
+            }
+        }, 1000);
+
+        return () => {
+            if (cancelTimerRef.current) {
+                clearInterval(cancelTimerRef.current);
+                cancelTimerRef.current = null;
+            }
+        };
+    }, [acceptedAt]);
+
+    // Handle AppState changes (background/foreground) for cancel timer
+    useEffect(() => {
+        const handleAppStateChange = (nextAppState: AppStateStatus) => {
+            if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
+                // App came to foreground - recalculate timer from acceptedAt
+                if (acceptedAt) {
+                    const elapsed = Date.now() - acceptedAt;
+                    const remaining = Math.max(0, Math.ceil((CANCEL_DISABLE_DURATION_MS - elapsed) / 1000));
+                    setCancelDisableTimeLeft(remaining);
+                    if (__DEV__) {
+                        console.log('[LiveOffers] Restored cancel timer from background:', remaining, 'seconds');
+                    }
+                }
+            } else if (nextAppState.match(/inactive|background/)) {
+                // App going to background - save timestamp
+                backgroundTimeRef.current = Date.now();
+            }
+            appStateRef.current = nextAppState;
+        };
+
+        const subscription = AppState.addEventListener('change', handleAppStateChange);
+        return () => subscription?.remove();
+    }, [acceptedAt]);
+
+    // Clear persisted service on completion
+    useEffect(() => {
+        if (completedService && completedService.requestId === effectiveRequestId) {
+            clearCustomerActiveService().catch(() => { });
+        }
+    }, [completedService, effectiveRequestId]);
+
     // Request expiry timer effect with mounted state check
     useEffect(() => {
         // Skip if proposal already accepted
@@ -660,6 +757,17 @@ export default function LiveOffersScreen() {
             setAcceptingId(proposalId);
             await dispatch(acceptProposal(proposalId)).unwrap();
             bottomSheetRef.current?.snapToIndex(0);
+
+            // Set cancel disable timer (1 minute)
+            const now = Date.now();
+            setAcceptedAt(now);
+            setCancelDisableTimeLeft(Math.ceil(CANCEL_DISABLE_DURATION_MS / 1000));
+
+            // Update persisted service with acceptance data
+            // (Service was already persisted when request was created)
+            updateCustomerActiveServiceAcceptance(proposalId, now).catch((error) => {
+                if (__DEV__) console.error('[LiveOffers] Failed to update acceptance:', error);
+            });
         } catch (err: unknown) {
             const errorMessage = err instanceof Error ? err.message : 'Failed to accept proposal. Please try again.';
             Alert.alert('Error', errorMessage);
@@ -681,6 +789,16 @@ export default function LiveOffersScreen() {
     }, [dispatch]);
 
     const handleCancelRequest = useCallback(() => {
+        // Check if cancel is disabled (within 1 minute of accepting)
+        if (acceptedProposal && cancelDisableTimeLeft > 0) {
+            Alert.alert(
+                'Cannot Cancel Yet',
+                `Please wait ${cancelDisableTimeLeft} seconds before cancelling. This allows the vendor to prepare for your service.`,
+                [{ text: 'OK' }]
+            );
+            return;
+        }
+
         Alert.alert(
             'Cancel Request',
             'Are you sure you want to cancel this request?',
@@ -689,11 +807,15 @@ export default function LiveOffersScreen() {
                 {
                     text: 'Yes, Cancel',
                     style: 'destructive',
-                    onPress: () => router.back(),
+                    onPress: async () => {
+                        // Clear persisted active service
+                        await clearCustomerActiveService().catch(() => { });
+                        router.back();
+                    },
                 },
             ]
         );
-    }, [router]);
+    }, [router, acceptedProposal, cancelDisableTimeLeft]);
 
     // Handle retry request - create new request with same parameters
     const handleRetryRequest = useCallback(async () => {
@@ -894,21 +1016,39 @@ export default function LiveOffersScreen() {
                 </View>
             )}
 
-            {/* Cancel Button */}
-            {!acceptedProposal && (
+            {/* Cancel Button - Show before acceptance OR after acceptance with timer */}
+            {(!acceptedProposal || cancelDisableTimeLeft > 0) && (
                 <TouchableOpacity
-                    style={styles.cancelButton}
+                    style={[
+                        styles.cancelButton,
+                        acceptedProposal && cancelDisableTimeLeft > 0 && styles.cancelButtonDisabled
+                    ]}
                     onPress={handleCancelRequest}
-                    activeOpacity={0.8}
+                    activeOpacity={acceptedProposal && cancelDisableTimeLeft > 0 ? 1 : 0.8}
+                    disabled={acceptedProposal && cancelDisableTimeLeft > 0}
                 >
                     <LinearGradient
-                        colors={[COLORS.error, '#dc2626']}
+                        colors={acceptedProposal && cancelDisableTimeLeft > 0
+                            ? [COLORS.gray400, COLORS.gray500]
+                            : [COLORS.error, '#dc2626']
+                        }
                         start={{ x: 0, y: 0 }}
                         end={{ x: 1, y: 0 }}
                         style={styles.cancelButtonInner}
                     >
-                        <X size={20} color={COLORS.white} />
-                        <Text style={styles.cancelButtonText}>Cancel Request</Text>
+                        {acceptedProposal && cancelDisableTimeLeft > 0 ? (
+                            <>
+                                <Ionicons name="time" size={20} color={COLORS.white} />
+                                <Text style={styles.cancelButtonText}>
+                                    Cancel available in {cancelDisableTimeLeft}s
+                                </Text>
+                            </>
+                        ) : (
+                            <>
+                                <X size={20} color={COLORS.white} />
+                                <Text style={styles.cancelButtonText}>Cancel Request</Text>
+                            </>
+                        )}
                     </LinearGradient>
                 </TouchableOpacity>
             )}
@@ -1303,6 +1443,10 @@ const styles = StyleSheet.create({
         color: COLORS.white,
         fontSize: moderateScale(16),
         fontWeight: "700",
+    },
+    cancelButtonDisabled: {
+        opacity: 0.9,
+        shadowColor: COLORS.gray500,
     },
 
     // Bottom sheet

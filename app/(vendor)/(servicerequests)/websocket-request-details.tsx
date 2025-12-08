@@ -6,7 +6,7 @@
  * using WebSocket dispatch system.
  */
 
-import React, { useCallback, useEffect, useState, useRef, useMemo } from 'react';
+import React, { useCallback, useEffect, useState, useRef, useMemo, memo } from 'react';
 import {
     View,
     StyleSheet,
@@ -17,6 +17,7 @@ import {
     BackHandler,
     AppState,
     AppStateStatus,
+    InteractionManager,
 } from 'react-native';
 import Text from '@/components/common/Text';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
@@ -35,6 +36,7 @@ import {
     sendProposal,
     completeService,
     updateLocation,
+    cleanupCompletedService,
 } from '@/store/slices/dispatchSlice';
 import { COLORS } from '@/constants/colors';
 import type { Coordinates } from '@/types/socket';
@@ -44,6 +46,9 @@ import {
     isBackgroundLocationRunning,
     flushLocationQueue,
 } from '@/services/backgroundLocationService';
+import { getDistance } from '@/utils/distanceCache';
+// Google Routes API service - ready for integration when client enables the API
+// import { googleDirectionsService, type RouteInfo } from '@/services/googleDirectionsService';
 
 interface RouteInfo {
     distance: number;
@@ -115,6 +120,9 @@ export default function WebSocketRequestDetailsScreen() {
     const lastRouteFetchRef = useRef<number>(0);
     const isBackgroundTrackingActiveRef = useRef<boolean>(false);
     const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+    const isMountedRef = useRef<boolean>(true);
+    const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    const progressAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
 
     // Customer location from request
     const customerLocation = useMemo(() => {
@@ -124,6 +132,55 @@ export default function WebSocketRequestDetailsScreen() {
             longitude: request.longitude,
         };
     }, [request?.latitude, request?.longitude]);
+
+    // Calculate straight-line (Haversine) distance for accurate proximity check
+    // This is different from OSRM road distance - road distance can be much higher
+    // due to routing around buildings, one-way streets, etc.
+    const straightLineDistanceKm = useMemo(() => {
+        if (!vendorLocation || !customerLocation) return null;
+        return getDistance(vendorLocation, customerLocation); // Returns distance in km
+    }, [vendorLocation, customerLocation]);
+
+    // Format straight-line distance for display (in meters when < 1km)
+    // Must be before any early returns to maintain consistent hook order
+    const formattedStraightLineDistance = useMemo(() => {
+        if (straightLineDistanceKm === null) return null;
+        if (straightLineDistanceKm < 1) {
+            return `${Math.round(straightLineDistanceKm * 1000)}m`;
+        }
+        return `${straightLineDistanceKm.toFixed(1)}km`;
+    }, [straightLineDistanceKm]);
+
+    // Cleanup on unmount
+    useEffect(() => {
+        isMountedRef.current = true;
+
+        return () => {
+            isMountedRef.current = false;
+
+            // Clear all timers
+            if (timerIntervalRef.current) {
+                clearInterval(timerIntervalRef.current);
+                timerIntervalRef.current = null;
+            }
+            if (routeFetchTimeoutRef.current) {
+                clearTimeout(routeFetchTimeoutRef.current);
+                routeFetchTimeoutRef.current = null;
+            }
+
+            // Stop animations
+            if (progressAnimationRef.current) {
+                progressAnimationRef.current.stop();
+                progressAnimationRef.current = null;
+            }
+
+            // Clear location watcher
+            if (locationWatchRef.current) {
+                locationWatchRef.current.remove();
+                locationWatchRef.current = null;
+            }
+        };
+    }, []);
 
     // Timer effect - calculate from absolute expiry time for accuracy
     useEffect(() => {
@@ -137,12 +194,23 @@ export default function WebSocketRequestDetailsScreen() {
 
         setTimeLeft(calculateTimeLeft());
 
-        const interval = setInterval(() => {
+        // Clear existing interval before creating new one
+        if (timerIntervalRef.current) {
+            clearInterval(timerIntervalRef.current);
+        }
+
+        timerIntervalRef.current = setInterval(() => {
+            if (!isMountedRef.current) return;
             const remaining = calculateTimeLeft();
             setTimeLeft(remaining);
         }, 1000);
 
-        return () => clearInterval(interval);
+        return () => {
+            if (timerIntervalRef.current) {
+                clearInterval(timerIntervalRef.current);
+                timerIntervalRef.current = null;
+            }
+        };
     }, [request?.expires_at]);
 
     // Handle request expiry - navigate away when timer ends
@@ -232,28 +300,42 @@ export default function WebSocketRequestDetailsScreen() {
 
     // Progress animation
     useEffect(() => {
-        if (!request) return;
+        if (!request || !isMountedRef.current) return;
 
         const totalDuration = 120; // Assume 2 minute window
         const progress = timeLeft / totalDuration;
 
-        Animated.timing(progressAnim, {
+        // Stop any existing animation
+        if (progressAnimationRef.current) {
+            progressAnimationRef.current.stop();
+        }
+
+        progressAnimationRef.current = Animated.timing(progressAnim, {
             toValue: progress,
             duration: 300,
             useNativeDriver: false,
-        }).start();
-    }, [timeLeft]);
+        });
+
+        progressAnimationRef.current.start(() => {
+            progressAnimationRef.current = null;
+        });
+    }, [timeLeft, request]);
 
     // Initialize vendor location and check for existing background tracking
     useEffect(() => {
-        let isMounted = true;
-
         const initializeLocation = async () => {
             try {
+                // Wait for navigation animations to complete
+                await new Promise<void>((resolve) => {
+                    InteractionManager.runAfterInteractions(() => resolve());
+                });
+
+                if (!isMountedRef.current) return;
+
                 const { status } = await Location.requestForegroundPermissionsAsync();
                 if (status !== 'granted') {
                     Alert.alert('Permission Denied', 'Location permission is required');
-                    setIsLoading(false);
+                    if (isMountedRef.current) setIsLoading(false);
                     return;
                 }
 
@@ -270,7 +352,7 @@ export default function WebSocketRequestDetailsScreen() {
                     accuracy: Location.Accuracy.High,
                 });
 
-                if (isMounted) {
+                if (isMountedRef.current) {
                     const coords = {
                         latitude: location.coords.latitude,
                         longitude: location.coords.longitude,
@@ -285,21 +367,11 @@ export default function WebSocketRequestDetailsScreen() {
                 }
             } catch (error) {
                 console.error('[VendorDetails] Location error:', error);
-                if (isMounted) setIsLoading(false);
+                if (isMountedRef.current) setIsLoading(false);
             }
         };
 
         initializeLocation();
-
-        return () => {
-            isMounted = false;
-            // Only stop foreground watcher on unmount, keep background running
-            // Background tracking stops only when service is completed
-            if (locationWatchRef.current) {
-                locationWatchRef.current.remove();
-                locationWatchRef.current = null;
-            }
-        };
     }, []);
 
     // Start location tracking when proposal is accepted
@@ -432,8 +504,11 @@ export default function WebSocketRequestDetailsScreen() {
     };
 
     // Fetch route with throttling (minimum 10 seconds between fetches)
+    // Currently using OSRM - Switch to Google Routes API when client enables it:
+    // 1. Uncomment the googleDirectionsService import at the top
+    // 2. Replace the OSRM fetch below with: const route = await googleDirectionsService.getRoute(vendorLocation, customerLocation);
     useEffect(() => {
-        if (!vendorLocation || !customerLocation) return;
+        if (!vendorLocation || !customerLocation || !isMountedRef.current) return;
 
         const THROTTLE_MS = 10000; // 10 seconds minimum between route fetches
         const now = Date.now();
@@ -442,17 +517,31 @@ export default function WebSocketRequestDetailsScreen() {
         // Clear any pending timeout
         if (routeFetchTimeoutRef.current) {
             clearTimeout(routeFetchTimeoutRef.current);
+            routeFetchTimeoutRef.current = null;
         }
 
         const fetchRoute = async () => {
+            if (!isMountedRef.current) return;
+
             try {
                 lastRouteFetchRef.current = Date.now();
+
+                // Using OSRM for now - switch to Google Routes API when enabled
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
+
                 const res = await fetch(
-                    `https://router.project-osrm.org/route/v1/driving/${vendorLocation.longitude},${vendorLocation.latitude};${customerLocation.longitude},${customerLocation.latitude}?overview=full&geometries=geojson`
+                    `https://router.project-osrm.org/route/v1/driving/${vendorLocation.longitude},${vendorLocation.latitude};${customerLocation.longitude},${customerLocation.latitude}?overview=full&geometries=geojson`,
+                    { signal: controller.signal }
                 );
+
+                clearTimeout(timeoutId);
+
+                if (!isMountedRef.current) return;
+
                 const data = await res.json();
 
-                if (data.routes && data.routes[0]) {
+                if (data.routes && data.routes[0] && isMountedRef.current) {
                     const route = data.routes[0];
                     const coords = route.geometry.coordinates.map(
                         ([lng, lat]: [number, number]) => ({
@@ -462,7 +551,7 @@ export default function WebSocketRequestDetailsScreen() {
                     );
 
                     if (__DEV__) {
-                        console.log('[VendorDetails] Route updated:', {
+                        console.log('[VendorDetails] Route updated (OSRM):', {
                             distance: route.distance,
                             duration: route.duration,
                             coordsCount: coords.length,
@@ -475,8 +564,10 @@ export default function WebSocketRequestDetailsScreen() {
                         coordinates: coords,
                     });
                 }
-            } catch (error) {
-                console.error('Route fetch error:', error);
+            } catch (error: any) {
+                if (error.name !== 'AbortError') {
+                    console.error('[VendorDetails] Route fetch error:', error);
+                }
             }
         };
 
@@ -492,6 +583,7 @@ export default function WebSocketRequestDetailsScreen() {
         return () => {
             if (routeFetchTimeoutRef.current) {
                 clearTimeout(routeFetchTimeoutRef.current);
+                routeFetchTimeoutRef.current = null;
             }
         };
     }, [vendorLocation, customerLocation]);
@@ -542,14 +634,26 @@ export default function WebSocketRequestDetailsScreen() {
                     text: 'Complete',
                     onPress: async () => {
                         try {
-                            await dispatch(completeService(requestId)).unwrap();
-                            // Stop all location tracking (background + foreground)
+                            // Stop all location tracking first (background + foreground)
                             await stopLocationTracking();
+
+                            // Then complete the service via dispatch
+                            await dispatch(completeService(requestId)).unwrap();
+
+                            // Clean up Redux state for this completed service
+                            dispatch(cleanupCompletedService(requestId));
 
                             Alert.alert('Success', 'Service completed!', [
                                 {
                                     text: 'OK',
-                                    onPress: () => router.replace('/(vendor)/(servicerequests)/')
+                                    onPress: () => {
+                                        // Use InteractionManager to wait for alert to dismiss
+                                        InteractionManager.runAfterInteractions(() => {
+                                            if (isMountedRef.current) {
+                                                router.replace('/(vendor)/(servicerequests)/');
+                                            }
+                                        });
+                                    }
                                 }
                             ]);
                         } catch (error: any) {
@@ -559,7 +663,7 @@ export default function WebSocketRequestDetailsScreen() {
                 },
             ]
         );
-    }, [dispatch, requestId, router]);
+    }, [dispatch, requestId, router, stopLocationTracking]);
 
     // Request not found - check early
     if (!request && !isLoading) {
@@ -606,7 +710,9 @@ export default function WebSocketRequestDetailsScreen() {
     const canSendProposal = !request?.already_sent && request?.status === 'pending';
 
     // Check if vendor is within 100 meters of customer location
-    const isWithinRange = routeInfo ? routeInfo.distance <= 100 : false;
+    // Using straight-line (Haversine) distance for accurate proximity check
+    // 0.1 km = 100 meters
+    const isWithinRange = straightLineDistanceKm !== null ? straightLineDistanceKm <= 0.1 : false;
 
     return (
         <View style={styles.container}>
@@ -880,7 +986,7 @@ export default function WebSocketRequestDetailsScreen() {
                                         <Text type="button" style={styles.actionButtonText}>
                                             {isWithinRange
                                                 ? 'Mark as Complete'
-                                                : `${formatDistance(routeInfo?.distance || 0)} away`
+                                                : `${formattedStraightLineDistance || 'Calculating...'} away`
                                             }
                                         </Text>
                                     </>

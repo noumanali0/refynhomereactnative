@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   View,
   // Text,
@@ -23,6 +23,7 @@ import { ServiceCard } from '@/components/customer/ServiceCard';
 import { useCurrentLocation } from '@/hooks/useCurrentLocation';
 import { updateProfile } from '@/store/slices/authSlice';
 import { AddressSearchBottomSheet } from '@/components/customer/AddressSearchBottomSheet';
+import { getCustomerActiveService, clearCustomerActiveService } from '@/services/customerActiveServiceService';
 // import { useAppSelector } from '@/store/hooks';
 // import { useGetServiceHistoryQuery } from '@/services/customerApi';
 // import { SERVICE_TYPES } from '@/utils/constants';
@@ -34,8 +35,54 @@ export default function CustomerHomeScreen() {
   const { user } = useAppSelector((state) => state.auth);
   const { data: history, isLoading, refetch } = { data: [], isLoading: false, refetch: async () => { } }; // useGetServiceHistoryQuery();
   const [refreshing, setRefreshing] = useState(false);
+  const [checkingActiveService, setCheckingActiveService] = useState(true);
+  const hasCheckedActiveService = useRef(false);
   // const { isConnected } = useSocket();
   const isConnected = true;
+
+  // Check for active service on mount and redirect to live-offers if found
+  useEffect(() => {
+    const checkActiveService = async () => {
+      // Only check once per mount
+      if (hasCheckedActiveService.current) return;
+      hasCheckedActiveService.current = true;
+
+      try {
+        const activeService = await getCustomerActiveService();
+
+        if (activeService) {
+          if (__DEV__) {
+            console.log('[CustomerHome] Found active service, redirecting to live-offers:', activeService);
+          }
+
+          // Redirect to live-offers with the stored data
+          router.replace({
+            pathname: '/(customer)/(home)/live-offers',
+            params: {
+              requestId: activeService.requestId.toString(),
+              ...(activeService.serviceLocation && {
+                latitude: activeService.serviceLocation.latitude.toString(),
+                longitude: activeService.serviceLocation.longitude.toString(),
+              }),
+              ...(activeService.serviceAddress && {
+                address: activeService.serviceAddress,
+              }),
+            },
+          });
+        }
+      } catch (error) {
+        if (__DEV__) {
+          console.error('[CustomerHome] Error checking active service:', error);
+        }
+        // Clear potentially corrupted data
+        await clearCustomerActiveService().catch(() => { });
+      } finally {
+        setCheckingActiveService(false);
+      }
+    };
+
+    checkActiveService();
+  }, [router]);
 
   // Get current location
   const {
@@ -64,6 +111,15 @@ export default function CustomerHomeScreen() {
       params: { serviceType },
     });
   };
+
+  // Show loading while checking for active service
+  if (checkingActiveService) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>

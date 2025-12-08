@@ -219,6 +219,16 @@ export const VENDOR_ENDPOINTS = {
   DASHBOARD: '/vendors/dashboard/',
 
   /**
+   * POST /api/vendors/location/
+   * Body: { latitude, longitude, service_request_id? }
+   * Response: { success: true }
+   *
+   * HTTP endpoint for location updates (used by background task when app is killed)
+   * This bypasses WebSocket for reliable background updates
+   */
+  UPDATE_LOCATION: '/vendors/location/',
+
+  /**
    * GET /api/vendors/service-requests/
    * Query params:
    *   - type: 'pending' | 'incoming' | 'active' | 'completed' | 'history'

@@ -69,7 +69,10 @@ export default function WebSocketServiceRequestsScreen() {
         allServiceRequests.filter(request => request.status !== 'completed'),
         [allServiceRequests]
     );
-    console.log("🚀 ~ WebSocketServiceRequestsScreen ~ serviceRequests:", serviceRequests)
+
+    if (__DEV__) {
+        console.log("🚀 ~ WebSocketServiceRequestsScreen ~ serviceRequests:", serviceRequests.length);
+    }
 
     // Local state
     const [fadeAnim] = useState(new Animated.Value(0));
@@ -81,6 +84,12 @@ export default function WebSocketServiceRequestsScreen() {
     const appState = useRef<AppStateStatus>(AppState.currentState);
     const previousRequestIds = useRef<Set<number>>(new Set());
     const locationWatchRef = useRef<Location.LocationSubscription | null>(null);
+    const serviceRequestsRef = useRef<SocketServiceRequest[]>(serviceRequests);
+
+    // Keep ref in sync with latest service requests
+    useEffect(() => {
+        serviceRequestsRef.current = serviceRequests;
+    }, [serviceRequests]);
 
     // Setup push notifications on mount
     useEffect(() => {
@@ -104,14 +113,17 @@ export default function WebSocketServiceRequestsScreen() {
         ]).start();
     }, []);
 
-    // Cleanup expired requests periodically
+    // Cleanup expired requests periodically - use ref to avoid recreating interval
     useEffect(() => {
         const cleanupInterval = setInterval(() => {
             const now = Date.now();
-            serviceRequests.forEach((request) => {
+            const requests = serviceRequestsRef.current;
+            requests.forEach((request) => {
                 const expiresAt = new Date(request.expires_at).getTime();
                 if (expiresAt <= now && request?.vendor_status === 'request') {
-                    console.log(`Removing expired request ${request.id}`);
+                    if (__DEV__) {
+                        console.log(`Removing expired request ${request.id}`);
+                    }
                     dispatch(removeServiceRequest(request.id));
                     // Also remove the notification
                     removeServiceRequestNotification(request.id);
@@ -120,7 +132,7 @@ export default function WebSocketServiceRequestsScreen() {
         }, 5000); // Check every 5 seconds
 
         return () => clearInterval(cleanupInterval);
-    }, [serviceRequests, dispatch]);
+    }, [dispatch]); // Only depend on dispatch, use ref for requests
 
     // ========================================================================
     // Location Tracking

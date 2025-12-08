@@ -18,7 +18,7 @@ import {
   removeServiceRequestNotification
 } from '@/utils/notifications';
 import { flushLocationQueue } from '@/services/backgroundLocationService';
-import { saveActiveJob, clearActiveJob as clearActiveJobStorage } from '@/services/activeJobService';
+import { saveActiveJob, updateActiveJobStatus, clearActiveJob as clearActiveJobStorage } from '@/services/activeJobService';
 import type { RootState } from '@/store';
 import type {
   ConnectionStatus,
@@ -358,19 +358,23 @@ export const connectSocket = createAsyncThunk(
 
         dispatch(updateProposal(proposal));
 
-        // If proposal was accepted, set active job and persist it
+        // If proposal was accepted, set active job and update persist status
         if (proposal.status === 'accepted') {
           dispatch(setActiveJob({
             requestId: proposal.service_request_id,
             proposalId: proposal.id,
           }));
 
-          // Persist active job to SecureStore for app restart recovery
-          saveActiveJob({
-            jobId: proposal.service_request_id,
-            proposalId: proposal.id,
-          }).catch((error) => {
-            if (__DEV__) console.error('[Dispatch] Failed to persist active job:', error);
+          // Update status to 'accepted' (job was already persisted when proposal was sent)
+          updateActiveJobStatus('accepted').catch((error) => {
+            if (__DEV__) console.error('[Dispatch] Failed to update job status:', error);
+          });
+        }
+
+        // If proposal was declined or expired, clear the persisted job
+        if (proposal.status === 'declined' || proposal.status === 'expired') {
+          clearActiveJobStorage().catch((error) => {
+            if (__DEV__) console.error('[Dispatch] Failed to clear job on decline/expire:', error);
           });
         }
       })
@@ -381,6 +385,40 @@ export const connectSocket = createAsyncThunk(
       socketService.on('proposal.accept.timeout', (data: ProposalAcceptTimeoutEvent) => {
         if (__DEV__) console.log('[Dispatch] proposal.accept.timeout:', data.proposal?.id);
         dispatch(updateProposal({ ...data.proposal, status: 'expired' }));
+
+        // Clear persisted job when customer doesn't accept in time
+        clearActiveJobStorage().catch((error) => {
+          if (__DEV__) console.error('[Dispatch] Failed to clear job on timeout:', error);
+        });
+      })
+    );
+
+    // Proposal accepted - backend sends this event when customer accepts proposal
+    // This is different from proposal.updated - backend sends proposal.accepted specifically for acceptance
+    activeUnsubscribers.push(
+      socketService.on('proposal.accepted', (data: { proposal?: SocketProposal; payload?: SocketProposal }) => {
+        const proposal = data.proposal || data.payload;
+
+        if (!proposal) {
+          if (__DEV__) console.warn('[Dispatch] proposal.accepted received with no proposal data');
+          return;
+        }
+
+        if (__DEV__) console.log('[Dispatch] proposal.accepted:', proposal.id, proposal.status);
+
+        // Update proposal in Redux state
+        dispatch(updateProposal(proposal));
+
+        // Set active job for vendor
+        dispatch(setActiveJob({
+          requestId: proposal.service_request_id,
+          proposalId: proposal.id,
+        }));
+
+        // Update persist status to 'accepted' - ensures vendor returns to this screen on app restart
+        updateActiveJobStatus('accepted').catch((error) => {
+          if (__DEV__) console.error('[Dispatch] Failed to update job status on acceptance:', error);
+        });
       })
     );
 
@@ -477,6 +515,19 @@ export const sendProposal = createAsyncThunk(
             clearTimeout(timeout);
             unsub();
             dispatch(setPendingAction({ key: pendingKey, value: false }));
+
+            // Persist active job when proposal is sent successfully
+            // This ensures vendor returns to this request after app kill
+            if (data.proposal_id) {
+              saveActiveJob({
+                jobId: serviceRequestId,
+                proposalId: data.proposal_id,
+                status: 'pending',
+              }).catch((error) => {
+                if (__DEV__) console.error('[Dispatch] Failed to persist pending job:', error);
+              });
+            }
+
             resolve(data);
           }
         });
@@ -887,6 +938,24 @@ const dispatchSlice = createSlice({
 
     // Reset state (on logout)
     resetDispatchState: () => initialState,
+
+    // Clean up completed service data
+    cleanupCompletedService: (state, action: PayloadAction<number>) => {
+      const requestId = action.payload;
+
+      // Remove from service requests
+      delete state.serviceRequestsById[requestId];
+      state.serviceRequestIds = state.serviceRequestIds.filter((id) => id !== requestId);
+
+      // Clear active job if it matches
+      if (state.activeJobId === requestId) {
+        state.activeJobId = null;
+        state.activeProposalId = null;
+      }
+
+      // Clear vendor location
+      state.vendorLocation = null;
+    },
   },
   extraReducers: (builder) => {
     // Connect
@@ -946,6 +1015,7 @@ export const {
   clearError,
   clearAllErrors,
   resetDispatchState,
+  cleanupCompletedService,
 } = dispatchSlice.actions;
 
 // ============================================================================

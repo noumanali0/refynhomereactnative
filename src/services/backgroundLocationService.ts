@@ -6,39 +6,34 @@
  *
  * Features:
  * - Background task definition with foreground service notification (Android)
+ * - HTTP API fallback when app is killed (WebSocket won't work in background)
  * - Location queuing for offline resilience
  * - Automatic queue flush on reconnection
  * - Clean start/stop lifecycle management
+ *
+ * IMPORTANT: When app is killed, WebSocket connection is lost. This service uses
+ * HTTP API to send location updates directly to the backend, which then broadcasts
+ * to the customer via WebSocket.
  */
 
 import * as TaskManager from 'expo-task-manager';
 import * as Location from 'expo-location';
+import * as SecureStore from 'expo-secure-store';
 import { socketService } from './socketService';
-
-// ============================================================================
-// Lazy Store Access (avoids circular dependency)
-// ============================================================================
-
-/**
- * Lazy getter for Redux store to avoid circular dependency.
- * The store imports dispatchSlice, which imports this service,
- * which would import the store - creating a circular dependency.
- * Using require() defers the import until runtime when store is initialized.
- */
-let storeInstance: any = null;
-
-function getStore() {
-  if (!storeInstance) {
-    storeInstance = require('@/store').store;
-  }
-  return storeInstance;
-}
+import { API_BASE_URL } from '@/api/client';
+import { VENDOR_ENDPOINTS } from '@/api/endpoints';
 
 // ============================================================================
 // Constants
 // ============================================================================
 
 export const BACKGROUND_LOCATION_TASK = 'vendor-background-location';
+
+// SecureStore keys for background task data persistence
+const STORAGE_KEYS = {
+  ACCESS_TOKEN: 'accessToken', // Must match tokenService key
+  SERVICE_REQUEST_ID: 'background_service_request_id',
+};
 
 const LOCATION_CONFIG = {
   accuracy: Location.Accuracy.High,
@@ -51,6 +46,42 @@ const LOCATION_CONFIG = {
 };
 
 const MAX_QUEUE_SIZE = 50; // ~4 minutes of location data at 5s intervals
+
+// ============================================================================
+// Lazy Store Access (avoids circular dependency)
+// ============================================================================
+
+/**
+ * Lazy getter for Redux store to avoid circular dependency.
+ * NOTE: Store may not be available when task runs in background after app kill.
+ */
+let storeInstance: any = null;
+
+function getStore(): any | null {
+  try {
+    if (!storeInstance) {
+      storeInstance = require('@/store').store;
+    }
+    return storeInstance;
+  } catch {
+    // Store not available (app was killed)
+    return null;
+  }
+}
+
+/**
+ * Check if WebSocket is connected via Redux store
+ * Returns false if store is not available (app killed)
+ */
+function isSocketConnected(): boolean {
+  try {
+    const store = getStore();
+    if (!store) return false;
+    return store.getState().dispatch.connectionStatus === 'connected';
+  } catch {
+    return false;
+  }
+}
 
 // ============================================================================
 // Types
@@ -96,14 +127,13 @@ export function clearLocationQueue() {
 }
 
 /**
- * Flush queued locations to the server
+ * Flush queued locations to the server via WebSocket
  * Called when socket reconnects
  */
 export async function flushLocationQueue(): Promise<void> {
   if (locationQueue.length === 0) return;
 
-  const isConnected = getStore().getState().dispatch.connectionStatus === 'connected';
-  if (!isConnected) {
+  if (!isSocketConnected()) {
     console.log('[BackgroundLocation] Cannot flush - socket not connected');
     return;
   }
@@ -131,14 +161,56 @@ export async function flushLocationQueue(): Promise<void> {
 }
 
 /**
- * Send location update to server or queue if offline
+ * Send location update via HTTP API
+ * Used when app is in background/killed and WebSocket is not available
+ */
+async function sendLocationViaHttp(coords: Coordinates, serviceRequestId: number | null): Promise<boolean> {
+  try {
+    // Get token from SecureStore (available even when app is killed)
+    const token = await SecureStore.getItemAsync(STORAGE_KEYS.ACCESS_TOKEN);
+
+    if (!token) {
+      console.warn('[BackgroundLocation] No auth token available for HTTP request');
+      return false;
+    }
+
+    const response = await fetch(`${API_BASE_URL}${VENDOR_ENDPOINTS.UPDATE_LOCATION}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        latitude: coords.latitude,
+        longitude: coords.longitude,
+        service_request_id: serviceRequestId,
+      }),
+    });
+
+    if (!response.ok) {
+      console.error('[BackgroundLocation] HTTP update failed:', response.status);
+      return false;
+    }
+
+    if (__DEV__) {
+      console.log('[BackgroundLocation] Sent location via HTTP:', coords);
+    }
+
+    return true;
+  } catch (error) {
+    console.error('[BackgroundLocation] HTTP request failed:', error);
+    return false;
+  }
+}
+
+/**
+ * Send location update to server
+ * Uses WebSocket if connected, otherwise falls back to HTTP API
  */
 async function sendLocationUpdate(coords: Coordinates): Promise<void> {
-  const isConnected = getStore().getState().dispatch.connectionStatus === 'connected';
-
-  if (isConnected) {
+  // Try WebSocket first (faster, real-time)
+  if (isSocketConnected()) {
     try {
-      // Send current location
       socketService.send('location.update', {
         latitude: coords.latitude,
         longitude: coords.longitude,
@@ -150,13 +222,33 @@ async function sendLocationUpdate(coords: Coordinates): Promise<void> {
       }
 
       if (__DEV__) {
-        console.log('[BackgroundLocation] Sent location:', coords);
+        console.log('[BackgroundLocation] Sent location via WebSocket:', coords);
       }
+      return;
     } catch (error) {
-      console.error('[BackgroundLocation] Send failed, queuing:', error);
-      queueLocation(coords);
+      console.error('[BackgroundLocation] WebSocket send failed:', error);
+      // Fall through to HTTP
     }
-  } else {
+  }
+
+  // WebSocket not available - use HTTP API
+  // Get service request ID from SecureStore (persists even after app kill)
+  let serviceReqId = activeServiceRequestId;
+  if (!serviceReqId) {
+    try {
+      const storedId = await SecureStore.getItemAsync(STORAGE_KEYS.SERVICE_REQUEST_ID);
+      if (storedId) {
+        serviceReqId = parseInt(storedId, 10);
+      }
+    } catch {
+      // Ignore errors reading from storage
+    }
+  }
+
+  const httpSuccess = await sendLocationViaHttp(coords, serviceReqId);
+
+  if (!httpSuccess) {
+    // Both methods failed, queue the location
     queueLocation(coords);
   }
 }
@@ -224,7 +316,7 @@ export function defineBackgroundLocationTask(): void {
       });
     }
 
-    // Send to server
+    // Send to server (will use HTTP if WebSocket not available)
     await sendLocationUpdate(coords);
   });
 
@@ -277,6 +369,8 @@ export async function startBackgroundLocationTracking(
     if (isRunning) {
       console.log('[BackgroundLocation] Already running, updating service request ID');
       activeServiceRequestId = serviceRequestId;
+      // Persist service request ID for background task after app kill
+      await SecureStore.setItemAsync(STORAGE_KEYS.SERVICE_REQUEST_ID, serviceRequestId.toString());
       return true;
     }
 
@@ -291,6 +385,9 @@ export async function startBackgroundLocationTracking(
       console.warn('[BackgroundLocation] Cannot start - permission denied');
       return false;
     }
+
+    // Persist service request ID for background task after app kill
+    await SecureStore.setItemAsync(STORAGE_KEYS.SERVICE_REQUEST_ID, serviceRequestId.toString());
 
     // Start location updates with foreground service
     await Location.startLocationUpdatesAsync(BACKGROUND_LOCATION_TASK, {
@@ -326,6 +423,9 @@ export async function stopBackgroundLocationTracking(): Promise<void> {
     await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
     activeServiceRequestId = null;
     clearLocationQueue();
+
+    // Clear persisted service request ID
+    await SecureStore.deleteItemAsync(STORAGE_KEYS.SERVICE_REQUEST_ID);
 
     console.log('[BackgroundLocation] Stopped tracking');
   } catch (error) {

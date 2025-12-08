@@ -30,6 +30,7 @@ import {
     getServiceCategories,
     ServiceCategory,
 } from "@/services/serviceRequestApi";
+import { saveCustomerActiveService } from "@/services/customerActiveServiceService";
 
 // ============================================================================
 // Error Boundary Component
@@ -856,6 +857,19 @@ const RequestServiceScreen = () => {
             }
 
             console.log('Service request created:', response);
+
+            // Persist active service for app kill recovery
+            // This ensures customer returns to live-offers screen after app restart
+            await saveCustomerActiveService({
+                requestId: response.request.id,
+                serviceLocation: {
+                    latitude: parseFloat(values.latitude),
+                    longitude: parseFloat(values.longitude),
+                },
+                serviceAddress: values.serviceAddress,
+            }).catch((error) => {
+                if (__DEV__) console.error('[CreateRequest] Failed to persist active service:', error);
+            });
 
             navigateToLiveOffers(
                 response.request.id,

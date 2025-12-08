@@ -28,7 +28,6 @@ import {
     selectHistoryError,
     selectCurrentFilter,
 } from '@/store/slices/serviceHistorySlice';
-import { fetchFavoriteVendors } from '@/store/slices/vendorSlice';
 
 type FilterType = 'all' | 'active' | 'completed' | 'cancelled';
 
@@ -46,7 +45,6 @@ export default function CustomerHistoryScreen() {
     // Fetch data on mount
     useEffect(() => {
         dispatch(fetchServiceHistory());
-        dispatch(fetchFavoriteVendors());
     }, [dispatch]);
 
     // Handle filter change
