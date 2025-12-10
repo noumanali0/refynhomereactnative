@@ -72,6 +72,8 @@ export default function WebSocketServiceRequestsScreen() {
     const appState = useRef<AppStateStatus>(AppState.currentState);
     const previousRequestIds = useRef<Set<number>>(new Set());
     const locationWatchRef = useRef<Location.LocationSubscription | null>(null);
+    // Timer refs for proper cleanup (prevents memory leak from orphaned setTimeouts)
+    const newRequestTimersRef = useRef<Map<number, NodeJS.Timeout>>(new Map());
 
     // ========================================================================
     // Auto-navigate to active job when tab is focused
@@ -214,21 +216,39 @@ export default function WebSocketServiceRequestsScreen() {
         );
 
         if (newRequests.length > 0) {
-            // Track new request IDs for animations
+            // Track new request IDs for animations with proper timer cleanup
             newRequests.forEach((r) => {
                 setNewRequestIds((prev) => new Set([...prev, r.id]));
-                setTimeout(() => {
+
+                // Clear existing timer for this ID if any
+                const existingTimer = newRequestTimersRef.current.get(r.id);
+                if (existingTimer) {
+                    clearTimeout(existingTimer);
+                }
+
+                // Store timer ref for cleanup
+                const timerId = setTimeout(() => {
                     setNewRequestIds((prev) => {
                         const updated = new Set(prev);
                         updated.delete(r.id);
                         return updated;
                     });
+                    newRequestTimersRef.current.delete(r.id);
                 }, 2000);
+                newRequestTimersRef.current.set(r.id, timerId);
             });
         }
 
         previousRequestIds.current = currentIds;
     }, [serviceRequests]);
+
+    // Cleanup timers on unmount to prevent memory leaks
+    useEffect(() => {
+        return () => {
+            newRequestTimersRef.current.forEach((timerId) => clearTimeout(timerId));
+            newRequestTimersRef.current.clear();
+        };
+    }, []);
 
     // ========================================================================
     // Callbacks

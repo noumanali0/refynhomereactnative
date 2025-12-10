@@ -64,7 +64,6 @@ const offersSlice = createSlice({
             state,
             action: PayloadAction<{ id: string; coordinates: { latitude: number; longitude: number }; distance: number | string; eta: number }>
         ) => {
-            console.log("checking accepted offers:", state.acceptedOffer)
             if (state.acceptedOffer && state.acceptedOffer.id === action.payload.id) {
                 state.acceptedOffer.coordinates = action.payload.coordinates;
                 state.acceptedOffer.distance = Number(action.payload.distance);

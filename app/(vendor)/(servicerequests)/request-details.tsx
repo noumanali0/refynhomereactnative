@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { View, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Animated } from "react-native";
+import { View, StyleSheet, TouchableOpacity, ActivityIndicator, Alert, Animated, Platform } from "react-native";
 import Text from '@/components/common/Text';
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from "react-native-maps";
+import MapView, { Marker, Polyline, PROVIDER_DEFAULT, UrlTile } from "react-native-maps";
 import * as Location from "expo-location";
 import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { useSelector, useDispatch } from "react-redux";
@@ -358,6 +358,15 @@ export default function RequestDetailScreen() {
                 showsMyLocationButton
                 loadingEnabled
             >
+                {/* OpenStreetMap tiles - COMMENTED OUT for Google Maps dev build */}
+                {/* Uncomment below for Expo Go testing (no native Google Maps) */}
+                {/* {(Platform.OS === "web" || (Platform.OS === "android" && __DEV__)) && (
+                    <UrlTile
+                        urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        maximumZ={19}
+                        shouldReplaceMapContent={true}
+                    />
+                )} */}
                 <Marker
                     coordinate={vendorLocation}
                     title="Your Location"

@@ -4,7 +4,7 @@
  * Uses React Native Modal for reliable visibility control
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -44,10 +44,19 @@ export const AddressSearchBottomSheet: React.FC<
     useAddressSearch({
       debounceMs: 500,
       minQueryLength: 3,
-      limit: 7,
+      limit: 5, // Reduced from 7 to prevent too many API calls
       proximity,
       country: 'pk',
     });
+
+  // Reset state when modal closes (component stays mounted now)
+  useEffect(() => {
+    if (!isVisible) {
+      // Clear search state when modal hides
+      clearSuggestions();
+      setQuery('');
+    }
+  }, [isVisible, clearSuggestions]);
 
   // Handle search input change
   const handleQueryChange = useCallback(
@@ -59,14 +68,17 @@ export const AddressSearchBottomSheet: React.FC<
   );
 
   // Handle address selection
+  // Note: Parent component handles closing via onSelectAddress callback
+  // We only clear local state here to avoid double-close race condition
   const handleSelectAddress = useCallback(
     (address: Address) => {
-      onSelectAddress(address);
+      // Clear local state first
       clearSuggestions();
       setQuery('');
-      onClose();
+      // Then notify parent - parent will close the modal
+      onSelectAddress(address);
     },
-    [onSelectAddress, clearSuggestions, onClose]
+    [onSelectAddress, clearSuggestions]
   );
 
   // Handle close

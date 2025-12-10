@@ -73,6 +73,72 @@ export const AUTH_ENDPOINTS = {
    * Response: { message, vendor_id, verified: true }
    */
   ADMIN_VERIFY_VENDOR: (vendorId: number) => `/auth/admin/verify-vendor/${vendorId}/`,
+
+  /**
+   * PATCH /api/auth/update-profile/
+   * Headers: Authorization: Bearer {token}
+   * Body (Customer): { first_name?, last_name?, address?, city?, profile_photo? }
+   * Body (Vendor): { first_name?, last_name?, city?, bio?, profile_photo?, service_categories?, service_radius_km? }
+   * Supports both multipart/form-data (file upload) and JSON
+   * Response: { message, user }
+   */
+  UPDATE_PROFILE: '/auth/update-profile/',
+
+  /**
+   * DELETE /api/auth/delete-account/
+   * Headers: Authorization: Bearer {token}
+   * Body: { password: string }
+   * Response: { message: string, status: 'deleted' }
+   *
+   * Permanently deletes the user account. Requires password confirmation.
+   * All user data will be deleted (service requests, proposals, reviews, etc.)
+   * For vendors: assigned_vendor on service requests will be set to NULL
+   */
+  DELETE_ACCOUNT: '/auth/delete-account/',
+
+  /**
+   * POST /api/auth/change-password/
+   * Headers: Authorization: Bearer {token}
+   * Body: { current_password: string, new_password: string }
+   * Response: { message: string }
+   *
+   * Change user password. Requires current password verification.
+   * New password must be at least 8 characters and different from current.
+   */
+  CHANGE_PASSWORD: '/auth/change-password/',
+
+  /**
+   * POST /api/auth/deactivate-account/
+   * Headers: Authorization: Bearer {token}
+   * Body: { password: string }
+   * Response: { message: string, status: 'deactivated' }
+   *
+   * Temporarily deactivate the user account. Requires password confirmation.
+   * User data is preserved but login is disabled.
+   * Account can be reactivated using the reactivate-account endpoint.
+   */
+  DEACTIVATE_ACCOUNT: '/auth/deactivate-account/',
+
+  /**
+   * POST /api/auth/reactivate-account/
+   * Body: { phone: string, password: string }
+   * Response: { message: string, status: 'reactivated', access, refresh, user, is_verified, is_onboarding_complete }
+   *
+   * Reactivate a deactivated user account. No auth required (user is logged out).
+   * Returns JWT tokens on success (same as login response).
+   */
+  REACTIVATE_ACCOUNT: '/auth/reactivate-account/',
+
+  /**
+   * POST /api/auth/logout/
+   * Headers: Authorization: Bearer {token}
+   * Body: { refresh: string }
+   * Response: { message: string, status: 'logged_out' }
+   *
+   * Logout user and blacklist refresh token on server.
+   * This prevents the refresh token from being used to generate new access tokens.
+   */
+  LOGOUT: '/auth/logout/',
 } as const;
 
 // ============================================================================
@@ -182,29 +248,30 @@ export const CUSTOMER_ENDPOINTS = {
 
 export const FAVORITE_ENDPOINTS = {
   /**
-   * GET /api/customers/favorites/
+   * GET /api/customers/favorite-vendors/
    * Response: FavoriteVendor[]
    */
-  LIST: '/customers/favorites/',
+  LIST: '/customers/favorite-vendors/',
 
   /**
-   * POST /api/customers/favorites/
+   * POST /api/customers/favorite-vendors/
    * Body: { vendor_id: number }
    * Response: { message, favorite: FavoriteVendor }
    */
-  ADD: '/customers/favorites/',
+  ADD: '/customers/favorite-vendors/',
 
   /**
-   * DELETE /api/customers/favorites/{vendor_id}/
+   * DELETE /api/customers/favorite-vendors/{vendor_id}/
    * Response: 204 No Content
    */
-  REMOVE: (vendorId: number) => `/customers/favorites/${vendorId}/`,
+  REMOVE: (vendorId: number) => `/customers/favorite-vendors/${vendorId}/`,
 
   /**
-   * GET /api/customers/favorites/{vendor_id}/check/
+   * GET /api/customers/favorite-vendors/{vendor_id}/check/
    * Response: { is_favorite: boolean }
+   * Note: This endpoint may not exist in backend - favoriteService handles gracefully
    */
-  CHECK: (vendorId: number) => `/customers/favorites/${vendorId}/check/`,
+  CHECK: (vendorId: number) => `/customers/favorite-vendors/${vendorId}/check/`,
 } as const;
 
 // ============================================================================
@@ -376,7 +443,7 @@ export const API_ENDPOINTS = {
   AUTH: {
     LOGIN: AUTH_ENDPOINTS.LOGIN,
     REGISTER: AUTH_ENDPOINTS.SIGNUP, // Note: renamed to signup in backend
-    LOGOUT: '/auth/logout/', // Not implemented in backend (JWT is stateless)
+    LOGOUT: '/auth/logout/', // Blacklists refresh token on server
   },
   SERVICES: CATEGORY_ENDPOINTS.LIST,
   REQUESTS: SERVICE_REQUEST_ENDPOINTS.LIST,

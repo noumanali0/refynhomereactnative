@@ -28,6 +28,9 @@ interface QueuedMessage {
   payload: unknown;
 }
 
+// Maximum queue size to prevent memory leaks on poor connections
+const MAX_MESSAGE_QUEUE_SIZE = 50;
+
 // Event callback type
 type EventCallback<T = unknown> = (data: T) => void;
 type StatusCallback = (status: ConnectionStatus) => void;
@@ -248,7 +251,7 @@ class SocketService {
 
   /**
    * Send message to server
-   * Queues message if not connected
+   * Queues message if not connected (with max queue size to prevent memory leaks)
    */
   send<T = unknown>(action: SocketAction, payload: T = {} as T): void {
     const message = JSON.stringify({ action, payload });
@@ -259,7 +262,14 @@ class SocketService {
       }
       this.ws.send(message);
     } else {
-      // Queue message for later
+      // Queue message for later (with size limit to prevent memory leaks)
+      if (this.messageQueue.length >= MAX_MESSAGE_QUEUE_SIZE) {
+        // Drop oldest message to make room
+        const dropped = this.messageQueue.shift();
+        if (__DEV__) {
+          console.warn('[Socket] Queue full, dropping oldest message:', dropped?.action);
+        }
+      }
       console.log('[Socket] Queuing message:', action);
       this.messageQueue.push({ action, payload });
     }

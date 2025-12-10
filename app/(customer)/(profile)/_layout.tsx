@@ -1,4 +1,4 @@
-// app/(customer)/(home)/_layout.tsx
+// app/(customer)/(profile)/_layout.tsx
 import { Stack } from "expo-router";
 
 export default function CustomerProfileLayout() {
@@ -6,12 +6,12 @@ export default function CustomerProfileLayout() {
         <Stack
             screenOptions={{
                 headerShown: false,
-                // headerTitleAlign: "center",
             }}
         >
             <Stack.Screen name="index" options={{ title: "Profile" }} />
             <Stack.Screen name="edit-profile" options={{ title: "Update Profile" }} />
             <Stack.Screen name="manage-address" options={{ title: "Manage Address" }} />
+            <Stack.Screen name="settings" options={{ title: "Settings" }} />
         </Stack>
     );
 }

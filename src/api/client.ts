@@ -33,7 +33,7 @@ if (__DEV__) {
  */
 export const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 15000, // 15 seconds (increased for slow networks)
+  timeout: 8000, // 8 seconds (reduced from 15s - better UX on mobile, prevents app appearing frozen)
   headers: {
     'Content-Type': 'application/json',
   },

@@ -150,6 +150,28 @@ export function setupInterceptors(
           // Process queued requests
           processQueue(null, newAccessToken);
 
+          // IMPORTANT: Reconnect WebSocket with new token
+          // Socket still has old token after API token refresh, causing auth failures
+          try {
+            const { socketService } = await import('@/services/socketService');
+            if (socketService.isConnected()) {
+              if (__DEV__) {
+                console.log('[Auth] Reconnecting socket with new token');
+              }
+              // Use reconnect() which properly closes old connection and opens new one
+              socketService.reconnect().catch((err) => {
+                if (__DEV__) {
+                  console.warn('[Auth] Socket reconnect failed:', err);
+                }
+              });
+            }
+          } catch (socketError) {
+            // Socket service might not be available, ignore
+            if (__DEV__) {
+              console.warn('[Auth] Socket reconnect skipped:', socketError);
+            }
+          }
+
           // Retry original request
           return apiClient(originalRequest);
         } catch (refreshError) {

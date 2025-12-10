@@ -5,7 +5,7 @@
  */
 
 import { apiClient, getErrorMessage } from '@/api/client';
-import { CUSTOMER_ENDPOINTS, SERVICE_REQUEST_ENDPOINTS } from '@/api/endpoints';
+import { CUSTOMER_ENDPOINTS, SERVICE_REQUEST_ENDPOINTS, buildUrl } from '@/api/endpoints';
 
 // ============================================================================
 // TYPES
@@ -49,11 +49,14 @@ export interface ServiceHistoryRequest {
   latitude: number;
   longitude: number;
   status: 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'completed' | 'cancelled' | 'expired';
-  assigned_vendor: ServiceHistoryVendor | null;
+  // Backend returns assigned_vendor_detail (not assigned_vendor)
+  assigned_vendor_detail: ServiceHistoryVendor | null;
   accepted_proposal: ServiceHistoryProposal | null;
+  proposals?: ServiceHistoryProposal[];
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  has_review?: boolean;
   review?: {
     id: number;
     stars: number;
@@ -84,26 +87,38 @@ export interface ServiceHistoryFilters {
  */
 export async function getServiceHistory(filters?: ServiceHistoryFilters): Promise<ServiceHistoryResponse> {
   try {
-    const params = new URLSearchParams();
+    // Build URL with type=history to get completed/cancelled requests (like vendor history)
+    const url = buildUrl(CUSTOMER_ENDPOINTS.SERVICE_REQUESTS, {
+      type: 'history',
+      status: filters?.status,
+      page: filters?.page,
+      page_size: filters?.page_size || 50,
+    });
 
-    if (filters?.status) {
-      params.append('status', filters.status);
+    if (__DEV__) {
+      console.log('[ServiceHistory] Fetching history with URL:', url);
     }
-    if (filters?.page) {
-      params.append('page', filters.page.toString());
+
+    // Use longer timeout for history queries (may have more data)
+    const response = await apiClient.get<{ results: ServiceHistoryRequest[]; count: number; type: string } | ServiceHistoryRequest[]>(url, {
+      timeout: 15000, // 15 seconds for history
+    });
+
+    if (__DEV__) {
+      console.log('[ServiceHistory] Response:', response.data);
     }
-    if (filters?.page_size) {
-      params.append('page_size', filters.page_size.toString());
+
+    // Handle response format from backend: { results: [], count: number, type: string }
+    if (response.data && 'results' in response.data) {
+      return {
+        count: response.data.count || response.data.results.length,
+        next: null,
+        previous: null,
+        results: response.data.results,
+      };
     }
 
-    const queryString = params.toString();
-    const url = queryString
-      ? `${CUSTOMER_ENDPOINTS.SERVICE_REQUESTS}?${queryString}`
-      : CUSTOMER_ENDPOINTS.SERVICE_REQUESTS;
-
-    const response = await apiClient.get<ServiceHistoryResponse | ServiceHistoryRequest[]>(url);
-
-    // Handle both paginated and non-paginated responses
+    // Handle array response (fallback)
     if (Array.isArray(response.data)) {
       return {
         count: response.data.length,
@@ -113,8 +128,17 @@ export async function getServiceHistory(filters?: ServiceHistoryFilters): Promis
       };
     }
 
-    return response.data;
+    // Fallback for unexpected format
+    return {
+      count: 0,
+      next: null,
+      previous: null,
+      results: [],
+    };
   } catch (error) {
+    if (__DEV__) {
+      console.error('[ServiceHistory] Error fetching history:', error);
+    }
     throw new Error(getErrorMessage(error));
   }
 }

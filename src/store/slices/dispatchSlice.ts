@@ -17,7 +17,7 @@ import {
   sendServiceRequestNotification,
   removeServiceRequestNotification
 } from '@/utils/notifications';
-import { flushLocationQueue } from '@/services/backgroundLocationService';
+import { flushLocationQueue, getCurrentLocation } from '@/services/backgroundLocationService';
 import { saveActiveJob, updateActiveJobStatus, clearActiveJob as clearActiveJobStorage } from '@/services/activeJobService';
 import type { RootState } from '@/store';
 import type {
@@ -48,6 +48,25 @@ import { ACK_TIMEOUT } from '@/config/socket';
 let activeUnsubscribers: Array<() => void> = [];
 
 /**
+ * Debounce state for vendor location updates on customer side.
+ * Prevents crash on low-end devices from rapid WebSocket location updates.
+ *
+ * NOTE: Initialized to 0 (not Date.now()) to allow first update through.
+ * The check below explicitly allows first update when lastTime <= 0.
+ */
+let lastVendorLocationUpdateTime = 0;
+const VENDOR_LOCATION_DEBOUNCE_MS = 3000; // 3 seconds between updates
+
+/**
+ * Batch queue for service request expired events.
+ * Multiple expired events arriving in rapid succession are batched
+ * into a single Redux update to prevent crash on low-end devices.
+ */
+let expiredRequestBatchQueue: number[] = [];
+let expiredRequestBatchTimeout: NodeJS.Timeout | null = null;
+const EXPIRED_BATCH_DELAY_MS = 500; // Wait 500ms to batch multiple expired events
+
+/**
  * Cleans up all active socket event listeners.
  * Should be called before creating new listeners or on disconnect.
  */
@@ -65,6 +84,13 @@ function cleanupSocketListeners(): void {
     }
   });
   activeUnsubscribers = [];
+
+  // Clear expired request batch queue and timeout
+  if (expiredRequestBatchTimeout) {
+    clearTimeout(expiredRequestBatchTimeout);
+    expiredRequestBatchTimeout = null;
+  }
+  expiredRequestBatchQueue = [];
 }
 
 // ============================================================================
@@ -195,12 +221,46 @@ export const connectSocket = createAsyncThunk(
         if (__DEV__) console.log('[Dispatch] Connected as:', data.role);
         dispatch(setLastConnectedAt(Date.now()));
 
+        // Reset vendor location debounce on reconnect
+        // This ensures customer gets immediate update when vendor reconnects
+        lastVendorLocationUpdateTime = 0;
+
         // Flush any queued location updates from background tracking
         // This handles the case when vendor's app was backgrounded and is now reconnecting
         try {
           await flushLocationQueue();
         } catch (error) {
           if (__DEV__) console.warn('[Dispatch] Failed to flush location queue:', error);
+        }
+
+        // CRITICAL: If vendor has an active job and reconnects, immediately send current location
+        // This ensures customer gets vendor location when either side reconnects
+        if (data.role === 'vendor') {
+          const state = getState() as RootState;
+          if (state.dispatch.activeJobId) {
+            if (__DEV__) {
+              console.log('[Dispatch] Vendor reconnected with active job - sending immediate location update');
+            }
+
+            // Get current location and send it immediately
+            // This ensures customer sees vendor position right away after reconnect
+            try {
+              const currentLocation = await getCurrentLocation();
+              if (currentLocation) {
+                socketService.send('location.update', {
+                  latitude: currentLocation.latitude,
+                  longitude: currentLocation.longitude,
+                });
+                if (__DEV__) {
+                  console.log('[Dispatch] Sent immediate location update on reconnect:', currentLocation);
+                }
+              }
+            } catch (error) {
+              if (__DEV__) {
+                console.warn('[Dispatch] Failed to send immediate location on reconnect:', error);
+              }
+            }
+          }
         }
       })
     );
@@ -316,13 +376,40 @@ export const connectSocket = createAsyncThunk(
     );
 
     // Service request expired
+    // IMPORTANT: Batched to prevent rapid Redux updates that crash low-end devices
+    // Multiple expired events arriving within 500ms are combined into single update
     activeUnsubscribers.push(
       socketService.on('service_request.expired', (data: ServiceRequestExpiredEvent) => {
-        if (__DEV__) console.log('[Dispatch] service_request.expired:', data.request_id);
-        dispatch(removeServiceRequest(data.request_id));
+        if (__DEV__) console.log('[Dispatch] service_request.expired (queued):', data.request_id);
 
-        // Remove notification for expired request
+        // Add to batch queue
+        if (!expiredRequestBatchQueue.includes(data.request_id)) {
+          expiredRequestBatchQueue.push(data.request_id);
+        }
+
+        // Remove notification immediately (doesn't affect render)
         removeServiceRequestNotification(data.request_id);
+
+        // Clear existing timeout and set new one
+        // This ensures we wait for all rapid events before dispatching
+        if (expiredRequestBatchTimeout) {
+          clearTimeout(expiredRequestBatchTimeout);
+        }
+
+        expiredRequestBatchTimeout = setTimeout(() => {
+          if (expiredRequestBatchQueue.length > 0) {
+            const requestIds = [...expiredRequestBatchQueue];
+            expiredRequestBatchQueue = [];
+            expiredRequestBatchTimeout = null;
+
+            if (__DEV__) {
+              console.log('[Dispatch] Processing batched expired requests:', requestIds);
+            }
+
+            // Single Redux dispatch for all expired requests
+            dispatch(removeServiceRequestsBatch(requestIds));
+          }
+        }, EXPIRED_BATCH_DELAY_MS);
       })
     );
 
@@ -358,16 +445,20 @@ export const connectSocket = createAsyncThunk(
 
         dispatch(updateProposal(proposal));
 
-        // If proposal was accepted, set active job and update persist status
+        // If proposal was accepted, set active job and save to SecureStore
         if (proposal.status === 'accepted') {
           dispatch(setActiveJob({
             requestId: proposal.service_request_id,
             proposalId: proposal.id,
           }));
 
-          // Update status to 'accepted' (job was already persisted when proposal was sent)
-          updateActiveJobStatus('accepted').catch((error) => {
-            if (__DEV__) console.error('[Dispatch] Failed to update job status:', error);
+          // Save full job to SecureStore (not just update status) for robustness
+          saveActiveJob({
+            jobId: proposal.service_request_id,
+            proposalId: proposal.id,
+            status: 'accepted',
+          }).catch((error) => {
+            if (__DEV__) console.error('[Dispatch] Failed to save job on proposal.updated:', error);
           });
         }
 
@@ -415,9 +506,18 @@ export const connectSocket = createAsyncThunk(
           proposalId: proposal.id,
         }));
 
-        // Update persist status to 'accepted' - ensures vendor returns to this screen on app restart
-        updateActiveJobStatus('accepted').catch((error) => {
-          if (__DEV__) console.error('[Dispatch] Failed to update job status on acceptance:', error);
+        // IMPORTANT: Save active job to SecureStore with 'accepted' status
+        // This ensures vendor returns to this screen on app restart
+        // Note: We save the full job here (not just update status) because the job might not have been
+        // saved yet if there was any issue during proposal.ack
+        saveActiveJob({
+          jobId: proposal.service_request_id,
+          proposalId: proposal.id,
+          status: 'accepted',
+        }).then(() => {
+          if (__DEV__) console.log('[Dispatch] Active job saved on acceptance:', proposal.service_request_id);
+        }).catch((error) => {
+          if (__DEV__) console.error('[Dispatch] Failed to save active job on acceptance:', error);
         });
       })
     );
@@ -432,10 +532,32 @@ export const connectSocket = createAsyncThunk(
 
     // Vendor location updated - for customer to track vendor
     // Backend sends 'vendor.location.updated' event
+    // IMPORTANT: Debounced to prevent crash on low-end devices from rapid updates
+    // BUT: Always allow first update through (when lastTime <= 0)
     activeUnsubscribers.push(
       socketService.on('vendor.location.updated', (data: { payload?: Coordinates } & Partial<Coordinates>) => {
         const payload = data.payload || data;
         if (payload && payload.latitude && payload.longitude) {
+          const now = Date.now();
+
+          // ALWAYS allow first location update (when lastTime is 0 or negative)
+          // This ensures customer gets initial vendor position immediately
+          const isFirstUpdate = lastVendorLocationUpdateTime <= 0;
+
+          // Debounce: Only skip if NOT first update AND too frequent
+          if (!isFirstUpdate && (now - lastVendorLocationUpdateTime < VENDOR_LOCATION_DEBOUNCE_MS)) {
+            if (__DEV__) {
+              console.log('[Dispatch] Debounced vendor location update (too frequent)');
+            }
+            return; // Skip this update to prevent crash on low-end devices
+          }
+
+          lastVendorLocationUpdateTime = now;
+
+          if (__DEV__ && isFirstUpdate) {
+            console.log('[Dispatch] First vendor location update received:', payload);
+          }
+
           dispatch(setVendorLocation({
             latitude: payload.latitude,
             longitude: payload.longitude,
@@ -486,6 +608,10 @@ export const disconnectSocket = createAsyncThunk(
 
 /**
  * Vendor: Send proposal for a service request
+ *
+ * IMPORTANT: This thunk properly manages socket listeners to prevent memory leaks.
+ * All listeners are always cleaned up via the cleanup() helper, regardless of
+ * success, failure, or timeout.
  */
 export const sendProposal = createAsyncThunk(
   'dispatch/sendProposal',
@@ -494,6 +620,28 @@ export const sendProposal = createAsyncThunk(
     const pendingKey = `proposal_${serviceRequestId}`;
 
     dispatch(setPendingAction({ key: pendingKey, value: true }));
+
+    // Track cleanup functions at thunk scope
+    let unsub: (() => void) | null = null;
+    let unsubError: (() => void) | null = null;
+    let timeout: NodeJS.Timeout | null = null;
+
+    // Cleanup helper - ALWAYS cleans up everything
+    const cleanup = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
+      if (unsub) {
+        unsub();
+        unsub = null;
+      }
+      if (unsubError) {
+        unsubError();
+        unsubError = null;
+      }
+      dispatch(setPendingAction({ key: pendingKey, value: false }));
+    };
 
     try {
       socketService.send('proposal.create', {
@@ -505,16 +653,19 @@ export const sendProposal = createAsyncThunk(
 
       // Wait for acknowledgment with timeout
       return await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          dispatch(setPendingAction({ key: pendingKey, value: false }));
+        let resolved = false; // Guard against double resolve/reject
+
+        timeout = setTimeout(() => {
+          if (resolved) return;
+          resolved = true;
+          cleanup();
           reject(new Error('Proposal timeout'));
         }, ACK_TIMEOUT);
 
-        const unsub = socketService.on('proposal.ack', (data: any) => {
-          if (data.service_request_id === serviceRequestId) {
-            clearTimeout(timeout);
-            unsub();
-            dispatch(setPendingAction({ key: pendingKey, value: false }));
+        unsub = socketService.on('proposal.ack', (data: any) => {
+          if (data.service_request_id === serviceRequestId && !resolved) {
+            resolved = true;
+            cleanup();
 
             // Persist active job when proposal is sent successfully
             // This ensures vendor returns to this request after app kill
@@ -533,18 +684,17 @@ export const sendProposal = createAsyncThunk(
         });
 
         // Also listen for errors
-        const unsubError = socketService.on('error', (data: SocketErrorEvent) => {
-          if (data.code === 'proposal_failed') {
-            clearTimeout(timeout);
-            unsub();
-            unsubError();
-            dispatch(setPendingAction({ key: pendingKey, value: false }));
+        unsubError = socketService.on('error', (data: SocketErrorEvent) => {
+          if (data.code === 'proposal_failed' && !resolved) {
+            resolved = true;
+            cleanup();
             reject(new Error(data.message));
           }
         });
       });
     } catch (error) {
-      dispatch(setPendingAction({ key: pendingKey, value: false }));
+      // Ensure cleanup happens even if promise construction fails
+      cleanup();
       throw error;
     }
   }
@@ -552,45 +702,73 @@ export const sendProposal = createAsyncThunk(
 
 /**
  * Customer: Accept a proposal
+ *
+ * IMPORTANT: This thunk properly manages socket listeners to prevent memory leaks.
+ * All listeners are always cleaned up via the cleanup() helper, regardless of
+ * success, failure, or timeout. This prevents OOM crashes on low-end devices.
  */
 export const acceptProposal = createAsyncThunk(
   'dispatch/acceptProposal',
   async (proposalId: number, { dispatch }) => {
     const pendingKey = `accept_${proposalId}`;
-
     dispatch(setPendingAction({ key: pendingKey, value: true }));
+
+    // Track cleanup functions at thunk scope
+    let unsub: (() => void) | null = null;
+    let unsubError: (() => void) | null = null;
+    let timeout: NodeJS.Timeout | null = null;
+
+    // Cleanup helper - ALWAYS cleans up everything
+    const cleanup = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
+      if (unsub) {
+        unsub();
+        unsub = null;
+      }
+      if (unsubError) {
+        unsubError();
+        unsubError = null;
+      }
+      dispatch(setPendingAction({ key: pendingKey, value: false }));
+    };
 
     try {
       socketService.send('proposal.accept', { proposal_id: proposalId });
 
       // Wait for acknowledgment
       return await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          dispatch(setPendingAction({ key: pendingKey, value: false }));
+        let resolved = false; // Guard against double resolve/reject
+
+        timeout = setTimeout(() => {
+          if (resolved) return;
+          resolved = true;
+          cleanup();
           reject(new Error('Accept timeout'));
         }, ACK_TIMEOUT);
 
-        const unsub = socketService.on('proposal.accepted.ack', (data: any) => {
-          if (data.proposal_id === proposalId) {
-            clearTimeout(timeout);
-            unsub();
-            dispatch(setPendingAction({ key: pendingKey, value: false }));
+        unsub = socketService.on('proposal.accepted.ack', (data: any) => {
+          if (data.proposal_id === proposalId && !resolved) {
+            resolved = true;
+            cleanup();
             resolve(data);
           }
         });
 
-        const unsubError = socketService.on('error', (data: SocketErrorEvent) => {
-          if (data.code === 'proposal_expired' || data.code === 'accept_failed') {
-            clearTimeout(timeout);
-            unsub();
-            unsubError();
-            dispatch(setPendingAction({ key: pendingKey, value: false }));
-            reject(new Error(data.message));
+        unsubError = socketService.on('error', (data: SocketErrorEvent) => {
+          // Handle any error during accept flow, not just specific codes
+          if (!resolved) {
+            resolved = true;
+            cleanup();
+            reject(new Error(data.message || 'Accept failed'));
           }
         });
       });
     } catch (error) {
-      dispatch(setPendingAction({ key: pendingKey, value: false }));
+      // Ensure cleanup happens even if promise construction fails
+      cleanup();
       throw error;
     }
   }
@@ -598,6 +776,10 @@ export const acceptProposal = createAsyncThunk(
 
 /**
  * Customer: Decline a proposal
+ *
+ * IMPORTANT: This thunk properly manages socket listeners to prevent memory leaks.
+ * All listeners are always cleaned up via the cleanup() helper, regardless of
+ * success, failure, or timeout.
  */
 export const declineProposal = createAsyncThunk(
   'dispatch/declineProposal',
@@ -606,26 +788,47 @@ export const declineProposal = createAsyncThunk(
 
     dispatch(setPendingAction({ key: pendingKey, value: true }));
 
+    // Track cleanup functions at thunk scope
+    let unsub: (() => void) | null = null;
+    let timeout: NodeJS.Timeout | null = null;
+
+    // Cleanup helper - ALWAYS cleans up everything
+    const cleanup = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
+      if (unsub) {
+        unsub();
+        unsub = null;
+      }
+      dispatch(setPendingAction({ key: pendingKey, value: false }));
+    };
+
     try {
       socketService.send('proposal.decline', { proposal_id: proposalId });
 
       return await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
-          dispatch(setPendingAction({ key: pendingKey, value: false }));
+        let resolved = false; // Guard against double resolve/reject
+
+        timeout = setTimeout(() => {
+          if (resolved) return;
+          resolved = true;
+          cleanup();
           reject(new Error('Decline timeout'));
         }, ACK_TIMEOUT);
 
-        const unsub = socketService.on('proposal.declined.ack', (data: any) => {
-          if (data.proposal_id === proposalId) {
-            clearTimeout(timeout);
-            unsub();
-            dispatch(setPendingAction({ key: pendingKey, value: false }));
+        unsub = socketService.on('proposal.declined.ack', (data: any) => {
+          if (data.proposal_id === proposalId && !resolved) {
+            resolved = true;
+            cleanup();
             resolve(data);
           }
         });
       });
     } catch (error) {
-      dispatch(setPendingAction({ key: pendingKey, value: false }));
+      // Ensure cleanup happens even if promise construction fails
+      cleanup();
       throw error;
     }
   }
@@ -820,6 +1023,16 @@ const dispatchSlice = createSlice({
       state.serviceRequestIds = state.serviceRequestIds.filter((id) => id !== requestId);
     },
 
+    // Vendor: Remove multiple service requests in a single batch
+    // This prevents rapid sequential Redux updates that crash low-end devices
+    removeServiceRequestsBatch: (state, action: PayloadAction<number[]>) => {
+      const requestIds = action.payload;
+      requestIds.forEach((requestId) => {
+        delete state.serviceRequestsById[requestId];
+      });
+      state.serviceRequestIds = state.serviceRequestIds.filter((id) => !requestIds.includes(id));
+    },
+
     // Customer: Sync requests with proposals
     syncCustomerRequests: (
       state,
@@ -1002,6 +1215,7 @@ export const {
   addServiceRequest,
   updateServiceRequest,
   removeServiceRequest,
+  removeServiceRequestsBatch,
   syncCustomerRequests,
   updateProposal,
   removeProposal,
@@ -1051,6 +1265,8 @@ export const selectServiceRequestCount = createSelector(
 
 // Proposals (Customer) - Properly memoized with createSelector factory
 // Factory function creates a memoized selector for each requestId
+// LRU cache with max size to prevent memory leaks on low-end devices
+const MAX_SELECTOR_CACHE_SIZE = 100;
 const proposalSelectorCache = new Map<number, ReturnType<typeof createProposalSelector>>();
 
 function createProposalSelector(requestId: number) {
@@ -1067,11 +1283,23 @@ export const selectProposalsByRequestId = (state: RootState, requestId: number):
   // Use cached selector or create new one
   let selector = proposalSelectorCache.get(requestId);
   if (!selector) {
+    // Evict oldest entry if cache is full (simple LRU - Map maintains insertion order)
+    if (proposalSelectorCache.size >= MAX_SELECTOR_CACHE_SIZE) {
+      const oldestKey = proposalSelectorCache.keys().next().value;
+      if (oldestKey !== undefined) {
+        proposalSelectorCache.delete(oldestKey);
+      }
+    }
     selector = createProposalSelector(requestId);
     proposalSelectorCache.set(requestId, selector);
   }
   return selector(state);
 };
+
+// Clear selector cache (call when clearing large amounts of data)
+export function clearProposalSelectorCache(): void {
+  proposalSelectorCache.clear();
+}
 
 export const selectProposalById = (state: RootState, id: number) =>
   state.dispatch.proposalsById[id];

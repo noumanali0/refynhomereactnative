@@ -21,7 +21,7 @@ import {
     type ListRenderItemInfo,
 } from 'react-native';
 import Text from '@/components/common/Text';
-import MapView, { Marker, PROVIDER_DEFAULT, Polyline } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_DEFAULT, Polyline, UrlTile } from 'react-native-maps';
 import * as Location from 'expo-location';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useDispatch, useSelector } from 'react-redux';
@@ -44,6 +44,7 @@ import { SocketStatusIndicator } from '@/components/common/SocketStatusIndicator
 import { COLORS } from '@/constants/colors';
 import type { SocketProposal, Coordinates } from '@/types/socket';
 import { getServiceRequest, ServiceRequestResponse } from '@/services/serviceRequestApi';
+import { simplifyRoute } from '@/utils/polylineSimplify';
 
 // ============================================================================
 // Component
@@ -57,7 +58,6 @@ export default function WebSocketOffersScreen() {
 
     // Get requestId from navigation params (passed from create screen)
     const { requestId } = useLocalSearchParams<{ requestId: string }>();
-    console.log("🚀 ~ WebSocketOffersScreen ~ requestId:", requestId)
     const requestIdNum = requestId ? parseInt(requestId, 10) : null;
 
     // WebSocket selectors
@@ -213,13 +213,16 @@ export default function WebSocketOffersScreen() {
                     setRouteCoords([userLocation, vendorLocation]);
                     return;
                 }
-                const coords = data.routes[0].geometry.coordinates.map(
+                const rawCoords = data.routes[0].geometry.coordinates.map(
                     ([lng, lat]: [number, number]) => ({
                         latitude: lat,
                         longitude: lng,
                     })
                 );
-                setRouteCoords(coords);
+                // CRITICAL: Simplify route to prevent crash on low-end devices
+                // OSRM can return 2000+ points which causes Polyline to crash
+                const simplifiedCoords = simplifyRoute(rawCoords);
+                setRouteCoords(simplifiedCoords);
             } catch (e) {
                 console.warn('fetchRoute error:', e);
                 setRouteCoords([userLocation, vendorLocation]);
@@ -253,6 +256,9 @@ export default function WebSocketOffersScreen() {
     // New Proposal Detection
     // ========================================================================
 
+    // Track setTimeout refs to prevent memory leak when component unmounts
+    const newProposalTimersRef = useRef<Map<number, NodeJS.Timeout>>(new Map());
+
     useEffect(() => {
         const currentIds = new Set(proposals.map((p) => p.id));
         const newProposals = proposals.filter(
@@ -262,18 +268,34 @@ export default function WebSocketOffersScreen() {
         if (newProposals.length > 0) {
             newProposals.forEach((p) => {
                 setNewProposalIds((prev) => new Set([...prev, p.id]));
-                setTimeout(() => {
+
+                // Store timer ref for cleanup
+                const timerId = setTimeout(() => {
                     setNewProposalIds((prev) => {
                         const updated = new Set(prev);
                         updated.delete(p.id);
                         return updated;
                     });
+                    // Remove from ref map after execution
+                    newProposalTimersRef.current.delete(p.id);
                 }, 3000);
+
+                newProposalTimersRef.current.set(p.id, timerId);
             });
         }
 
         previousProposalIds.current = currentIds;
     }, [proposals]);
+
+    // Cleanup all timers on unmount to prevent memory leaks
+    useEffect(() => {
+        return () => {
+            newProposalTimersRef.current.forEach((timerId) => {
+                clearTimeout(timerId);
+            });
+            newProposalTimersRef.current.clear();
+        };
+    }, []);
 
     // ========================================================================
     // Render
@@ -383,6 +405,15 @@ export default function WebSocketOffersScreen() {
                 showsMyLocationButton
                 loadingEnabled
             >
+                {/* OpenStreetMap tiles - COMMENTED OUT for Google Maps dev build */}
+                {/* Uncomment below for Expo Go testing (no native Google Maps) */}
+                {/* {(Platform.OS === "web" || (Platform.OS === "android" && __DEV__)) && (
+                    <UrlTile
+                        urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        maximumZ={19}
+                        shouldReplaceMapContent={true}
+                    />
+                )} */}
                 {/* User Marker */}
                 {userLocation && (
                     <Marker coordinate={userLocation} title="Your Location">
@@ -396,7 +427,7 @@ export default function WebSocketOffersScreen() {
                 {vendorLocation && acceptedProposal && (
                     <Marker
                         coordinate={vendorLocation}
-                        title={acceptedProposal.vendor.full_name}
+                        title={acceptedProposal.vendor?.full_name || 'Vendor'}
                         description="En route to you"
                     >
                         <View style={styles.vendorMarker}>

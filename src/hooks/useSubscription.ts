@@ -372,14 +372,23 @@ export function useSubscription(): UseSubscriptionReturn {
 
     /**
      * Check if current tier has access to feature
+     * Returns a function that checks feature access using current tier
      */
     const hasFeature = useCallback(
         (featureId: SubscriptionFeatureId): boolean => {
-            return useSelector((state: RootState) =>
-                selectHasFeatureAccess(state, featureId)
-            );
+            // Use currentTier directly instead of calling useSelector inside callback
+            // This works because currentTier is already selected above and the callback
+            // will be recreated when currentTier changes
+            const tierFeatures: Record<SubscriptionTier, SubscriptionFeatureId[]> = {
+                free: ['basic_profile', 'service_requests'],
+                basic: ['basic_profile', 'service_requests', 'analytics_basic', 'priority_support'],
+                pro: ['basic_profile', 'service_requests', 'analytics_basic', 'analytics_advanced', 'priority_support', 'featured_listing'],
+                enterprise: ['basic_profile', 'service_requests', 'analytics_basic', 'analytics_advanced', 'priority_support', 'featured_listing', 'api_access', 'white_label'],
+            };
+            const features = tierFeatures[currentTier] || tierFeatures.free;
+            return features.includes(featureId);
         },
-        [selectHasFeatureAccess]
+        [currentTier]
     );
 
     /**

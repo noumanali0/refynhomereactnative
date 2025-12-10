@@ -148,9 +148,12 @@ interface FormContentProps {
     showAddressSearch: boolean;
     imageLoading: boolean;
     coordinates: { latitude: number; longitude: number } | null;
+    currentLocationAddress: Address | null;
+    isLoadingCurrentLocation: boolean;
     onOpenAddressSearch: () => void;
     onCloseAddressSearch: () => void;
     onAddressSelect: (address: Address, setFieldValue: FormikProps<FormValues>['setFieldValue']) => void;
+    onUseCurrentLocation: (setFieldValue: FormikProps<FormValues>['setFieldValue']) => void;
     onPickImage: (setFieldValue: FormikProps<FormValues>['setFieldValue']) => Promise<void>;
     onRemovePhoto: (setFieldValue: FormikProps<FormValues>['setFieldValue']) => void;
     onGoBack: () => void;
@@ -361,9 +364,12 @@ const FormContent = memo(function FormContent({
     showAddressSearch,
     imageLoading,
     coordinates,
+    currentLocationAddress,
+    isLoadingCurrentLocation,
     onOpenAddressSearch,
     onCloseAddressSearch,
     onAddressSelect,
+    onUseCurrentLocation,
     onPickImage,
     onRemovePhoto,
     onGoBack,
@@ -389,6 +395,16 @@ const FormContent = memo(function FormContent({
     // LOCAL STATE for text inputs - completely decoupled from Formik re-renders
     const [localProblemTitle, setLocalProblemTitle] = useState(values.problemTitle);
     const [localDescription, setLocalDescription] = useState(values.description);
+
+    // Memoize proximity object to prevent unnecessary re-renders of AddressSearchBottomSheet
+    // This prevents crash when typing description after address selection
+    const memoizedProximity = useMemo(() => {
+        if (!coordinates) return undefined;
+        return {
+            latitude: coordinates.latitude,
+            longitude: coordinates.longitude,
+        };
+    }, [coordinates?.latitude, coordinates?.longitude]);
 
     // Debounce refs for cleanup
     const problemTitleDebounceRef = useRef<NodeJS.Timeout | null>(null);
@@ -488,6 +504,11 @@ const FormContent = memo(function FormContent({
         onAddressSelect(address, setFieldValueRef.current);
     }, [onAddressSelect]);
 
+    // Stable handler for using current location
+    const handleUseCurrentLocation = useCallback(() => {
+        onUseCurrentLocation(setFieldValueRef.current);
+    }, [onUseCurrentLocation]);
+
     return (
         <View style={styles.container}>
             {/* Header */}
@@ -552,46 +573,90 @@ const FormContent = memo(function FormContent({
 
                 {/* Service Address */}
                 <SectionTitle title="Service Address *" />
-                <TouchableOpacity
-                    onPress={onOpenAddressSearch}
-                    style={[
-                        styles.addressButton,
+
+                {/* Address Options - Use Current Location OR Search */}
+                <View style={styles.addressOptionsContainer}>
+                    {/* Use Current Location Button */}
+                    <TouchableOpacity
+                        onPress={handleUseCurrentLocation}
+                        style={[
+                            styles.addressOptionButton,
+                            styles.currentLocationButton,
+                            isLoadingCurrentLocation && styles.addressOptionButtonDisabled,
+                        ]}
+                        activeOpacity={0.7}
+                        disabled={isLoadingCurrentLocation}
+                    >
+                        {isLoadingCurrentLocation ? (
+                            <ActivityIndicator size="small" color={COLORS.primary} />
+                        ) : (
+                            <Ionicons name="navigate" size={20} color={COLORS.primary} />
+                        )}
+                        <Text type="body2" style={styles.addressOptionText}>
+                            {isLoadingCurrentLocation ? "Getting location..." : "Use Current Location"}
+                        </Text>
+                    </TouchableOpacity>
+
+                    {/* Search Address Button */}
+                    <TouchableOpacity
+                        onPress={onOpenAddressSearch}
+                        style={[styles.addressOptionButton, styles.searchAddressButton]}
+                        activeOpacity={0.7}
+                    >
+                        <Ionicons name="search" size={20} color={COLORS.accent} />
+                        <Text type="body2" style={styles.addressOptionText}>Search Address</Text>
+                    </TouchableOpacity>
+                </View>
+
+                {/* Selected Address Display */}
+                {values.serviceAddress ? (
+                    <View style={[
+                        styles.selectedAddressContainer,
                         touched.serviceAddress && errors.serviceAddress && styles.inputError
-                    ]}
-                    activeOpacity={0.7}
-                >
-                    <View style={styles.addressContent}>
-                        <Ionicons name="location" size={22} color={COLORS.primary} />
-                        <Text
-                            type="body2"
-                            style={[
-                                styles.addressText,
-                                !values.serviceAddress && styles.addressPlaceholder,
-                            ]}
-                            numberOfLines={2}
+                    ]}>
+                        <View style={styles.selectedAddressContent}>
+                            <View style={styles.selectedAddressIcon}>
+                                <Ionicons name="location" size={20} color={COLORS.white} />
+                            </View>
+                            <View style={styles.selectedAddressTextContainer}>
+                                <Text type="body2" style={styles.selectedAddressLabel}>Service Location</Text>
+                                <Text type="body" style={styles.selectedAddressText} numberOfLines={2}>
+                                    {values.serviceAddress}
+                                </Text>
+                            </View>
+                        </View>
+                        <TouchableOpacity
+                            onPress={onOpenAddressSearch}
+                            style={styles.changeAddressButton}
                         >
-                            {values.serviceAddress || "Tap to search address"}
+                            <Text type="body2" style={styles.changeAddressText}>Change</Text>
+                        </TouchableOpacity>
+                    </View>
+                ) : (
+                    <View style={[
+                        styles.noAddressContainer,
+                        touched.serviceAddress && errors.serviceAddress && styles.inputError
+                    ]}>
+                        <Ionicons name="location-outline" size={24} color={COLORS.gray400} />
+                        <Text type="body2" style={styles.noAddressText}>
+                            Select your service location using the options above
                         </Text>
                     </View>
-                    <Ionicons name="chevron-forward" size={20} color={COLORS.gray400} />
-                </TouchableOpacity>
+                )}
+
                 {touched.serviceAddress && errors.serviceAddress && (
                     <Text type="body" style={styles.errorText}>{errors.serviceAddress}</Text>
                 )}
 
-                {/* Address Search Bottom Sheet - Conditionally Rendered */}
-                {showAddressSearch && (
-                    <AddressSearchBottomSheet
-                        isVisible={showAddressSearch}
-                        onClose={onCloseAddressSearch}
-                        onSelectAddress={handleAddressSelectInternal}
-                        proximity={coordinates ? {
-                            latitude: coordinates.latitude,
-                            longitude: coordinates.longitude,
-                        } : undefined}
-                        initialValue={values.serviceAddress}
-                    />
-                )}
+                {/* Address Search Bottom Sheet - Always mounted, visibility controlled by isVisible */}
+                {/* This prevents unmount/remount race conditions that cause crashes */}
+                <AddressSearchBottomSheet
+                    isVisible={showAddressSearch}
+                    onClose={onCloseAddressSearch}
+                    onSelectAddress={handleAddressSelectInternal}
+                    proximity={memoizedProximity}
+                    initialValue={values.serviceAddress}
+                />
 
                 {/* Description - Uses local state + debounced Formik sync for performance */}
                 <SectionTitle title="Problem Description *" />
@@ -727,6 +792,8 @@ const FormContent = memo(function FormContent({
         prevProps.showAddressSearch === nextProps.showAddressSearch &&
         prevProps.imageLoading === nextProps.imageLoading &&
         prevProps.coordinates === nextProps.coordinates &&
+        prevProps.currentLocationAddress === nextProps.currentLocationAddress &&
+        prevProps.isLoadingCurrentLocation === nextProps.isLoadingCurrentLocation &&
         // Only compare specific formik values that affect the UI
         prevProps.formikProps.values.selectedService === nextProps.formikProps.values.selectedService &&
         prevProps.formikProps.values.serviceAddress === nextProps.formikProps.values.serviceAddress &&
@@ -765,8 +832,8 @@ const RequestServiceScreen = () => {
     const problemTitleRef = useRef<TextInput>(null);
     const descriptionRef = useRef<TextInput>(null);
 
-    // Get current location for proximity bias in search
-    const { coordinates } = useCurrentLocation({ autoFetch: true });
+    // Get current location for proximity bias in search AND for "Use Current Location" feature
+    const { coordinates, location: currentLocationAddress, loading: isLoadingCurrentLocation, refetch: fetchCurrentLocation } = useCurrentLocation({ autoFetch: true });
 
     // Cleanup submission on unmount
     useEffect(() => {
@@ -784,15 +851,79 @@ const RequestServiceScreen = () => {
     }, []);
 
     // Handle address selection - receives setFieldValue as parameter (no ref anti-pattern)
+    // Uses requestAnimationFrame to batch updates and prevent crash during rapid re-renders
     const handleAddressSelect = useCallback((
         address: Address,
         setFieldValue: FormikProps<FormValues>['setFieldValue']
     ) => {
-        setFieldValue("serviceAddress", address.formatted);
-        setFieldValue("latitude", address.coordinates.latitude.toString());
-        setFieldValue("longitude", address.coordinates.longitude.toString());
+        // Close modal first to prevent re-render during value updates
         setShowAddressSearch(false);
+
+        // Batch all Formik updates in next frame to avoid race conditions
+        // This prevents crash when user types in description field immediately after
+        requestAnimationFrame(() => {
+            setFieldValue("serviceAddress", address.formatted, false);
+            setFieldValue("latitude", address.coordinates.latitude.toString(), false);
+            setFieldValue("longitude", address.coordinates.longitude.toString(), false);
+        });
     }, []);
+
+    // Handle "Use Current Location" - fetches location if not available, then sets form values
+    const handleUseCurrentLocation = useCallback(async (
+        setFieldValue: FormikProps<FormValues>['setFieldValue']
+    ) => {
+        // If we already have current location address, use it directly
+        if (currentLocationAddress && coordinates) {
+            requestAnimationFrame(() => {
+                setFieldValue("serviceAddress", currentLocationAddress.formatted, false);
+                setFieldValue("latitude", coordinates.latitude.toString(), false);
+                setFieldValue("longitude", coordinates.longitude.toString(), false);
+            });
+            return;
+        }
+
+        // Otherwise, fetch location first
+        await fetchCurrentLocation();
+
+        // After fetch, the state will update and we can use it
+        // Note: This is handled by the useEffect below for post-fetch updates
+    }, [currentLocationAddress, coordinates, fetchCurrentLocation]);
+
+    // Ref to track if we should auto-fill after location fetch
+    const pendingLocationFillRef = useRef<FormikProps<FormValues>['setFieldValue'] | null>(null);
+
+    // Effect to handle location updates when user clicks "Use Current Location"
+    useEffect(() => {
+        if (pendingLocationFillRef.current && currentLocationAddress && coordinates && !isLoadingCurrentLocation) {
+            const setFieldValue = pendingLocationFillRef.current;
+            requestAnimationFrame(() => {
+                setFieldValue("serviceAddress", currentLocationAddress.formatted, false);
+                setFieldValue("latitude", coordinates.latitude.toString(), false);
+                setFieldValue("longitude", coordinates.longitude.toString(), false);
+            });
+            pendingLocationFillRef.current = null;
+        }
+    }, [currentLocationAddress, coordinates, isLoadingCurrentLocation]);
+
+    // Updated handler that sets the pending ref
+    const handleUseCurrentLocationWithPending = useCallback(async (
+        setFieldValue: FormikProps<FormValues>['setFieldValue']
+    ) => {
+        // If we already have current location address, use it directly
+        if (currentLocationAddress && coordinates) {
+            requestAnimationFrame(() => {
+                setFieldValue("serviceAddress", currentLocationAddress.formatted, false);
+                setFieldValue("latitude", coordinates.latitude.toString(), false);
+                setFieldValue("longitude", coordinates.longitude.toString(), false);
+            });
+            return;
+        }
+
+        // Set pending ref so useEffect can fill values after fetch completes
+        pendingLocationFillRef.current = setFieldValue;
+        // Trigger location fetch
+        await fetchCurrentLocation();
+    }, [currentLocationAddress, coordinates, fetchCurrentLocation]);
 
     // Extract category finding logic
     const findCategory = useCallback((
@@ -804,12 +935,15 @@ const RequestServiceScreen = () => {
         );
     }, []);
 
-    // Extract navigation logic
+    // Extract navigation logic - pass all params needed for retry functionality
     const navigateToLiveOffers = useCallback((
         requestId: number,
         latitude: string,
         longitude: string,
-        address: string
+        address: string,
+        categoryId: number,
+        problemTitle: string,
+        description: string
     ) => {
         router.replace({
             pathname: "/(customer)/(home)/live-offers",
@@ -818,6 +952,9 @@ const RequestServiceScreen = () => {
                 latitude,
                 longitude,
                 address,
+                categoryId: categoryId.toString(),
+                problemTitle,
+                description,
             },
         } as any);
     }, []);
@@ -860,13 +997,20 @@ const RequestServiceScreen = () => {
 
             // Persist active service for app kill recovery
             // This ensures customer returns to live-offers screen after app restart
+            // expiresAt is CRITICAL for correct timer restoration after app kill
+            // Also saves retry params for Search Again functionality
             await saveCustomerActiveService({
                 requestId: response.request.id,
+                expiresAt: response.request.expires_at,
                 serviceLocation: {
                     latitude: parseFloat(values.latitude),
                     longitude: parseFloat(values.longitude),
                 },
                 serviceAddress: values.serviceAddress,
+                // Retry params
+                categoryId: selectedCategory.id,
+                problemTitle: values.problemTitle,
+                description: values.description,
             }).catch((error) => {
                 if (__DEV__) console.error('[CreateRequest] Failed to persist active service:', error);
             });
@@ -875,7 +1019,10 @@ const RequestServiceScreen = () => {
                 response.request.id,
                 values.latitude,
                 values.longitude,
-                values.serviceAddress
+                values.serviceAddress,
+                selectedCategory.id,
+                values.problemTitle,
+                values.description
             );
 
         } catch (error: unknown) {
@@ -924,9 +1071,12 @@ const RequestServiceScreen = () => {
                             showAddressSearch={showAddressSearch}
                             imageLoading={imageLoading}
                             coordinates={coordinates}
+                            currentLocationAddress={currentLocationAddress}
+                            isLoadingCurrentLocation={isLoadingCurrentLocation}
                             onOpenAddressSearch={openAddressSearch}
                             onCloseAddressSearch={closeAddressSearch}
                             onAddressSelect={handleAddressSelect}
+                            onUseCurrentLocation={handleUseCurrentLocationWithPending}
                             onPickImage={pickImage}
                             onRemovePhoto={removePhoto}
                             onGoBack={goBack}
@@ -1176,5 +1326,106 @@ const styles = StyleSheet.create({
     },
     addressPlaceholder: {
         color: COLORS.gray400,
+    },
+    // Address Options Styles
+    addressOptionsContainer: {
+        flexDirection: 'row',
+        gap: scale(12),
+        marginBottom: verticalScale(12),
+    },
+    addressOptionButton: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: scale(8),
+        paddingVertical: verticalScale(12),
+        paddingHorizontal: scale(12),
+        borderRadius: moderateScale(10),
+        borderWidth: 1.5,
+    },
+    currentLocationButton: {
+        backgroundColor: COLORS.primary + '10',
+        borderColor: COLORS.primary + '40',
+    },
+    searchAddressButton: {
+        backgroundColor: COLORS.accent + '10',
+        borderColor: COLORS.accent + '40',
+    },
+    addressOptionButtonDisabled: {
+        opacity: 0.6,
+    },
+    addressOptionText: {
+        color: COLORS.gray800,
+        fontSize: moderateScale(13),
+    },
+    // Selected Address Display
+    selectedAddressContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: COLORS.white,
+        borderRadius: moderateScale(12),
+        padding: scale(12),
+        borderWidth: 1.5,
+        borderColor: COLORS.success + '40',
+        marginBottom: verticalScale(4),
+    },
+    selectedAddressContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: scale(12),
+        flex: 1,
+    },
+    selectedAddressIcon: {
+        width: moderateScale(36),
+        height: moderateScale(36),
+        borderRadius: moderateScale(18),
+        backgroundColor: COLORS.success,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    selectedAddressTextContainer: {
+        flex: 1,
+    },
+    selectedAddressLabel: {
+        color: COLORS.success,
+        fontSize: moderateScale(11),
+        marginBottom: verticalScale(2),
+    },
+    selectedAddressText: {
+        color: COLORS.gray800,
+        fontSize: moderateScale(13),
+        lineHeight: moderateScale(18),
+    },
+    changeAddressButton: {
+        paddingHorizontal: scale(12),
+        paddingVertical: verticalScale(6),
+        borderRadius: moderateScale(6),
+        backgroundColor: COLORS.gray100,
+    },
+    changeAddressText: {
+        color: COLORS.primary,
+        fontSize: moderateScale(12),
+    },
+    // No Address Placeholder
+    noAddressContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: scale(10),
+        backgroundColor: COLORS.gray50,
+        borderRadius: moderateScale(12),
+        padding: scale(16),
+        borderWidth: 1.5,
+        borderColor: COLORS.gray200,
+        borderStyle: 'dashed',
+        marginBottom: verticalScale(4),
+    },
+    noAddressText: {
+        color: COLORS.gray500,
+        fontSize: moderateScale(13),
+        textAlign: 'center',
+        flex: 1,
     },
 });

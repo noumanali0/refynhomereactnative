@@ -46,6 +46,8 @@ export interface UserAPI {
   address: string;
   city: string;
   subscription_tier: SubscriptionTier;
+  profile_photo: string | null;
+  profile_photo_url: string | null;
   favorite_vendors: UserAPI[];
   vendor_profile: VendorProfileAPI | null;
 }
@@ -145,6 +147,27 @@ export interface VendorOnboardingRequest {
   service_categories?: (number | string)[]; // Array of IDs or slugs
 }
 
+/**
+ * Update Profile Request
+ * PATCH /api/auth/update-profile/
+ * All fields are optional for partial updates
+ */
+export interface UpdateProfileRequest {
+  // Common fields (Customer & Vendor)
+  first_name?: string;
+  last_name?: string;
+  profile_photo?: string; // File URI (file:// or content://) or null
+
+  // Customer-specific fields
+  address?: string;
+  city?: string; // For customer: User.city, For vendor: VendorProfile.city
+
+  // Vendor-specific fields
+  bio?: string;
+  service_categories?: number[];
+  service_radius_km?: number;
+}
+
 // ============================================================================
 // AUTHENTICATION RESPONSE TYPES
 // ============================================================================
@@ -195,6 +218,8 @@ export type OTPVerifyResponse = OTPVerifyResponseCustomer | OTPVerifyResponseVen
  */
 export interface LoginResponse extends JWTTokens {
   user: UserAPI;
+  is_verified: boolean; // For vendors: admin approved. For customers: always true
+  is_onboarding_complete: boolean; // For vendors: CNIC + categories submitted. For customers: always true
 }
 
 /**
@@ -213,6 +238,98 @@ export interface VendorOnboardingResponse {
   message: string;
   status: 'pending_verification';
   vendor_id: number;
+}
+
+/**
+ * Update Profile Response
+ * PATCH /api/auth/update-profile/
+ * Status 200: Profile updated successfully
+ */
+export interface UpdateProfileResponse {
+  message: string;
+  user: UserAPI;
+}
+
+/**
+ * Delete Account Request
+ * DELETE /api/auth/delete-account/
+ */
+export interface DeleteAccountRequest {
+  password: string;
+}
+
+/**
+ * Delete Account Response
+ * Status 200: Account deleted successfully
+ */
+export interface DeleteAccountResponse {
+  message: string;
+  status: 'deleted';
+}
+
+/**
+ * Change Password Request
+ * POST /api/auth/change-password/
+ */
+export interface ChangePasswordRequest {
+  current_password: string;
+  new_password: string;
+}
+
+/**
+ * Change Password Response
+ * Status 200: Password changed successfully
+ */
+export interface ChangePasswordResponse {
+  message: string;
+}
+
+/**
+ * Deactivate Account Request
+ * POST /api/auth/deactivate-account/
+ */
+export interface DeactivateAccountRequest {
+  password: string;
+}
+
+/**
+ * Deactivate Account Response
+ * Status 200: Account deactivated successfully
+ */
+export interface DeactivateAccountResponse {
+  message: string;
+  status: 'deactivated';
+}
+
+/**
+ * Reactivate Account Request
+ * POST /api/auth/reactivate-account/
+ */
+export interface ReactivateAccountRequest {
+  phone: string;
+  password: string;
+}
+
+/**
+ * Reactivate Account Response
+ * Status 200: Account reactivated successfully with JWT tokens
+ */
+export interface ReactivateAccountResponse extends JWTTokens {
+  message: string;
+  status: 'reactivated';
+  user: UserAPI;
+  is_verified: boolean;
+  is_onboarding_complete: boolean;
+}
+
+/**
+ * Login Response when account is deactivated
+ * Status 403: Account is deactivated
+ */
+export interface LoginResponseDeactivated {
+  detail: string;
+  status: 'account_deactivated';
+  phone: string;
 }
 
 // ============================================================================

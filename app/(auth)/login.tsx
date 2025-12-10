@@ -9,12 +9,14 @@ import {
     Animated,
     TextInput,
     Alert,
+    Modal,
+    ActivityIndicator,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppDispatch, useAppSelector } from '@/hooks/useAppDispatch';
-import { loginUser, clearError } from '@/store/slices/authSlice';
+import { loginUser, clearError, reactivateAccount } from '@/store/slices/authSlice';
 import { moderateScale } from 'react-native-size-matters';
 import { normalizePhoneNumber } from '@/utils/validation';
 import Text from '@/components/common/Text';
@@ -33,6 +35,12 @@ export default function Login() {
     const [phoneNumber, setPhoneNumber] = useState('');
     const [password, setPassword] = useState('');
     const [fadeAnim] = useState(new Animated.Value(0));
+
+    // Reactivate account state
+    const [showReactivateModal, setShowReactivateModal] = useState(false);
+    const [deactivatedPhone, setDeactivatedPhone] = useState('');
+    const [isReactivating, setIsReactivating] = useState(false);
+    const [reactivateError, setReactivateError] = useState<string | null>(null);
 
     // Animation
     useEffect(() => {
@@ -117,8 +125,46 @@ export default function Login() {
 
             // Navigation handled by useEffect above
         } catch (err: any) {
-            // Specific errors are handled by useEffect showing the error toast
+            // Check if account is deactivated
+            if (err?.includes?.('deactivated') || err === 'Account is deactivated') {
+                setDeactivatedPhone(normalizePhoneNumber(phoneNumber));
+                setShowReactivateModal(true);
+                // Clear the error so toast doesn't show for deactivated case
+                dispatch(clearError());
+            }
+            // Other errors are handled by useEffect showing the error toast
         }
+    };
+
+    // Handle reactivate account
+    const handleReactivate = async () => {
+        setIsReactivating(true);
+        setReactivateError(null);
+
+        try {
+            await dispatch(reactivateAccount({
+                phone: deactivatedPhone,
+                password: password,
+            })).unwrap();
+
+            setShowReactivateModal(false);
+            showToast({
+                type: 'success',
+                title: 'Account Reactivated',
+                message: 'Welcome back! Your account is now active.',
+            });
+            // Navigation handled by existing useEffect
+        } catch (error: any) {
+            setReactivateError(error || 'Failed to reactivate account');
+        } finally {
+            setIsReactivating(false);
+        }
+    };
+
+    const handleCloseReactivateModal = () => {
+        setShowReactivateModal(false);
+        setDeactivatedPhone('');
+        setReactivateError(null);
     };
 
     return (
@@ -258,6 +304,56 @@ export default function Login() {
                     </Text>
                 </ScrollView>
             </KeyboardAvoidingView>
+
+            {/* Reactivate Account Modal */}
+            <Modal
+                visible={showReactivateModal}
+                transparent
+                animationType="fade"
+                onRequestClose={handleCloseReactivateModal}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <View style={styles.modalIconContainer}>
+                            <Ionicons name="refresh-circle" size={48} color="#f59e0b" />
+                        </View>
+
+                        <Text type="title" style={styles.modalTitle}>Account Deactivated</Text>
+                        <Text type="body" style={styles.modalDescription}>
+                            Your account has been deactivated. Would you like to reactivate it and continue using RefynHome?
+                        </Text>
+
+                        {reactivateError && (
+                            <Text type="caption" style={styles.errorText}>{reactivateError}</Text>
+                        )}
+
+                        <View style={styles.modalButtons}>
+                            <TouchableOpacity
+                                style={styles.modalCancelButton}
+                                onPress={handleCloseReactivateModal}
+                                disabled={isReactivating}
+                            >
+                                <Text type="body" style={styles.modalCancelText}>Cancel</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[
+                                    styles.reactivateButton,
+                                    isReactivating && styles.reactivateButtonDisabled
+                                ]}
+                                onPress={handleReactivate}
+                                disabled={isReactivating}
+                            >
+                                {isReactivating ? (
+                                    <ActivityIndicator size="small" color="#fff" />
+                                ) : (
+                                    <Text type="body" style={styles.reactivateButtonText}>Reactivate</Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -426,5 +522,78 @@ const styles = StyleSheet.create({
     termsLink: {
         color: '#2563EB',
         fontWeight: '600',
+    },
+    // Reactivate Modal Styles
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: moderateScale(24),
+    },
+    modalContent: {
+        backgroundColor: '#fff',
+        borderRadius: 16,
+        padding: moderateScale(24),
+        width: '100%',
+        maxWidth: moderateScale(340),
+        alignItems: 'center',
+    },
+    modalIconContainer: {
+        width: moderateScale(80),
+        height: moderateScale(80),
+        borderRadius: moderateScale(40),
+        backgroundColor: '#fef3c7',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: moderateScale(16),
+    },
+    modalTitle: {
+        fontSize: moderateScale(18),
+        color: '#1e293b',
+        marginBottom: moderateScale(8),
+        textAlign: 'center',
+    },
+    modalDescription: {
+        fontSize: moderateScale(14),
+        color: '#64748b',
+        textAlign: 'center',
+        marginBottom: moderateScale(20),
+        lineHeight: 20,
+    },
+    modalButtons: {
+        flexDirection: 'row',
+        gap: moderateScale(12),
+        width: '100%',
+    },
+    modalCancelButton: {
+        flex: 1,
+        paddingVertical: moderateScale(12),
+        borderRadius: 8,
+        backgroundColor: '#f1f5f9',
+        alignItems: 'center',
+    },
+    modalCancelText: {
+        color: '#64748b',
+        fontWeight: '600',
+    },
+    reactivateButton: {
+        flex: 1,
+        paddingVertical: moderateScale(12),
+        borderRadius: 8,
+        backgroundColor: '#f59e0b',
+        alignItems: 'center',
+    },
+    reactivateButtonDisabled: {
+        backgroundColor: '#fcd34d',
+    },
+    reactivateButtonText: {
+        color: '#fff',
+        fontWeight: '600',
+    },
+    errorText: {
+        color: '#ef4444',
+        marginBottom: moderateScale(12),
+        textAlign: 'center',
     },
 });

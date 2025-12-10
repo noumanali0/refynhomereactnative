@@ -25,6 +25,8 @@ import type {
   ProfileResponse,
   VendorOnboardingRequest,
   VendorOnboardingResponse,
+  UpdateProfileRequest,
+  UpdateProfileResponse,
   UserAPI,
 } from '@/types/api';
 import { Customer, Vendor, User } from '@/types';
@@ -70,7 +72,9 @@ function convertAPIUserToFrontend(apiUser: UserAPI): Customer | Vendor {
     // Computed fields
     name: `${apiUser.first_name} ${apiUser.last_name}`.trim(),
     phoneNumber: apiUser.phone, // Legacy alias
-    profilePhoto: apiUser.vendor_profile?.profile_photo || undefined,
+    // Use profile_photo_url for full URL, fallback to vendor_profile photo
+    profilePhoto: apiUser.profile_photo_url || apiUser.vendor_profile?.profile_photo || undefined,
+    profilePhotoUrl: apiUser.profile_photo_url || undefined,
   };
 
   // Return as Customer or Vendor based on role
@@ -190,12 +194,14 @@ class AuthService {
    *
    * @param phone - Phone number
    * @param password - Password
-   * @returns Promise with tokens and user data
+   * @returns Promise with tokens, user data, and verification status
    */
   async login(phone: string, password: string): Promise<{
     access: string;
     refresh: string;
     user: Customer | Vendor;
+    isVerified: boolean;
+    isOnboardingComplete: boolean;
   }> {
     try {
       const payload: LoginRequest = {
@@ -212,6 +218,8 @@ class AuthService {
         access: response.data.access,
         refresh: response.data.refresh,
         user,
+        isVerified: response.data.is_verified,
+        isOnboardingComplete: response.data.is_onboarding_complete,
       };
     } catch (error) {
       console.error('[AuthService] Login error:', error);
@@ -353,20 +361,238 @@ class AuthService {
   }
 
   /**
-   * Logout - Clear local session
-   * Note: Backend uses JWT which is stateless, so we only clear local storage
+   * Update Profile - Update current user's profile
+   * PATCH /api/auth/update-profile/
    *
-   * @returns Promise that resolves when logout is complete
+   * Uses multipart/form-data for file uploads (React Native)
+   * All fields are optional for partial updates
+   *
+   * @param payload - Profile update data
+   * @returns Promise with updated user data
    */
-  async logout(): Promise<void> {
+  async updateProfile(payload: UpdateProfileRequest): Promise<{
+    message: string;
+    user: Customer | Vendor;
+  }> {
     try {
-      // JWT is stateless - no backend call needed
-      // Just clear local tokens (handled by Redux slice)
-      if (__DEV__) {
-        console.log('[AuthService] Logout complete (local only)');
+      // Helper to check if string is a file URI (React Native)
+      const isFileUri = (value: unknown): value is string =>
+        typeof value === 'string' && (value.startsWith('file://') || value.startsWith('content://'));
+
+      // Check if we have image URI
+      const hasImageUri = isFileUri(payload.profile_photo);
+
+      if (hasImageUri) {
+        // Use FormData for file uploads in React Native
+        const formData = new FormData();
+
+        // Add text fields (only if provided)
+        if (payload.first_name !== undefined) formData.append('first_name', payload.first_name);
+        if (payload.last_name !== undefined) formData.append('last_name', payload.last_name);
+        if (payload.address !== undefined) formData.append('address', payload.address);
+        if (payload.city !== undefined) formData.append('city', payload.city);
+        if (payload.bio !== undefined) formData.append('bio', payload.bio);
+        if (payload.service_radius_km !== undefined) {
+          formData.append('service_radius_km', payload.service_radius_km.toString());
+        }
+
+        // Add service categories (array)
+        if (payload.service_categories) {
+          payload.service_categories.forEach((id) => {
+            formData.append('service_categories', id.toString());
+          });
+        }
+
+        // Add profile photo as file object (React Native format)
+        const uri = payload.profile_photo!;
+        const filename = uri.split('/').pop() || 'profile.jpg';
+        const match = /\.(\w+)$/.exec(filename);
+        const type = match ? `image/${match[1].toLowerCase()}` : 'image/jpeg';
+
+        formData.append('profile_photo', {
+          uri,
+          name: filename,
+          type,
+        } as any);
+
+        const response = await apiClient.patch<UpdateProfileResponse>(
+          AUTH_ENDPOINTS.UPDATE_PROFILE,
+          formData,
+          {
+            headers: {
+              'Content-Type': 'multipart/form-data',
+            },
+          }
+        );
+
+        return {
+          message: response.data.message,
+          user: convertAPIUserToFrontend(response.data.user),
+        };
+      } else {
+        // Use JSON for non-file updates
+        const response = await apiClient.patch<UpdateProfileResponse>(
+          AUTH_ENDPOINTS.UPDATE_PROFILE,
+          payload
+        );
+
+        return {
+          message: response.data.message,
+          user: convertAPIUserToFrontend(response.data.user),
+        };
       }
     } catch (error) {
-      console.error('[AuthService] Logout error:', error);
+      console.error('[AuthService] Update profile error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Logout - Blacklist refresh token on backend and clear local session
+   * POST /api/auth/logout/
+   *
+   * This invalidates the refresh token on the server, preventing
+   * it from being used to generate new access tokens.
+   *
+   * @param refreshToken - The refresh token to blacklist
+   * @returns Promise that resolves when logout is complete
+   */
+  async logout(refreshToken: string): Promise<{ message: string; status: 'logged_out' }> {
+    try {
+      const response = await apiClient.post<{ message: string; status: 'logged_out' }>(
+        AUTH_ENDPOINTS.LOGOUT,
+        { refresh: refreshToken }
+      );
+
+      if (__DEV__) {
+        console.log('[AuthService] Logout complete - token blacklisted');
+      }
+
+      return response.data;
+    } catch (error) {
+      // Even if API fails, we should still clear local tokens
+      console.error('[AuthService] Logout API error:', error);
+      // Return success anyway - local cleanup will happen
+      return { message: 'Logged out successfully', status: 'logged_out' };
+    }
+  }
+
+  /**
+   * Delete Account - Permanently delete user account
+   * DELETE /api/auth/delete-account/
+   *
+   * Requires password confirmation for security.
+   * This action is irreversible - all user data will be deleted.
+   *
+   * @param password - Current password for verification
+   * @returns Promise that resolves when account is deleted
+   * @throws Error if password is invalid or deletion fails
+   */
+  async deleteAccount(password: string): Promise<{ message: string; status: 'deleted' }> {
+    try {
+      const response = await apiClient.delete<{ message: string; status: 'deleted' }>(
+        AUTH_ENDPOINTS.DELETE_ACCOUNT,
+        {
+          data: { password }, // DELETE requests send body via 'data' in axios
+        }
+      );
+
+      if (__DEV__) {
+        console.log('[AuthService] Account deleted successfully');
+      }
+
+      return response.data;
+    } catch (error) {
+      console.error('[AuthService] Delete account error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Change Password - Change user's password
+   * POST /api/auth/change-password/
+   *
+   * Requires current password verification.
+   * New password must be at least 8 characters and different from current.
+   *
+   * @param currentPassword - Current password for verification
+   * @param newPassword - New password (min 8 characters)
+   * @returns Promise that resolves when password is changed
+   * @throws Error if current password is invalid or validation fails
+   */
+  async changePassword(currentPassword: string, newPassword: string): Promise<{ message: string }> {
+    try {
+      const response = await apiClient.post<{ message: string }>(
+        AUTH_ENDPOINTS.CHANGE_PASSWORD,
+        {
+          current_password: currentPassword,
+          new_password: newPassword,
+        }
+      );
+
+      if (__DEV__) {
+        console.log('[AuthService] Password changed successfully');
+      }
+
+      return response.data;
+    } catch (error) {
+      console.error('[AuthService] Change password error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Deactivate Account - Temporarily deactivate user account
+   * POST /api/auth/deactivate-account/
+   *
+   * Requires password confirmation for security.
+   * User data is preserved but login is disabled.
+   * Account can be reactivated by admin through Django admin panel.
+   *
+   * @param password - Current password for verification
+   * @returns Promise that resolves when account is deactivated
+   * @throws Error if password is invalid or deactivation fails
+   */
+  async deactivateAccount(password: string): Promise<{ message: string; status: 'deactivated' }> {
+    try {
+      const response = await apiClient.post<{ message: string; status: 'deactivated' }>(
+        AUTH_ENDPOINTS.DEACTIVATE_ACCOUNT,
+        { password }
+      );
+
+      if (__DEV__) {
+        console.log('[AuthService] Account deactivated successfully');
+      }
+
+      return response.data;
+    } catch (error) {
+      console.error('[AuthService] Deactivate account error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Reactivate Account - Reactivate a deactivated user account
+   * POST /api/auth/reactivate-account/
+   *
+   * @param phone - User phone number
+   * @param password - Current password for verification
+   * @returns Promise with JWT tokens and user data (same as login)
+   */
+  async reactivateAccount(phone: string, password: string): Promise<LoginResponse> {
+    try {
+      const response = await apiClient.post<LoginResponse>(
+        AUTH_ENDPOINTS.REACTIVATE_ACCOUNT,
+        { phone, password }
+      );
+
+      if (__DEV__) {
+        console.log('[AuthService] Account reactivated successfully');
+      }
+
+      return response.data;
+    } catch (error) {
+      console.error('[AuthService] Reactivate account error:', error);
       throw error;
     }
   }

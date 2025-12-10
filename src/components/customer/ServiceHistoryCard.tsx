@@ -11,7 +11,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -22,8 +21,9 @@ import { router } from 'expo-router';
 import Text from '@/components/common/Text';
 import { COLORS } from '@/constants/colors';
 import { ServiceHistoryRequest } from '@/services/serviceHistoryService';
-import { addToFavorites, selectFavoriteVendorIds, selectIsAddingFavorite } from '@/store/slices/vendorSlice';
+import { addToFavorites, removeFromFavorites, selectFavoriteVendorIds, selectIsAddingFavorite } from '@/store/slices/vendorSlice';
 import { AppDispatch } from '@/store';
+import { useToast } from '@/contexts/ToastContext';
 
 // ============================================================================
 // TYPES
@@ -32,6 +32,7 @@ import { AppDispatch } from '@/store';
 interface ServiceHistoryCardProps {
   request: ServiceHistoryRequest;
   onPress?: (requestId: number) => void;
+  disablePress?: boolean;
 }
 
 // ============================================================================
@@ -84,36 +85,53 @@ const formatTime = (dateString: string) => {
 export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
   request,
   onPress,
+  disablePress = false,
 }) => {
   const dispatch = useDispatch<AppDispatch>();
+  const { showToast } = useToast();
   const favoriteVendorIds = useSelector(selectFavoriteVendorIds);
   const isAddingFavorite = useSelector(selectIsAddingFavorite);
 
   const statusConfig = useMemo(() => getStatusConfig(request.status), [request.status]);
 
   // Check if vendor is already in favorites
-  const vendorId = request.assigned_vendor?.id || request.accepted_proposal?.vendor?.id;
+  // Backend returns assigned_vendor_detail (not assigned_vendor)
+  const vendorId = request.assigned_vendor_detail?.id || request.accepted_proposal?.vendor?.id;
   const isFavorite = vendorId ? favoriteVendorIds.includes(vendorId) : false;
 
-  // Get vendor info from either assigned_vendor or accepted_proposal
-  const vendor = request.assigned_vendor || request.accepted_proposal?.vendor;
+  // Get vendor info from either assigned_vendor_detail or accepted_proposal
+  const vendor = request.assigned_vendor_detail || request.accepted_proposal?.vendor;
 
-  // Handle add to favorites
-  const handleAddToFavorites = useCallback(async () => {
+  // Handle toggle favorites (add/remove)
+  const handleToggleFavorite = useCallback(async () => {
     if (!vendorId) return;
 
-    if (isFavorite) {
-      Alert.alert('Already Added', 'This vendor is already in your favorites.');
-      return;
-    }
-
     try {
-      await dispatch(addToFavorites(vendorId)).unwrap();
-      Alert.alert('Success', 'Vendor added to favorites!');
+      if (isFavorite) {
+        // Remove from favorites
+        await dispatch(removeFromFavorites(vendorId)).unwrap();
+        showToast({
+          type: 'success',
+          title: 'Removed',
+          message: 'Vendor removed from favorites.',
+        });
+      } else {
+        // Add to favorites
+        await dispatch(addToFavorites(vendorId)).unwrap();
+        showToast({
+          type: 'success',
+          title: 'Added',
+          message: 'Vendor added to favorites!',
+        });
+      }
     } catch (error) {
-      Alert.alert('Error', error as string);
+      showToast({
+        type: 'error',
+        title: 'Error',
+        message: typeof error === 'string' ? error : 'Something went wrong',
+      });
     }
-  }, [dispatch, vendorId, isFavorite]);
+  }, [dispatch, vendorId, isFavorite, showToast]);
 
   // Handle card press
   const handlePress = useCallback(() => {
@@ -130,11 +148,14 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
   // Check if service is completed and has vendor
   const showVendorSection = request.status === 'completed' && vendor;
 
+  // Use View instead of TouchableOpacity when press is disabled (better performance)
+  const CardWrapper = disablePress ? View : TouchableOpacity;
+  const wrapperProps = disablePress ? {} : { onPress: handlePress, activeOpacity: 0.8 };
+
   return (
-    <TouchableOpacity
+    <CardWrapper
       style={styles.card}
-      onPress={handlePress}
-      activeOpacity={0.8}
+      {...wrapperProps}
     >
       {/* Header: Category & Status */}
       <View style={styles.header}>
@@ -222,7 +243,7 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
                   <View style={styles.ratingContainer}>
                     <Ionicons name="star" size={12} color={COLORS.warning} />
                     <Text style={styles.ratingText}>
-                      {vendor.average_rating?.toFixed(1) || '0.0'}
+                      {vendor?.average_rating?.toFixed(1) || '0.0'}
                     </Text>
                     <Text style={styles.reviewCount}>
                       ({vendor.total_reviews || 0})
@@ -234,18 +255,18 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
                 </Text>
               </View>
 
-              {/* Add to Favorites Button */}
+              {/* Toggle Favorites Button */}
               <TouchableOpacity
                 style={[
                   styles.favoriteButton,
                   isFavorite && styles.favoriteButtonActive,
                 ]}
-                onPress={handleAddToFavorites}
-                disabled={isAddingFavorite || isFavorite}
+                onPress={handleToggleFavorite}
+                disabled={isAddingFavorite}
                 activeOpacity={0.7}
               >
                 {isAddingFavorite ? (
-                  <ActivityIndicator size="small" color={COLORS.primary} />
+                  <ActivityIndicator size="small" color={isFavorite ? COLORS.error : COLORS.primary} />
                 ) : (
                   <>
                     <Ionicons
@@ -276,8 +297,8 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
               </View>
             )}
 
-            {/* Review Status */}
-            {request.review ? (
+            {/* Review Status - Temporarily disabled */}
+            {/* {request.review ? (
               <View style={styles.reviewSection}>
                 <View style={styles.reviewStars}>
                   {[1, 2, 3, 4, 5].map((star) => (
@@ -300,17 +321,19 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
                 <Ionicons name="create-outline" size={16} color={COLORS.primary} />
                 <Text style={styles.addReviewText}>Add Review</Text>
               </TouchableOpacity>
-            )}
+            )} */}
           </LinearGradient>
         </View>
       )}
 
-      {/* View Details Arrow */}
-      <View style={styles.viewDetailsRow}>
-        <Text style={styles.viewDetailsText}>View Details</Text>
-        <Ionicons name="chevron-forward" size={16} color={COLORS.primary} />
-      </View>
-    </TouchableOpacity>
+      {/* View Details Arrow - Only show when card is clickable */}
+      {!disablePress && (
+        <View style={styles.viewDetailsRow}>
+          <Text style={styles.viewDetailsText}>View Details</Text>
+          <Ionicons name="chevron-forward" size={16} color={COLORS.primary} />
+        </View>
+      )}
+    </CardWrapper>
   );
 };
 

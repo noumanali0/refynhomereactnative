@@ -51,15 +51,16 @@ export default function HistoryScreen() {
 
     // Calculate stats from real data
     const stats = useMemo(() => {
-        const completed = jobs.filter(j => j.status === 'completed').length;
+        const isCompleted = (status: string) => status === 'completed' || status === 'done';
+        const completed = jobs.filter(j => isCompleted(j.status)).length;
         const now = new Date();
         const thisMonth = jobs.filter(j => {
-            if (j.status !== 'completed') return false;
+            if (!isCompleted(j.status)) return false;
             const jobDate = new Date(j.completed_at || j.created_at);
             return jobDate.getMonth() === now.getMonth() && jobDate.getFullYear() === now.getFullYear();
         }).length;
         const totalEarnings = jobs
-            .filter(j => j.status === 'completed')
+            .filter(j => isCompleted(j.status))
             .reduce((sum, j) => sum + (j.price_quote || 0), 0);
 
         return {
@@ -79,6 +80,10 @@ export default function HistoryScreen() {
     // Get count for each filter
     const getFilterCount = (filter: FilterType): number => {
         if (filter === 'all') return jobs.length;
+        if (filter === 'completed') {
+            // Include both 'completed' and 'done' statuses
+            return jobs.filter(j => j.status === 'completed' || j.status === 'done').length;
+        }
         return jobs.filter(j => j.status === filter).length;
     };
 
@@ -141,11 +146,15 @@ export default function HistoryScreen() {
                 </View>
                 <View style={[
                     styles.statusBadge,
-                    item.status === 'completed' && styles.statusCompleted,
+                    (item.status === 'completed' || item.status === 'done') && styles.statusCompleted,
                     item.status === 'cancelled' && styles.statusCancelled,
                 ]}>
-                    <Text type="caption" style={styles.statusText}>
-                        {item.status ? item.status.charAt(0).toUpperCase() + item.status.slice(1) : 'Unknown'}
+                    <Text type="caption" style={[
+                        styles.statusText,
+                        (item.status === 'completed' || item.status === 'done') && styles.statusTextCompleted,
+                        item.status === 'cancelled' && styles.statusTextCancelled,
+                    ]}>
+                        {item.status === 'done' ? 'Completed' : (item.status ? item.status.charAt(0).toUpperCase() + item.status.slice(1) : 'Completed')}
                     </Text>
                 </View>
             </View>
@@ -425,6 +434,8 @@ const styles = StyleSheet.create({
     statusCompleted: { backgroundColor: COLORS.success + '15' },
     statusCancelled: { backgroundColor: COLORS.error + '15' },
     statusText: { color: COLORS.gray700, fontSize: moderateScale(11) },
+    statusTextCompleted: { color: COLORS.success },
+    statusTextCancelled: { color: COLORS.error },
     jobTitle: { fontSize: moderateScale(16), color: COLORS.gray900, marginBottom: verticalScale(12) },
     jobDetails: { gap: verticalScale(6), marginBottom: verticalScale(12) },
     jobDetailRow: { flexDirection: 'row', alignItems: 'center', gap: scale(8) },

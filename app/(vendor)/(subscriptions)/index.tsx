@@ -48,19 +48,16 @@ export default function SubscriptionsScreen() {
         refresh,
         selectPlan,
     } = useSubscription();
-    console.log("🚀 ~ SubscriptionsScreen ~ plans:", plans)
 
     // Get vendor ID from auth state
-    const vendorId = useSelector((state: RootState) => state.auth.user?.uid);
+    const vendorId = useSelector((state: RootState) => state.auth.user?.uid || state.auth.user?.id);
 
-    // Initialize on mount
+    // Initialize on mount - use actual vendor ID from auth state
     useEffect(() => {
-        // if (vendorId) {
-        initialize('1234');
-        // initialize(vendorId);
-        // }
-    }, []);
-    // }, [vendorId]);
+        if (vendorId) {
+            initialize(vendorId.toString());
+        }
+    }, [vendorId]);
 
     // Handle plan selection
     const handleSelectPlan = (planId: string) => {

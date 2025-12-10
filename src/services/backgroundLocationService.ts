@@ -36,13 +36,20 @@ const STORAGE_KEYS = {
 };
 
 const LOCATION_CONFIG = {
-  accuracy: Location.Accuracy.High,
-  timeInterval: 5000,           // 5 seconds
-  distanceInterval: 10,         // 10 meters minimum movement
-  deferredUpdatesInterval: 5000,
+  accuracy: Location.Accuracy.Balanced, // Balanced accuracy saves battery on low-end devices
+  timeInterval: 15000,          // 15 seconds (was 5s - too frequent, drains battery)
+  distanceInterval: 20,         // 20 meters minimum movement (was 10m)
+  deferredUpdatesInterval: 15000,
   showsBackgroundLocationIndicator: true,
-  pausesUpdatesAutomatically: false,
+  pausesUpdatesAutomatically: true, // Allow pausing when device is stationary
   activityType: Location.ActivityType.AutomotiveNavigation,
+};
+
+// HTTP fallback configuration (used when app is killed and WebSocket unavailable)
+const HTTP_CONFIG = {
+  TIMEOUT_MS: 8000,      // 8 second timeout (matches API client)
+  MAX_RETRIES: 2,        // Retry twice on failure
+  RETRY_DELAY_MS: 1000,  // 1 second between retries
 };
 
 const MAX_QUEUE_SIZE = 50; // ~4 minutes of location data at 5s intervals
@@ -77,7 +84,9 @@ function isSocketConnected(): boolean {
   try {
     const store = getStore();
     if (!store) return false;
-    return store.getState().dispatch.connectionStatus === 'connected';
+    // Safe access with optional chaining to prevent crash if dispatch slice is undefined
+    const state = store.getState();
+    return state?.dispatch?.connectionStatus === 'connected';
   } catch {
     return false;
   }
@@ -163,49 +172,102 @@ export async function flushLocationQueue(): Promise<void> {
 /**
  * Send location update via HTTP API
  * Used when app is in background/killed and WebSocket is not available
+ *
+ * Features:
+ * - Timeout protection (8s) to prevent hanging
+ * - Retry logic (2 retries with 1s delay)
+ * - Error response parsing for debugging
+ * - No retry on auth errors (401/403)
  */
-async function sendLocationViaHttp(coords: Coordinates, serviceRequestId: number | null): Promise<boolean> {
-  try {
-    // Get token from SecureStore (available even when app is killed)
-    const token = await SecureStore.getItemAsync(STORAGE_KEYS.ACCESS_TOKEN);
+async function sendLocationViaHttp(coords: Coordinates, serviceRequestId: number): Promise<boolean> {
+  let lastError: Error | null = null;
 
-    if (!token) {
-      console.warn('[BackgroundLocation] No auth token available for HTTP request');
-      return false;
+  for (let attempt = 1; attempt <= HTTP_CONFIG.MAX_RETRIES + 1; attempt++) {
+    try {
+      // Get token from SecureStore (available even when app is killed)
+      const token = await SecureStore.getItemAsync(STORAGE_KEYS.ACCESS_TOKEN);
+
+      if (!token) {
+        console.warn('[BackgroundLocation] No auth token available for HTTP request');
+        return false;
+      }
+
+      // Create AbortController for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), HTTP_CONFIG.TIMEOUT_MS);
+
+      try {
+        const response = await fetch(`${API_BASE_URL}${VENDOR_ENDPOINTS.UPDATE_LOCATION}`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+            service_request_id: serviceRequestId,
+          }),
+          signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+          if (__DEV__) {
+            console.log('[BackgroundLocation] HTTP location sent successfully:', coords);
+          }
+          return true;
+        }
+
+        // Parse error response for debugging
+        let errorDetail = `Status ${response.status}`;
+        try {
+          const errorBody = await response.json();
+          errorDetail = errorBody.detail || errorBody.message || JSON.stringify(errorBody);
+        } catch {
+          // Ignore parse errors
+        }
+
+        console.error(`[BackgroundLocation] HTTP failed (attempt ${attempt}/${HTTP_CONFIG.MAX_RETRIES + 1}): ${errorDetail}`);
+
+        // Don't retry on auth errors (401/403) - token is expired/invalid
+        if (response.status === 401 || response.status === 403) {
+          console.error('[BackgroundLocation] Auth error - token may be expired');
+          return false;
+        }
+
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        throw fetchError;
+      }
+
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+
+      if (lastError.name === 'AbortError') {
+        console.error(`[BackgroundLocation] HTTP timeout (attempt ${attempt}/${HTTP_CONFIG.MAX_RETRIES + 1})`);
+      } else {
+        console.error(`[BackgroundLocation] HTTP error (attempt ${attempt}/${HTTP_CONFIG.MAX_RETRIES + 1}):`, lastError.message);
+      }
     }
 
-    const response = await fetch(`${API_BASE_URL}${VENDOR_ENDPOINTS.UPDATE_LOCATION}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-      },
-      body: JSON.stringify({
-        latitude: coords.latitude,
-        longitude: coords.longitude,
-        service_request_id: serviceRequestId,
-      }),
-    });
-
-    if (!response.ok) {
-      console.error('[BackgroundLocation] HTTP update failed:', response.status);
-      return false;
+    // Wait before retry (except on last attempt)
+    if (attempt <= HTTP_CONFIG.MAX_RETRIES) {
+      await new Promise(resolve => setTimeout(resolve, HTTP_CONFIG.RETRY_DELAY_MS));
     }
-
-    if (__DEV__) {
-      console.log('[BackgroundLocation] Sent location via HTTP:', coords);
-    }
-
-    return true;
-  } catch (error) {
-    console.error('[BackgroundLocation] HTTP request failed:', error);
-    return false;
   }
+
+  console.error('[BackgroundLocation] All HTTP attempts failed');
+  return false;
 }
 
 /**
  * Send location update to server
  * Uses WebSocket if connected, otherwise falls back to HTTP API
+ *
+ * IMPORTANT: When app is killed, in-memory state (activeServiceRequestId) is lost.
+ * We MUST read service_request_id from SecureStore first for HTTP fallback to work.
  */
 async function sendLocationUpdate(coords: Coordinates): Promise<void> {
   // Try WebSocket first (faster, real-time)
@@ -232,23 +294,41 @@ async function sendLocationUpdate(coords: Coordinates): Promise<void> {
   }
 
   // WebSocket not available - use HTTP API
-  // Get service request ID from SecureStore (persists even after app kill)
-  let serviceReqId = activeServiceRequestId;
-  if (!serviceReqId) {
-    try {
-      const storedId = await SecureStore.getItemAsync(STORAGE_KEYS.SERVICE_REQUEST_ID);
-      if (storedId) {
-        serviceReqId = parseInt(storedId, 10);
+  // CRITICAL: Always read from SecureStore FIRST (in-memory state lost after app kill)
+  let serviceReqId: number | null = null;
+
+  try {
+    const storedId = await SecureStore.getItemAsync(STORAGE_KEYS.SERVICE_REQUEST_ID);
+    if (storedId) {
+      serviceReqId = parseInt(storedId, 10);
+      if (__DEV__) {
+        console.log('[BackgroundLocation] Read service_request_id from SecureStore:', serviceReqId);
       }
-    } catch {
-      // Ignore errors reading from storage
     }
+  } catch (e) {
+    console.error('[BackgroundLocation] Failed to read service_request_id from SecureStore:', e);
+  }
+
+  // Fallback to in-memory (only works if app wasn't killed)
+  if (!serviceReqId && activeServiceRequestId) {
+    serviceReqId = activeServiceRequestId;
+    if (__DEV__) {
+      console.log('[BackgroundLocation] Using in-memory service_request_id:', serviceReqId);
+    }
+  }
+
+  // CRITICAL: Don't send HTTP without service_request_id - backend will reject it
+  if (!serviceReqId) {
+    console.error('[BackgroundLocation] No service_request_id available - cannot send HTTP update');
+    console.error('[BackgroundLocation] This likely means the background tracking was not started properly');
+    queueLocation(coords);
+    return;
   }
 
   const httpSuccess = await sendLocationViaHttp(coords, serviceReqId);
 
   if (!httpSuccess) {
-    // Both methods failed, queue the location
+    // HTTP failed, queue the location for later
     queueLocation(coords);
   }
 }
@@ -284,6 +364,13 @@ export function defineBackgroundLocationTask(): void {
   }
 
   TaskManager.defineTask(BACKGROUND_LOCATION_TASK, async ({ data, error }) => {
+    // Log task trigger for debugging kill mode issues
+    console.log('[BackgroundLocation] Task triggered', {
+      hasData: !!data,
+      hasError: !!error,
+      timestamp: new Date().toISOString(),
+    });
+
     if (error) {
       console.error('[BackgroundLocation] Task error:', error);
       return;
@@ -308,13 +395,14 @@ export function defineBackgroundLocationTask(): void {
       longitude: latestLocation.coords.longitude,
     };
 
-    if (__DEV__) {
-      console.log('[BackgroundLocation] Task received location:', {
-        ...coords,
-        accuracy: latestLocation.coords.accuracy,
-        timestamp: new Date(latestLocation.timestamp).toISOString(),
-      });
-    }
+    // Log location details and connection state for debugging
+    console.log('[BackgroundLocation] Processing location update', {
+      coords,
+      accuracy: latestLocation.coords.accuracy,
+      timestamp: new Date(latestLocation.timestamp).toISOString(),
+      socketConnected: isSocketConnected(),
+      activeServiceRequestId,
+    });
 
     // Send to server (will use HTTP if WebSocket not available)
     await sendLocationUpdate(coords);

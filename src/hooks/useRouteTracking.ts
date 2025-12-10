@@ -2,12 +2,16 @@
  * useRouteTracking Hook
  *
  * Manages route tracking between vendor location and service location.
+ * Uses Google Directions API for route calculation.
  * Includes proper throttling, AbortController for race condition handling,
  * and mounted state checks for safe state updates.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { InteractionManager } from 'react-native';
 import type { Coordinates } from '@/types/socket';
+import { simplifyRoute } from '@/utils/polylineSimplify';
+import { googleDirectionsService } from '@/services/googleDirectionsService';
 
 // ============================================================================
 // Constants
@@ -16,9 +20,36 @@ import type { Coordinates } from '@/types/socket';
 const ROUTE_CONSTANTS = {
   /** Minimum time between route API calls in milliseconds */
   THROTTLE_MS: 15000,
-  /** OSRM API base URL */
-  API_URL: 'https://router.project-osrm.org/route/v1/driving',
+  /** Minimum distance change in meters to trigger route refetch */
+  SIGNIFICANT_DISTANCE_M: 100,
 } as const;
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Calculate distance between two coordinates using Haversine formula.
+ * Returns distance in meters.
+ */
+function getDistanceInMeters(
+  coord1: Coordinates,
+  coord2: Coordinates
+): number {
+  const R = 6371000; // Earth radius in meters
+  const dLat = (coord2.latitude - coord1.latitude) * Math.PI / 180;
+  const dLon = (coord2.longitude - coord1.longitude) * Math.PI / 180;
+  const lat1Rad = coord1.latitude * Math.PI / 180;
+  const lat2Rad = coord2.latitude * Math.PI / 180;
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1Rad) * Math.cos(lat2Rad) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
 
 // ============================================================================
 // Types
@@ -71,6 +102,8 @@ export function useRouteTracking({
   const lastRouteFetchRef = useRef<number>(0);
   const hasCalledFirstRouteRef = useRef(false);
   const isMountedRef = useRef(true);
+  // Track previous vendor location to detect significant movement
+  const prevVendorLocationRef = useRef<Coordinates | null>(null);
 
   // Track mounted state
   useEffect(() => {
@@ -80,36 +113,58 @@ export function useRouteTracking({
     };
   }, []);
 
+  // Force initial route fetch on mount when locations are available
+  // This handles app restart where state is restored from Redux persist
+  // but the main effect hasn't triggered because vendorLocation didn't "change"
+  useEffect(() => {
+    // Only trigger if: enabled, have both locations, but no route yet
+    if (enabled && vendorLocation && serviceLocation && routeCoords.length === 0) {
+      if (__DEV__) {
+        console.log('[useRouteTracking] Initial mount with locations but no route - forcing fetch');
+      }
+
+      // Reset refs to ensure fresh start
+      prevVendorLocationRef.current = null;
+      lastRouteFetchRef.current = 0;
+      hasCalledFirstRouteRef.current = false;
+
+      // Trigger initial fetch after short delay to ensure component is stable
+      const timer = setTimeout(() => {
+        if (isMountedRef.current) {
+          InteractionManager.runAfterInteractions(() => {
+            if (isMountedRef.current) {
+              doFetchRoute();
+            }
+          });
+        }
+      }, 500);
+
+      return () => clearTimeout(timer);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]); // Only run when enabled changes - handles initial mount and acceptance
+
   /**
-   * Fetches route coordinates from OSRM API.
-   * Pure function with no external dependencies.
+   * Fetches route coordinates from Google Directions API.
+   * Uses googleDirectionsService for route calculation.
    */
   const fetchRoute = useCallback(async (
     start: Coordinates,
     end: Coordinates,
-    signal?: AbortSignal
+    _signal?: AbortSignal // Signal not used by Google service (has internal timeout)
   ): Promise<Coordinates[]> => {
-    const url = `${ROUTE_CONSTANTS.API_URL}/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson`;
-
     try {
-      const response = await fetch(url, { signal });
+      const routeInfo = await googleDirectionsService.getRoute(start, end);
 
-      if (!response.ok) {
+      if (!routeInfo || !routeInfo.coordinates.length) {
+        if (__DEV__) {
+          console.warn('[useRouteTracking] Google Directions returned no route, using fallback');
+        }
         return [start, end]; // Fallback to direct line
       }
 
-      const data = await response.json();
-
-      if (!data?.routes?.length) {
-        return [start, end];
-      }
-
-      return data.routes[0].geometry.coordinates.map(
-        ([lng, lat]: [number, number]) => ({
-          latitude: lat,
-          longitude: lng,
-        })
-      );
+      // Simplify route to max ~80 points to prevent Polyline crash on low-end devices
+      return simplifyRoute(routeInfo.coordinates);
     } catch (err) {
       // Don't log abort errors - they're expected during cleanup
       if (err instanceof Error && err.name === 'AbortError') {
@@ -185,6 +240,7 @@ export function useRouteTracking({
     if (!enabled || !serviceLocation) {
       setRouteCoords([]);
       hasCalledFirstRouteRef.current = false;
+      prevVendorLocationRef.current = null;
       return;
     }
 
@@ -192,6 +248,41 @@ export function useRouteTracking({
       setRouteCoords([]);
       return;
     }
+
+    // CRITICAL: Only process if vendor location changed significantly (>100m)
+    // This prevents crash on low-end devices from frequent small location updates
+    // EXCEPTION: Always fetch if we have no route yet (handles app restart scenario)
+    const isFirstLocation = prevVendorLocationRef.current === null;
+    const hasNoRoute = routeCoords.length === 0;
+
+    // Skip distance check if: first location OR no route exists yet
+    if (!isFirstLocation && !hasNoRoute) {
+      const distanceMoved = getDistanceInMeters(
+        prevVendorLocationRef.current!,
+        vendorLocation
+      );
+
+      if (distanceMoved < ROUTE_CONSTANTS.SIGNIFICANT_DISTANCE_M) {
+        if (__DEV__) {
+          console.log(
+            `[useRouteTracking] Skipping route fetch - vendor moved only ${distanceMoved.toFixed(0)}m (< ${ROUTE_CONSTANTS.SIGNIFICANT_DISTANCE_M}m)`
+          );
+        }
+        return; // Skip - location change not significant enough
+      }
+    }
+
+    // Log why we're fetching (helps debugging)
+    if (__DEV__) {
+      if (isFirstLocation) {
+        console.log('[useRouteTracking] Fetching route - first vendor location');
+      } else if (hasNoRoute) {
+        console.log('[useRouteTracking] Fetching route - no existing route (app restart?)');
+      }
+    }
+
+    // Update previous location reference
+    prevVendorLocationRef.current = vendorLocation;
 
     const now = Date.now();
     const timeSinceLastFetch = now - lastRouteFetchRef.current;
@@ -201,9 +292,14 @@ export function useRouteTracking({
       clearTimeout(routeFetchTimeoutRef.current);
     }
 
-    // If first fetch or enough time has passed, fetch immediately
+    // If first fetch or enough time has passed, fetch with InteractionManager defer
+    // This prevents main thread blocking during route processing
     if (lastRouteFetchRef.current === 0 || timeSinceLastFetch >= ROUTE_CONSTANTS.THROTTLE_MS) {
-      doFetchRoute();
+      InteractionManager.runAfterInteractions(() => {
+        if (isMountedRef.current) {
+          doFetchRoute();
+        }
+      });
     } else {
       // Schedule fetch after remaining throttle time
       const delay = ROUTE_CONSTANTS.THROTTLE_MS - timeSinceLastFetch;

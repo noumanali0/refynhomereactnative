@@ -42,6 +42,9 @@ const useImagePicker = () => {
             // await uploadTeamAvatar(teamId, uri);
             // showToast("Profile picture updated", "success");
             // Alert.alert("Success", "Profile picture updated successfully!");
+
+            // Return the URI so callers can use it directly
+            return uri;
         } catch (error: any) {
             // const apiError = error as ApiError
             console.error("Image picker error:", error?.message);

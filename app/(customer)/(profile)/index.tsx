@@ -9,6 +9,7 @@ import {
     ScrollView,
     Alert,
     ActivityIndicator,
+    TextInput,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -20,15 +21,35 @@ import { moderateScale } from "react-native-size-matters";
 import AppHeader from "@/components/common/AppHeader";
 import Text from "@/components/common/Text";
 import { useAppDispatch, useAppSelector } from "@/hooks/useAppDispatch";
-import { logoutUser, fetchUserProfile } from "@/store/slices/authSlice";
+import { logoutUser, fetchUserProfile, deleteAccount, changePassword, updateUserProfile } from "@/store/slices/authSlice";
 import { COLORS } from "@/constants/colors";
+import { useToast } from "@/contexts/ToastContext";
 
 export default function ProfileScreen() {
     const router = useRouter();
     const dispatch = useAppDispatch();
+    const { showToast } = useToast();
     const { imageUri, pickImage } = useImagePicker();
     const [deleteModal, setDeleteModal] = useState(false);
     const [isLoggingOut, setIsLoggingOut] = useState(false);
+    const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+
+    // Delete account state
+    const [deletePassword, setDeletePassword] = useState('');
+    const [isDeleting, setIsDeleting] = useState(false);
+    const [deleteError, setDeleteError] = useState<string | null>(null);
+    const [showDeletePassword, setShowDeletePassword] = useState(false);
+
+    // Change password state
+    const [showPasswordModal, setShowPasswordModal] = useState(false);
+    const [currentPassword, setCurrentPassword] = useState('');
+    const [newPassword, setNewPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
+    const [isChangingPassword, setIsChangingPassword] = useState(false);
+    const [passwordError, setPasswordError] = useState<string | null>(null);
+    const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+    const [showNewPassword, setShowNewPassword] = useState(false);
+    const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
     // Get user from Redux store
     const { user, isLoading } = useAppSelector((state) => state.auth);
@@ -56,12 +77,24 @@ export default function ProfileScreen() {
                     text: "Logout",
                     style: "destructive",
                     onPress: async () => {
+                        setIsLoggingOut(true);
+
+                        // Timeout to prevent infinite loading if logout hangs
+                        const logoutTimeout = setTimeout(() => {
+                            if (__DEV__) {
+                                console.warn('[Profile] Logout timeout - forcing navigation');
+                            }
+                            setIsLoggingOut(false);
+                            router.replace("/(auth)/login");
+                        }, 5000); // 5 second timeout
+
                         try {
-                            setIsLoggingOut(true);
                             await dispatch(logoutUser()).unwrap();
+                            clearTimeout(logoutTimeout);
                             // Navigation will be handled by _layout.tsx automatically
                             router.replace("/(auth)/login");
                         } catch (error: any) {
+                            clearTimeout(logoutTimeout);
                             Alert.alert("Logout Failed", error.message || "Failed to logout");
                         } finally {
                             setIsLoggingOut(false);
@@ -72,10 +105,105 @@ export default function ProfileScreen() {
         );
     };
 
-    const handleDeleteAccount = () => {
+    const handleDeleteAccount = async () => {
+        // Validate password
+        if (!deletePassword.trim()) {
+            setDeleteError('Please enter your password');
+            return;
+        }
+
+        setIsDeleting(true);
+        setDeleteError(null);
+
+        try {
+            await dispatch(deleteAccount(deletePassword)).unwrap();
+
+            // Success - close modal and navigate to login
+            setDeleteModal(false);
+            setDeletePassword('');
+            router.replace("/(auth)/login");
+        } catch (error: any) {
+            setDeleteError(error || 'Failed to delete account. Please try again.');
+        } finally {
+            setIsDeleting(false);
+        }
+    };
+
+    const handleCloseDeleteModal = () => {
         setDeleteModal(false);
-        // Add your delete account logic here
-        console.log("Account deleted");
+        setDeletePassword('');
+        setDeleteError(null);
+        setShowDeletePassword(false);
+    };
+
+    const handleChangePassword = async () => {
+        // Validate inputs
+        if (!currentPassword.trim() || !newPassword.trim() || !confirmPassword.trim()) {
+            setPasswordError('All fields are required');
+            return;
+        }
+        if (newPassword !== confirmPassword) {
+            setPasswordError('New passwords do not match');
+            return;
+        }
+        if (newPassword.length < 8) {
+            setPasswordError('New password must be at least 8 characters');
+            return;
+        }
+
+        setIsChangingPassword(true);
+        setPasswordError(null);
+
+        try {
+            await dispatch(changePassword({ currentPassword, newPassword })).unwrap();
+            // Success - close modal and show success alert
+            handleClosePasswordModal();
+            Alert.alert('Success', 'Password changed successfully');
+        } catch (error: any) {
+            setPasswordError(error || 'Failed to change password');
+        } finally {
+            setIsChangingPassword(false);
+        }
+    };
+
+    const handleClosePasswordModal = () => {
+        setShowPasswordModal(false);
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        setPasswordError(null);
+        setShowCurrentPassword(false);
+        setShowNewPassword(false);
+        setShowConfirmPassword(false);
+    };
+
+    // Handle profile photo update
+    const handleUpdateProfilePhoto = async () => {
+        const selectedImage = await pickImage();
+        console.log("🚀 ~ handleUpdateProfilePhoto ~ selectedImage:", selectedImage)
+
+        if (selectedImage) {
+            setIsUploadingPhoto(true);
+            try {
+                await dispatch(updateUserProfile({
+                    profile_photo: selectedImage,
+                })).unwrap();
+
+                showToast({
+                    type: 'success',
+                    title: 'Photo Updated',
+                    message: 'Your profile photo has been updated successfully',
+                });
+            } catch (error: any) {
+                showToast({
+                    type: 'error',
+                    title: 'Update Failed',
+                    message: error || 'Failed to update profile photo',
+                });
+            } finally {
+                setIsUploadingPhoto(false);
+            }
+        }
     };
 
     return (
@@ -91,10 +219,18 @@ export default function ProfileScreen() {
                     style={styles.headerGradient}
                 >
                     {/* Avatar Section */}
-                    <TouchableOpacity onPress={pickImage} style={styles.avatarWrapper}>
+                    <TouchableOpacity
+                        onPress={handleUpdateProfilePhoto}
+                        style={styles.avatarWrapper}
+                        disabled={isUploadingPhoto}
+                    >
                         <GradientBorder radius={60} style={styles.avatarBorder}>
                             <View style={styles.avatarInner}>
-                                {userProfilePhoto ? (
+                                {isUploadingPhoto ? (
+                                    <View style={styles.placeholderAvatar}>
+                                        <ActivityIndicator size="large" color="#fff" />
+                                    </View>
+                                ) : userProfilePhoto ? (
                                     <Image source={{ uri: userProfilePhoto }} style={styles.avatar} />
                                 ) : (
                                     <View style={styles.placeholderAvatar}>
@@ -108,7 +244,11 @@ export default function ProfileScreen() {
                             colors={["#f59e0b", "#d97706"]}
                             style={styles.editIcon}
                         >
-                            <Ionicons name="pencil" size={16} color="#fff" />
+                            {isUploadingPhoto ? (
+                                <ActivityIndicator size={12} color="#fff" />
+                            ) : (
+                                <Ionicons name="camera" size={16} color="#fff" />
+                            )}
                         </LinearGradient>
                     </TouchableOpacity>
 
@@ -136,19 +276,26 @@ export default function ProfileScreen() {
                         gradient
                     />
 
-                    <ProfileOption
+                    {/* <ProfileOption
                         label="Manage Address"
                         icon={<Ionicons name="location-outline" size={22} color="#8b5cf6" />}
                         onPress={() => router.push("/(customer)/(profile)/manage-address")}
                         gradient
-                    />
+                    /> */}
 
                     {/* <ProfileOption
                         label="Change Password"
                         icon={<Ionicons name="lock-closed-outline" size={22} color="#ec4899" />}
-                        onPress={() => router.push("/(customer)/(profile)/change-password")}
+                        onPress={() => setShowPasswordModal(true)}
                         gradient
                     /> */}
+
+                    <ProfileOption
+                        label="Settings"
+                        icon={<Ionicons name="settings-outline" size={22} color="#10b981" />}
+                        onPress={() => router.push("/(customer)/(profile)/settings")}
+                        gradient
+                    />
                 </View>
 
                 {/* Account Section */}
@@ -181,22 +328,201 @@ export default function ProfileScreen() {
 
                         <Text type="title" style={styles.modalTitle}>Delete Account?</Text>
                         <Text type="body2" style={styles.modalText}>
-                            This action is permanent and cannot be undone. All your data will be lost.
+                            This action is permanent and cannot be undone. All your data including service history and favorites will be permanently deleted.
                         </Text>
+
+                        {/* Password Input */}
+                        <View style={styles.passwordInputContainer}>
+                            <Text type="body2" style={styles.passwordLabel}>
+                                Enter your password to confirm:
+                            </Text>
+                            <View style={styles.passwordInputWrapper}>
+                                <TextInput
+                                    style={styles.passwordInput}
+                                    value={deletePassword}
+                                    onChangeText={(text) => {
+                                        setDeletePassword(text);
+                                        setDeleteError(null);
+                                    }}
+                                    placeholder="Enter your password"
+                                    placeholderTextColor="#9ca3af"
+                                    secureTextEntry={!showDeletePassword}
+                                    editable={!isDeleting}
+                                    autoCapitalize="none"
+                                />
+                                <TouchableOpacity
+                                    onPress={() => setShowDeletePassword(!showDeletePassword)}
+                                    style={styles.eyeButton}
+                                >
+                                    <Ionicons
+                                        name={showDeletePassword ? "eye-off" : "eye"}
+                                        size={20}
+                                        color="#6b7280"
+                                    />
+                                </TouchableOpacity>
+                            </View>
+                            {deleteError && (
+                                <Text type="caption" style={styles.errorText}>{deleteError}</Text>
+                            )}
+                        </View>
 
                         <View style={styles.modalBtns}>
                             <TouchableOpacity
                                 style={styles.cancelBtn}
-                                onPress={() => setDeleteModal(false)}
+                                onPress={handleCloseDeleteModal}
+                                disabled={isDeleting}
                             >
                                 <Text type="body2" style={styles.cancelText}>Cancel</Text>
                             </TouchableOpacity>
 
                             <TouchableOpacity
-                                style={styles.deleteBtn}
+                                style={[
+                                    styles.deleteBtn,
+                                    (isDeleting || !deletePassword.trim()) && styles.deleteBtnDisabled
+                                ]}
                                 onPress={handleDeleteAccount}
+                                disabled={isDeleting || !deletePassword.trim()}
                             >
-                                <Text type="body2" style={styles.deleteText}>Delete</Text>
+                                {isDeleting ? (
+                                    <ActivityIndicator size="small" color="#fff" />
+                                ) : (
+                                    <Text type="body2" style={styles.deleteText}>Delete</Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Change Password Modal */}
+            <Modal visible={showPasswordModal} transparent animationType="fade">
+                <View style={styles.modalWrapper}>
+                    <View style={styles.modalBox}>
+                        <View style={[styles.modalIconContainer, { backgroundColor: '#ede9fe' }]}>
+                            <Ionicons name="lock-closed" size={40} color="#8b5cf6" />
+                        </View>
+
+                        <Text type="title" style={styles.modalTitle}>Change Password</Text>
+                        <Text type="body2" style={styles.modalText}>
+                            Enter your current password and choose a new password.
+                        </Text>
+
+                        {/* Current Password */}
+                        <View style={styles.passwordInputContainer}>
+                            <Text type="body2" style={styles.passwordLabel}>Current Password</Text>
+                            <View style={styles.passwordInputWrapper}>
+                                <TextInput
+                                    style={styles.passwordInput}
+                                    value={currentPassword}
+                                    onChangeText={(text) => {
+                                        setCurrentPassword(text);
+                                        setPasswordError(null);
+                                    }}
+                                    placeholder="Enter current password"
+                                    placeholderTextColor="#9ca3af"
+                                    secureTextEntry={!showCurrentPassword}
+                                    editable={!isChangingPassword}
+                                    autoCapitalize="none"
+                                />
+                                <TouchableOpacity
+                                    onPress={() => setShowCurrentPassword(!showCurrentPassword)}
+                                    style={styles.eyeButton}
+                                >
+                                    <Ionicons
+                                        name={showCurrentPassword ? "eye-off" : "eye"}
+                                        size={20}
+                                        color="#6b7280"
+                                    />
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+
+                        {/* New Password */}
+                        <View style={styles.passwordInputContainer}>
+                            <Text type="body2" style={styles.passwordLabel}>New Password</Text>
+                            <View style={styles.passwordInputWrapper}>
+                                <TextInput
+                                    style={styles.passwordInput}
+                                    value={newPassword}
+                                    onChangeText={(text) => {
+                                        setNewPassword(text);
+                                        setPasswordError(null);
+                                    }}
+                                    placeholder="Enter new password (min 8 chars)"
+                                    placeholderTextColor="#9ca3af"
+                                    secureTextEntry={!showNewPassword}
+                                    editable={!isChangingPassword}
+                                    autoCapitalize="none"
+                                />
+                                <TouchableOpacity
+                                    onPress={() => setShowNewPassword(!showNewPassword)}
+                                    style={styles.eyeButton}
+                                >
+                                    <Ionicons
+                                        name={showNewPassword ? "eye-off" : "eye"}
+                                        size={20}
+                                        color="#6b7280"
+                                    />
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+
+                        {/* Confirm Password */}
+                        <View style={styles.passwordInputContainer}>
+                            <Text type="body2" style={styles.passwordLabel}>Confirm New Password</Text>
+                            <View style={styles.passwordInputWrapper}>
+                                <TextInput
+                                    style={styles.passwordInput}
+                                    value={confirmPassword}
+                                    onChangeText={(text) => {
+                                        setConfirmPassword(text);
+                                        setPasswordError(null);
+                                    }}
+                                    placeholder="Confirm new password"
+                                    placeholderTextColor="#9ca3af"
+                                    secureTextEntry={!showConfirmPassword}
+                                    editable={!isChangingPassword}
+                                    autoCapitalize="none"
+                                />
+                                <TouchableOpacity
+                                    onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+                                    style={styles.eyeButton}
+                                >
+                                    <Ionicons
+                                        name={showConfirmPassword ? "eye-off" : "eye"}
+                                        size={20}
+                                        color="#6b7280"
+                                    />
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+
+                        {passwordError && (
+                            <Text type="caption" style={styles.errorText}>{passwordError}</Text>
+                        )}
+
+                        <View style={styles.modalBtns}>
+                            <TouchableOpacity
+                                style={styles.cancelBtn}
+                                onPress={handleClosePasswordModal}
+                                disabled={isChangingPassword}
+                            >
+                                <Text type="body2" style={styles.cancelText}>Cancel</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[
+                                    styles.changePasswordBtn,
+                                    (isChangingPassword || !currentPassword.trim() || !newPassword.trim() || !confirmPassword.trim()) && styles.changePasswordBtnDisabled
+                                ]}
+                                onPress={handleChangePassword}
+                                disabled={isChangingPassword || !currentPassword.trim() || !newPassword.trim() || !confirmPassword.trim()}
+                            >
+                                {isChangingPassword ? (
+                                    <ActivityIndicator size="small" color="#fff" />
+                                ) : (
+                                    <Text type="body2" style={styles.changePasswordText}>Change</Text>
+                                )}
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -359,6 +685,58 @@ const styles = StyleSheet.create({
         fontSize: 16,
         // fontWeight: "600",
         color: "#fff",
+    },
+    deleteBtnDisabled: {
+        backgroundColor: "#fca5a5",
+    },
+
+    // Password input styles
+    passwordInputContainer: {
+        width: "100%",
+        marginTop: moderateScale(20),
+    },
+    passwordLabel: {
+        color: "#374151",
+        marginBottom: moderateScale(8),
+    },
+    passwordInputWrapper: {
+        flexDirection: "row",
+        alignItems: "center",
+        backgroundColor: "#f9fafb",
+        borderRadius: moderateScale(12),
+        borderWidth: 1,
+        borderColor: "#e5e7eb",
+    },
+    passwordInput: {
+        flex: 1,
+        paddingVertical: moderateScale(14),
+        paddingHorizontal: moderateScale(16),
+        fontSize: 16,
+        color: "#1f2937",
+    },
+    eyeButton: {
+        padding: moderateScale(14),
+    },
+    errorText: {
+        color: "#ef4444",
+        marginTop: moderateScale(6),
+    },
+
+    // Change Password Button Styles
+    changePasswordBtn: {
+        flex: 1,
+        paddingVertical: moderateScale(14),
+        paddingHorizontal: moderateScale(20),
+        borderRadius: moderateScale(12),
+        backgroundColor: "#8b5cf6",
+        alignItems: "center",
+    },
+    changePasswordText: {
+        fontSize: 16,
+        color: "#fff",
+    },
+    changePasswordBtnDisabled: {
+        backgroundColor: "#c4b5fd",
     },
 });
 // import React from "react";

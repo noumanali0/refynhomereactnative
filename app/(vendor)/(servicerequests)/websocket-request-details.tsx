@@ -18,9 +18,10 @@ import {
     AppState,
     AppStateStatus,
     InteractionManager,
+    Platform,
 } from 'react-native';
 import Text from '@/components/common/Text';
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_DEFAULT, UrlTile } from 'react-native-maps';
 import * as Location from 'expo-location';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useSelector, useDispatch } from 'react-redux';
@@ -47,6 +48,7 @@ import {
     flushLocationQueue,
 } from '@/services/backgroundLocationService';
 import { getDistance } from '@/utils/distanceCache';
+import { simplifyRoute } from '@/utils/polylineSimplify';
 // Google Routes API service - ready for integration when client enables the API
 // import { googleDirectionsService, type RouteInfo } from '@/services/googleDirectionsService';
 
@@ -54,6 +56,40 @@ interface RouteInfo {
     distance: number;
     duration: number;
     coordinates: Coordinates[];
+}
+
+// ============================================================================
+// Constants for Route Optimization
+// ============================================================================
+
+const ROUTE_CONSTANTS = {
+    /** Minimum time between route API calls in milliseconds */
+    THROTTLE_MS: 15000, // 15 seconds (optimized for low-end devices)
+    /** Minimum distance change in meters to trigger route refetch */
+    SIGNIFICANT_DISTANCE_M: 100,
+} as const;
+
+/**
+ * Calculate distance between two coordinates using Haversine formula.
+ * Returns distance in meters.
+ */
+function getDistanceInMeters(
+    coord1: Coordinates,
+    coord2: Coordinates
+): number {
+    const R = 6371000; // Earth radius in meters
+    const dLat = (coord2.latitude - coord1.latitude) * Math.PI / 180;
+    const dLon = (coord2.longitude - coord1.longitude) * Math.PI / 180;
+    const lat1Rad = coord1.latitude * Math.PI / 180;
+    const lat2Rad = coord2.latitude * Math.PI / 180;
+
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1Rad) * Math.cos(lat2Rad) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    return R * c;
 }
 
 export default function WebSocketRequestDetailsScreen() {
@@ -123,6 +159,8 @@ export default function WebSocketRequestDetailsScreen() {
     const isMountedRef = useRef<boolean>(true);
     const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const progressAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
+    // Track previous vendor location for significant distance check
+    const prevVendorLocationForRouteRef = useRef<Coordinates | null>(null);
 
     // Customer location from request
     const customerLocation = useMemo(() => {
@@ -419,7 +457,13 @@ export default function WebSocketRequestDetailsScreen() {
             }
 
             // Try background tracking first (persists when app is backgrounded/killed)
-            const backgroundStarted = await startBackgroundLocationTracking(requestId);
+            let backgroundStarted = false;
+            try {
+                backgroundStarted = await startBackgroundLocationTracking(requestId);
+            } catch (bgError) {
+                console.error('[VendorDetails] Background tracking failed to start:', bgError);
+                // Continue with foreground-only tracking
+            }
 
             if (backgroundStarted) {
                 isBackgroundTrackingActiveRef.current = true;
@@ -429,11 +473,12 @@ export default function WebSocketRequestDetailsScreen() {
 
                 // Also start foreground watcher for UI updates (local state)
                 // Background task handles socket updates, this is just for map UI
+                // Using Balanced accuracy and longer intervals to prevent crashes on low-end devices
                 locationWatchRef.current = await Location.watchPositionAsync(
                     {
-                        accuracy: Location.Accuracy.High,
-                        timeInterval: 5000,
-                        distanceInterval: 10,
+                        accuracy: Location.Accuracy.Balanced, // Balanced saves battery
+                        timeInterval: 10000, // 10 seconds (was 5s - too frequent)
+                        distanceInterval: 20, // 20 meters (was 10m)
                     },
                     (location) => {
                         const newCoords = {
@@ -459,9 +504,9 @@ export default function WebSocketRequestDetailsScreen() {
 
                 locationWatchRef.current = await Location.watchPositionAsync(
                     {
-                        accuracy: Location.Accuracy.High,
-                        timeInterval: 5000,
-                        distanceInterval: 10,
+                        accuracy: Location.Accuracy.Balanced, // Balanced saves battery
+                        timeInterval: 10000, // 10 seconds (was 5s)
+                        distanceInterval: 20, // 20 meters (was 10m)
                     },
                     (location) => {
                         const newCoords = {
@@ -503,14 +548,35 @@ export default function WebSocketRequestDetailsScreen() {
         }
     };
 
-    // Fetch route with throttling (minimum 10 seconds between fetches)
+    // Fetch route with throttling and significant distance check
     // Currently using OSRM - Switch to Google Routes API when client enables it:
     // 1. Uncomment the googleDirectionsService import at the top
     // 2. Replace the OSRM fetch below with: const route = await googleDirectionsService.getRoute(vendorLocation, customerLocation);
     useEffect(() => {
         if (!vendorLocation || !customerLocation || !isMountedRef.current) return;
 
-        const THROTTLE_MS = 10000; // 10 seconds minimum between route fetches
+        // CRITICAL: Only process if vendor location changed significantly (>100m)
+        // This prevents crash on low-end devices from frequent small location updates
+        const isFirstLocation = prevVendorLocationForRouteRef.current === null;
+        if (!isFirstLocation) {
+            const distanceMoved = getDistanceInMeters(
+                prevVendorLocationForRouteRef.current!,
+                vendorLocation
+            );
+
+            if (distanceMoved < ROUTE_CONSTANTS.SIGNIFICANT_DISTANCE_M) {
+                if (__DEV__) {
+                    console.log(
+                        `[VendorDetails] Skipping route fetch - moved only ${distanceMoved.toFixed(0)}m (< ${ROUTE_CONSTANTS.SIGNIFICANT_DISTANCE_M}m)`
+                    );
+                }
+                return; // Skip - location change not significant enough
+            }
+        }
+
+        // Update previous location reference
+        prevVendorLocationForRouteRef.current = vendorLocation;
+
         const now = Date.now();
         const timeSinceLastFetch = now - lastRouteFetchRef.current;
 
@@ -543,18 +609,23 @@ export default function WebSocketRequestDetailsScreen() {
 
                 if (data.routes && data.routes[0] && isMountedRef.current) {
                     const route = data.routes[0];
-                    const coords = route.geometry.coordinates.map(
+                    const rawCoords = route.geometry.coordinates.map(
                         ([lng, lat]: [number, number]) => ({
                             latitude: lat,
                             longitude: lng,
                         })
                     );
 
+                    // CRITICAL: Simplify route to max ~80 points to prevent Polyline crash
+                    // OSRM can return 2000+ points which crashes low-end devices
+                    const coords = simplifyRoute(rawCoords);
+
                     if (__DEV__) {
                         console.log('[VendorDetails] Route updated (OSRM):', {
                             distance: route.distance,
                             duration: route.duration,
-                            coordsCount: coords.length,
+                            rawCoordsCount: rawCoords.length,
+                            simplifiedCoordsCount: coords.length,
                         });
                     }
 
@@ -571,12 +642,17 @@ export default function WebSocketRequestDetailsScreen() {
             }
         };
 
-        // If first fetch or enough time has passed, fetch immediately
-        if (lastRouteFetchRef.current === 0 || timeSinceLastFetch >= THROTTLE_MS) {
-            fetchRoute();
+        // If first fetch or enough time has passed, fetch with InteractionManager defer
+        // This prevents main thread blocking during route processing
+        if (lastRouteFetchRef.current === 0 || timeSinceLastFetch >= ROUTE_CONSTANTS.THROTTLE_MS) {
+            InteractionManager.runAfterInteractions(() => {
+                if (isMountedRef.current) {
+                    fetchRoute();
+                }
+            });
         } else {
             // Schedule fetch after remaining throttle time
-            const delay = THROTTLE_MS - timeSinceLastFetch;
+            const delay = ROUTE_CONSTANTS.THROTTLE_MS - timeSinceLastFetch;
             routeFetchTimeoutRef.current = setTimeout(fetchRoute, delay);
         }
 
@@ -729,6 +805,15 @@ export default function WebSocketRequestDetailsScreen() {
                 showsMyLocationButton
                 loadingEnabled
             >
+                {/* OpenStreetMap tiles - COMMENTED OUT for Google Maps dev build */}
+                {/* Uncomment below for Expo Go testing (no native Google Maps) */}
+                {/* {(Platform.OS === "web" || (Platform.OS === "android" && __DEV__)) && (
+                    <UrlTile
+                        urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        maximumZ={19}
+                        shouldReplaceMapContent={true}
+                    />
+                )} */}
                 <Marker coordinate={vendorLocation} title="Your Location" pinColor={COLORS.primary}>
                     <View style={styles.vendorMarker}>
                         <Ionicons name="car" size={24} color={COLORS.white} />

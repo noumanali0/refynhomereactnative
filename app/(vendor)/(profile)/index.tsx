@@ -31,7 +31,9 @@ import { DashboardStatTile } from '@/components/vendor/DashboardStatTile';
 import { ProfileOption } from '@/components/common/ProfileOption';
 import { COLORS } from '@/constants/colors';
 import { useAppDispatch } from '@/hooks/useAppDispatch';
-import { logoutUser, fetchUserProfile } from '@/store/slices/authSlice';
+import { logoutUser, fetchUserProfile, updateUserProfile } from '@/store/slices/authSlice';
+import useImagePicker from '@/hooks/useImagePicker';
+import { useToast } from '@/contexts/ToastContext';
 
 // ============================================================================
 // Component
@@ -40,7 +42,10 @@ import { logoutUser, fetchUserProfile } from '@/store/slices/authSlice';
 export default function VendorProfileScreen() {
     const router = useRouter();
     const dispatch = useAppDispatch();
+    const { showToast } = useToast();
+    const { pickImage } = useImagePicker();
     const [isLoggingOut, setIsLoggingOut] = useState(false);
+    const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
 
     // Get current user from auth state
     const { user, isLoading } = useSelector((state: RootState) => state.auth);
@@ -139,6 +144,37 @@ export default function VendorProfileScreen() {
         // Alert.alert('Edit Profile', 'Profile editing coming soon!');
     };
 
+    // Handle profile photo update
+    const handleUpdateProfilePhoto = async () => {
+        const selectedImage = await pickImage();
+
+        if (selectedImage) {
+            setIsUploadingPhoto(true);
+            try {
+                await dispatch(updateUserProfile({
+                    profile_photo: selectedImage,
+                })).unwrap();
+
+                // Refetch profile to ensure UI has latest data
+                await dispatch(fetchUserProfile());
+
+                showToast({
+                    type: 'success',
+                    title: 'Photo Updated',
+                    message: 'Your profile photo has been updated successfully',
+                });
+            } catch (error: any) {
+                showToast({
+                    type: 'error',
+                    title: 'Update Failed',
+                    message: error || 'Failed to update profile photo',
+                });
+            } finally {
+                setIsUploadingPhoto(false);
+            }
+        }
+    };
+
     const handleSubscription = () => {
         router.push('/(vendor)/(subscriptions)');
     };
@@ -158,12 +194,24 @@ export default function VendorProfileScreen() {
                     text: 'Logout',
                     style: 'destructive',
                     onPress: async () => {
+                        setIsLoggingOut(true);
+
+                        // Timeout to prevent infinite loading if logout hangs
+                        const logoutTimeout = setTimeout(() => {
+                            if (__DEV__) {
+                                console.warn('[VendorProfile] Logout timeout - forcing navigation');
+                            }
+                            setIsLoggingOut(false);
+                            router.replace('/(auth)/login');
+                        }, 5000); // 5 second timeout
+
                         try {
-                            setIsLoggingOut(true);
                             await dispatch(logoutUser()).unwrap();
+                            clearTimeout(logoutTimeout);
                             // Navigation will be handled by _layout.tsx automatically
                             router.replace('/(auth)/login');
                         } catch (error: any) {
+                            clearTimeout(logoutTimeout);
                             Alert.alert('Logout Failed', error.message || 'Failed to logout');
                         } finally {
                             setIsLoggingOut(false);
@@ -190,8 +238,17 @@ export default function VendorProfileScreen() {
             {/* Profile Card */}
             <View style={styles.profileCard}>
                 {/* Profile Photo Section */}
-                <View style={styles.profilePhotoSection}>
-                    {vendorProfile.profilePhoto ? (
+                <TouchableOpacity
+                    style={styles.profilePhotoSection}
+                    onPress={handleUpdateProfilePhoto}
+                    disabled={isUploadingPhoto}
+                    activeOpacity={0.8}
+                >
+                    {isUploadingPhoto ? (
+                        <View style={styles.profilePhotoPlaceholder}>
+                            <ActivityIndicator size="large" color={COLORS.white} />
+                        </View>
+                    ) : vendorProfile.profilePhoto ? (
                         <Image
                             source={{ uri: vendorProfile.profilePhoto }}
                             style={styles.profilePhoto}
@@ -205,19 +262,19 @@ export default function VendorProfileScreen() {
                     )}
 
                     {/* Edit Button Overlay */}
-                    <TouchableOpacity
-                        style={styles.editPhotoButton}
-                        onPress={handleEditProfile}
-                        activeOpacity={0.8}
-                    >
-                        <Ionicons name="camera" size={16} color={COLORS.white} />
-                    </TouchableOpacity>
+                    <View style={styles.editPhotoButton}>
+                        {isUploadingPhoto ? (
+                            <ActivityIndicator size={12} color={COLORS.white} />
+                        ) : (
+                            <Ionicons name="camera" size={16} color={COLORS.white} />
+                        )}
+                    </View>
 
                     {/* Online Status Indicator */}
-                    {vendorProfile.isOnline && (
+                    {vendorProfile.isOnline && !isUploadingPhoto && (
                         <View style={styles.onlineIndicator} />
                     )}
-                </View>
+                </TouchableOpacity>
 
                 {/* Vendor Info */}
                 <View style={styles.vendorInfo}>

@@ -74,9 +74,9 @@ export default function AppHeader({ isStackScreen = false }: Props) {
                         // onPress={() => router.push("/(tabs)/profile")}
                         >
                             {
-                                user?.photoUrl ? (<>
+                                user?.profilePhoto ? (<>
                                     <Image
-                                        source={{ uri: user?.photoUrl }}
+                                        source={{ uri: user?.profilePhoto }}
                                         // source={require("@/assets/images/players/avatar.png")}
                                         style={styles.avatar}
                                     />

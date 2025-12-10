@@ -252,7 +252,6 @@ export function useSocket(options: UseSocketOptions = {}): UseSocketReturn {
  */
 export function useVendorSocket() {
   const socket = useSocket();
-  const dispatch = useDispatch<AppDispatch>();
 
   // Get vendor-specific state
   const serviceRequests = useSelector((state: RootState) =>
@@ -264,18 +263,14 @@ export function useVendorSocket() {
     return state.dispatch.serviceRequestsById[state.dispatch.activeJobId];
   });
 
-  const pendingProposal = useCallback(
-    (requestId: number) => {
-      return useSelector((state: RootState) => state.dispatch.pendingActions[`proposal_${requestId}`]);
-    },
-    []
-  );
+  // Get all pending actions so components can check specific requests
+  const pendingActions = useSelector((state: RootState) => state.dispatch.pendingActions);
 
   return {
     ...socket,
     serviceRequests,
     activeJob,
-    pendingProposal,
+    pendingActions,
   };
 }
 
@@ -284,22 +279,15 @@ export function useVendorSocket() {
  */
 export function useCustomerSocket() {
   const socket = useSocket();
-  const dispatch = useDispatch<AppDispatch>();
 
   // Get customer-specific state
   const customerRequests = useSelector((state: RootState) =>
     state.dispatch.customerRequestIds.map((id) => state.dispatch.customerRequestsById[id])
   );
 
-  const getProposalsForRequest = useCallback(
-    (requestId: number) => {
-      return useSelector((state: RootState) => {
-        const proposalIds = state.dispatch.proposalIdsByRequest[requestId] || [];
-        return proposalIds.map((id) => state.dispatch.proposalsById[id]).filter(Boolean);
-      });
-    },
-    []
-  );
+  // Get proposals indexed by request ID so components can access them
+  const proposalIdsByRequest = useSelector((state: RootState) => state.dispatch.proposalIdsByRequest);
+  const proposalsById = useSelector((state: RootState) => state.dispatch.proposalsById);
 
   const activeProposal = useSelector((state: RootState) => {
     if (!state.dispatch.activeProposalId) return null;
@@ -311,7 +299,8 @@ export function useCustomerSocket() {
   return {
     ...socket,
     customerRequests,
-    getProposalsForRequest,
+    proposalIdsByRequest,
+    proposalsById,
     activeProposal,
     vendorLocation,
   };

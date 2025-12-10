@@ -36,7 +36,7 @@ export interface VendorHistoryJob {
   address_line: string;
   latitude: number;
   longitude: number;
-  status: 'completed' | 'cancelled' | 'expired';
+  status: 'completed' | 'cancelled' | 'expired' | 'done';
   price_quote: number | null;
   created_at: string;
   updated_at: string;
@@ -62,6 +62,39 @@ export interface VendorHistoryFilters {
 }
 
 // ============================================================================
+// HELPERS
+// ============================================================================
+
+/**
+ * Normalize status value from API
+ * Maps various backend status values to expected frontend values
+ */
+function normalizeStatus(status: string | undefined | null): VendorHistoryJob['status'] {
+  if (!status) return 'completed'; // Default fallback
+
+  const normalized = status.toLowerCase().trim();
+
+  // Map 'done' to 'completed' for display consistency
+  if (normalized === 'done' || normalized === 'complete' || normalized === 'finished') {
+    return 'completed';
+  }
+  if (normalized === 'cancelled' || normalized === 'canceled') {
+    return 'cancelled';
+  }
+  if (normalized === 'expired') {
+    return 'expired';
+  }
+
+  // If status matches expected values, return as is
+  if (['completed', 'cancelled', 'expired', 'done'].includes(normalized)) {
+    return normalized as VendorHistoryJob['status'];
+  }
+
+  // Default to completed for history items
+  return 'completed';
+}
+
+// ============================================================================
 // API FUNCTIONS
 // ============================================================================
 
@@ -81,8 +114,12 @@ export async function getVendorHistory(
 
     const response = await apiClient.get<VendorHistoryResponse>(url);
 
-    // Filter by status client-side if needed (server returns all history)
-    let results = response.data.results || [];
+    // Normalize status values from API and filter
+    let results = (response.data.results || []).map(job => ({
+      ...job,
+      status: normalizeStatus(job.status),
+    }));
+
     if (filters?.status && filters.status !== 'all') {
       results = results.filter(job => job.status === filters.status);
     }

@@ -13,8 +13,9 @@ import { StyleSheet } from 'react-native';
 import { useFonts } from "expo-font";
 import { FONTS } from '@/constants/fonts';
 import * as SplashScreen from "expo-splash-screen";
-import { restoreSession } from '@/store/slices/authSlice';
+import { restoreSession, logoutUser } from '@/store/slices/authSlice';
 import { ToastProvider } from '@/contexts/ToastContext';
+import { initializeApiClient } from '@/api/client';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { connectSocket, disconnectSocket, resetDispatchState, restoreActiveJob } from '@/store/slices/dispatchSlice';
 import { defineBackgroundLocationTask } from '@/services/backgroundLocationService';
@@ -37,6 +38,13 @@ function RootLayoutNav() {
   const activeJobId = useAppSelector((s) => s.dispatch.activeJobId);
   const [isInitialized, setIsInitialized] = useState(false);
 
+  // Debug: Track activeJobId changes
+  useEffect(() => {
+    if (__DEV__) {
+      console.log('[_layout] activeJobId changed:', activeJobId);
+    }
+  }, [activeJobId]);
+
   const role = user?.role;
   const userId = user?.id;
   const isVendor = role === 'vendor';
@@ -46,13 +54,40 @@ function RootLayoutNav() {
 
   // Restore session on mount
   useEffect(() => {
+    // Initialize API client with logout callback ONCE at startup
+    // This sets up token refresh interceptors that will trigger logout on refresh failure
+    const logoutCallback = () => {
+      if (__DEV__) {
+        console.log('[_layout] API client triggered logout (token refresh failed)');
+      }
+      dispatch(logoutUser());
+      router.replace('/(auth)/login');
+    };
+    initializeApiClient(logoutCallback);
+
     const initializeAuth = async () => {
       try {
         const session = await dispatch(restoreSession()).unwrap();
+        // console.log("🚀 ~ initializeAuth ~ session:", session)
+        if (__DEV__) {
+          console.log('[_layout] Session restored:', session?.user?.role);
+        }
 
         // If vendor, restore any active job from storage
-        if (session?.role === 'vendor') {
-          await dispatch(restoreActiveJob()).unwrap();
+        if (session?.user?.role === 'vendor') {
+          // Debug: Check SecureStore directly
+          if (__DEV__) {
+            const SecureStore = require('expo-secure-store');
+            const jobId = await SecureStore.getItemAsync('vendor_active_job_id');
+            const proposalId = await SecureStore.getItemAsync('vendor_active_proposal_id');
+            const status = await SecureStore.getItemAsync('vendor_proposal_status');
+            console.log('[_layout] SecureStore raw values:', { jobId, proposalId, status });
+          }
+
+          const restoredJob = await dispatch(restoreActiveJob()).unwrap();
+          if (__DEV__) {
+            console.log('[_layout] Restored active job:', restoredJob);
+          }
         }
       } catch (error) {
         // No session to restore, user needs to login
@@ -69,6 +104,16 @@ function RootLayoutNav() {
   useEffect(() => {
     // Wait for initialization and loading to complete
     if (!isInitialized || isLoading) return;
+
+    if (__DEV__) {
+      console.log('[_layout] Navigation effect running:', {
+        isAuthenticated,
+        role,
+        activeJobId,
+        vendorVerified,
+        segments: segments.join('/'),
+      });
+    }
 
     const inAuth = segments[0] === "(auth)";
     const inCustomer = segments[0] === "(customer)";
@@ -144,6 +189,9 @@ function RootLayoutNav() {
           // Vendor trying to access customer module
           router.replace("/(vendor)/(servicerequests)");
         }
+        // NOTE: Removed forced redirect to active job when vendor is in vendor section
+        // This was causing tabs to not switch - vendor should be able to navigate freely
+        // The initial redirect on app startup is handled above in the !inAuth && !inCustomer... block
       }
     }, 100);
 

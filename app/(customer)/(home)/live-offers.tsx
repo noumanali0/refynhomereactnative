@@ -18,6 +18,7 @@ import {
     Linking,
     AppState,
     AppStateStatus,
+    InteractionManager,
 } from "react-native";
 import MapView, {
     Marker,
@@ -61,7 +62,9 @@ import {
     updateCustomerActiveServiceAcceptance,
     clearCustomerActiveService,
     getCancelDisableRemaining,
+    markCustomerActiveServiceExpired,
     CANCEL_DISABLE_DURATION_MS,
+    type ActiveServiceStatus,
 } from "@/services/customerActiveServiceService";
 
 // ============================================================================
@@ -142,10 +145,12 @@ const ProposalCard = React.memo(({
         return () => clearInterval(interval);
     }, [proposal.remaining_expiry_time, proposal.status]);
 
-    // Pulse animation
+    // Pulse animation - with proper cleanup to prevent memory leak on unmount
     useEffect(() => {
+        let animationRef: Animated.CompositeAnimation | null = null;
+
         if (isUrgent) {
-            Animated.loop(
+            animationRef = Animated.loop(
                 Animated.sequence([
                     Animated.timing(pulseAnim, {
                         toValue: 1.02,
@@ -158,10 +163,19 @@ const ProposalCard = React.memo(({
                         useNativeDriver: true,
                     }),
                 ])
-            ).start();
+            );
+            animationRef.start();
         } else {
             pulseAnim.setValue(1);
         }
+
+        // CRITICAL: Stop animation on cleanup to prevent CPU spike on low-end devices
+        return () => {
+            if (animationRef) {
+                animationRef.stop();
+            }
+            pulseAnim.setValue(1);
+        };
     }, [isUrgent, pulseAnim]);
 
     // Progress animation
@@ -413,6 +427,14 @@ export default function LiveOffersScreen() {
         latitude?: string;
         longitude?: string;
         address?: string;
+        categoryId?: string;
+        problemTitle?: string;
+        description?: string;
+        // Restoration params from persisted storage
+        expiresAt?: string;          // ISO timestamp for timer restoration
+        restoredStatus?: string;     // 'pending' | 'accepted' | 'expired'
+        proposalId?: string;         // Accepted proposal ID (if any)
+        acceptedAtTimestamp?: string; // When proposal was accepted (for cancel window)
     }>();
     const dispatch = useDispatch<AppDispatch>();
     const mapRef = useRef<MapView | null>(null);
@@ -423,7 +445,6 @@ export default function LiveOffersScreen() {
     const isConnected = useSelector(selectIsConnected);
     const customerRequests = useSelector(selectCustomerRequests);
     const vendorLocation = useSelector(selectVendorLocation);
-    console.log("🚀 ~ LiveOffersScreen ~ vendorLocation:", vendorLocation)
     const completedService = useSelector(selectCompletedService);
 
     // Get current request and its proposals
@@ -460,6 +481,22 @@ export default function LiveOffersScreen() {
     const [requestExpired, setRequestExpired] = useState<boolean>(false);
     const [isRetrying, setIsRetrying] = useState<boolean>(false);
 
+    // =========================================================================
+    // STAGED INITIALIZATION - Prevents crash on first mount
+    // Operations are serialized instead of running in parallel
+    // =========================================================================
+    type InitStage = 'loading' | 'connecting' | 'syncing' | 'ready';
+    const [initStage, setInitStage] = useState<InitStage>('loading');
+
+    // Ref to track init stage for socket event filtering
+    // Using ref because we need current value in event handlers without re-subscribing
+    const initStageRef = useRef<InitStage>('loading');
+
+    // Keep ref in sync with state
+    useEffect(() => {
+        initStageRef.current = initStage;
+    }, [initStage]);
+
     // Mounted state ref for main component
     const isMountedRef = useRef(true);
 
@@ -472,7 +509,7 @@ export default function LiveOffersScreen() {
     // Cancel disable state (1 minute after accepting proposal)
     const [cancelDisableTimeLeft, setCancelDisableTimeLeft] = useState<number>(0);
     const [acceptedAt, setAcceptedAt] = useState<number | null>(null);
-    const cancelTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const cancelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const appStateRef = useRef<AppStateStatus>(AppState.currentState);
     const backgroundTimeRef = useRef<number | null>(null);
 
@@ -503,13 +540,24 @@ export default function LiveOffersScreen() {
     // Route Tracking Hook - Uses optimized useRouteTracking
     // =========================================================================
     const handleFirstRouteFetch = useCallback((route: Coordinates[]) => {
-        if (route.length > 2) {
-            mapRef.current?.fitToCoordinates(route, {
-                edgePadding: CONSTANTS.MAP_EDGE_PADDING,
-                animated: true,
-            });
-        }
+        // Defer map animation until UI is idle
+        // This prevents jank on low-end devices during first route fetch
+        InteractionManager.runAfterInteractions(() => {
+            if (route.length > 2 && mapRef.current) {
+                mapRef.current.fitToCoordinates(route, {
+                    edgePadding: CONSTANTS.MAP_EDGE_PADDING,
+                    animated: true,
+                });
+            }
+        });
     }, []);
+
+    // Memoize enabled flag to prevent unnecessary hook re-renders
+    // This is critical for preventing crash on low-end devices
+    // IMPORTANT: Only enable after staged initialization is complete
+    const isRouteTrackingEnabled = useMemo(() => {
+        return initStage === 'ready' && !!acceptedProposal && !!vendorLocation && !!serviceLocation;
+    }, [initStage, acceptedProposal, vendorLocation, serviceLocation]);
 
     const {
         routeCoords,
@@ -518,7 +566,7 @@ export default function LiveOffersScreen() {
     } = useRouteTracking({
         vendorLocation,
         serviceLocation,
-        enabled: !!acceptedProposal && !!vendorLocation && !!serviceLocation,
+        enabled: isRouteTrackingEnabled,
         onFirstRouteFetch: handleFirstRouteFetch,
     });
 
@@ -537,16 +585,25 @@ export default function LiveOffersScreen() {
     }, [routeCoords]);
 
     // Vendor proximity detection (100m arrival notification)
+    // IMPORTANT: Only enable after staged initialization is complete
     const { hasArrived: vendorHasArrived, formattedDistance } = useVendorProximity({
         vendorLocation,
         serviceLocation,
         requestId: effectiveRequestId ?? null,
         vendorName: acceptedProposal?.vendor?.full_name || 'Vendor',
-        enabled: !!acceptedProposal && !!vendorLocation && !!serviceLocation,
+        enabled: initStage === 'ready' && !!acceptedProposal && !!vendorLocation && !!serviceLocation,
         onArrival: () => {
             console.log('[LiveOffers] Vendor arrived within 100m');
         },
     });
+
+    // Memoize vendor marker colors to prevent object recreation on every render
+    // This prevents crash on low-end devices from frequent re-renders during location updates
+    const vendorMarkerColors = useMemo(() => {
+        return vendorHasArrived
+            ? [COLORS.success, '#059669'] as const
+            : [COLORS.warning, '#d97706'] as const;
+    }, [vendorHasArrived]);
 
     // Animation for waiting state
     const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -576,8 +633,27 @@ export default function LiveOffersScreen() {
     }, [activeProposals.length, acceptedProposal, pulseAnim]);
 
     // Store original request params for retry functionality
+    // Priority: 1) URL params (from create screen), 2) currentRequest (from Redux)
     useEffect(() => {
-        if (currentRequest && !originalRequestParams) {
+        if (originalRequestParams) return; // Already set
+
+        // First try to get from URL params (most reliable for retry)
+        if (params.categoryId && params.problemTitle && params.latitude && params.longitude && params.address) {
+            setOriginalRequestParams({
+                category: parseInt(params.categoryId, 10),
+                problem_title: params.problemTitle,
+                description: params.description || '',
+                address_line: params.address,
+                latitude: parseFloat(params.latitude),
+                longitude: parseFloat(params.longitude),
+                location_source: 'map',
+                radius_km: 10,
+            });
+            return;
+        }
+
+        // Fallback to currentRequest from Redux
+        if (currentRequest) {
             setOriginalRequestParams({
                 category: currentRequest.category?.id ?? (currentRequest.category as unknown as number),
                 problem_title: currentRequest.problem_title,
@@ -589,7 +665,7 @@ export default function LiveOffersScreen() {
                 radius_km: currentRequest.radius_km,
             });
         }
-    }, [currentRequest, originalRequestParams]);
+    }, [currentRequest, originalRequestParams, params]);
 
     // Track mounted state for safe state updates in main component
     useEffect(() => {
@@ -604,31 +680,53 @@ export default function LiveOffersScreen() {
     // =========================================================================
 
     // Restore cancel timer from persisted storage on mount (for app kill recovery)
+    // Priority: 1) URL params acceptedAtTimestamp, 2) SecureStore via getCancelDisableRemaining
     useEffect(() => {
         const restoreCancelTimer = async () => {
             try {
+                // Priority 1: Use URL params acceptedAtTimestamp (passed from index.tsx restoration)
+                if (params.acceptedAtTimestamp) {
+                    const restoredAcceptedAt = parseInt(params.acceptedAtTimestamp, 10);
+                    if (!isNaN(restoredAcceptedAt) && restoredAcceptedAt > 0) {
+                        const elapsed = Date.now() - restoredAcceptedAt;
+                        const remaining = Math.max(0, Math.ceil((CANCEL_DISABLE_DURATION_MS - elapsed) / 1000));
+                        if (remaining > 0) {
+                            setAcceptedAt(restoredAcceptedAt);
+                            setCancelDisableTimeLeft(remaining);
+                            if (__DEV__) {
+                                console.log('[LiveOffers] Restored cancel timer from params:', remaining, 'seconds');
+                            }
+                            return;
+                        }
+                    }
+                }
+
+                // Priority 2: Fallback to SecureStore
                 const remaining = await getCancelDisableRemaining();
                 if (remaining > 0 && acceptedProposal) {
                     setCancelDisableTimeLeft(remaining);
                     // Calculate acceptedAt from remaining time
                     const calculatedAcceptedAt = Date.now() - (CANCEL_DISABLE_DURATION_MS - remaining * 1000);
                     setAcceptedAt(calculatedAcceptedAt);
+                    if (__DEV__) {
+                        console.log('[LiveOffers] Restored cancel timer from SecureStore:', remaining, 'seconds');
+                    }
                 }
             } catch (error) {
                 if (__DEV__) console.error('[LiveOffers] Failed to restore cancel timer:', error);
             }
         };
 
-        if (acceptedProposal) {
+        if (acceptedProposal || params.acceptedAtTimestamp) {
             restoreCancelTimer();
         }
-    }, [acceptedProposal]);
+    }, [acceptedProposal, params.acceptedAtTimestamp]);
 
-    // Cancel disable countdown timer
+    // Cancel disable countdown timer - using setTimeout for better stability on low-end devices
     useEffect(() => {
         if (!acceptedAt || cancelDisableTimeLeft <= 0) return;
 
-        cancelTimerRef.current = setInterval(() => {
+        const updateTimer = () => {
             if (!isMountedRef.current) return;
 
             const elapsed = Date.now() - acceptedAt;
@@ -636,15 +734,20 @@ export default function LiveOffersScreen() {
 
             setCancelDisableTimeLeft(remaining);
 
-            if (remaining <= 0 && cancelTimerRef.current) {
-                clearInterval(cancelTimerRef.current);
+            // Schedule next update only if timer still has time left
+            if (remaining > 0 && isMountedRef.current) {
+                cancelTimerRef.current = setTimeout(updateTimer, 1000);
+            } else {
                 cancelTimerRef.current = null;
             }
-        }, 1000);
+        };
+
+        // Start the timer chain
+        cancelTimerRef.current = setTimeout(updateTimer, 1000);
 
         return () => {
             if (cancelTimerRef.current) {
-                clearInterval(cancelTimerRef.current);
+                clearTimeout(cancelTimerRef.current);
                 cancelTimerRef.current = null;
             }
         };
@@ -674,6 +777,56 @@ export default function LiveOffersScreen() {
         return () => subscription?.remove();
     }, [acceptedAt]);
 
+    // =========================================================================
+    // Backend sync on app foreground - Verify request status is still valid
+    // This handles edge case where backend marked request as expired/cancelled while app was in background
+    // =========================================================================
+    useEffect(() => {
+        const handleAppForeground = async (nextAppState: AppStateStatus) => {
+            // Only sync when coming to foreground and we have a request
+            if (
+                appStateRef.current.match(/inactive|background/) &&
+                nextAppState === 'active' &&
+                effectiveRequestId &&
+                !requestExpired &&
+                !acceptedProposal
+            ) {
+                try {
+                    if (__DEV__) {
+                        console.log('[LiveOffers] App came to foreground - syncing with backend');
+                    }
+
+                    const response = await serviceRequestApi.getById(effectiveRequestId);
+
+                    // Check if backend has different status
+                    if (response.status === 'expired' || response.status === 'cancelled') {
+                        if (__DEV__) {
+                            console.log('[LiveOffers] Backend reports request is:', response.status);
+                        }
+                        setRequestExpired(true);
+                        await markCustomerActiveServiceExpired();
+                    } else if (response.status === 'accepted' && response.accepted_proposal) {
+                        // Request was accepted while in background - state will sync via WebSocket
+                        if (__DEV__) {
+                            console.log('[LiveOffers] Backend reports request is accepted');
+                        }
+                    }
+                } catch (error) {
+                    // 404 means request no longer exists
+                    if (__DEV__) {
+                        console.error('[LiveOffers] Backend sync failed:', error);
+                    }
+                    // Clear storage if request doesn't exist
+                    await clearCustomerActiveService().catch(() => { });
+                    setRequestExpired(true);
+                }
+            }
+        };
+
+        const subscription = AppState.addEventListener('change', handleAppForeground);
+        return () => subscription?.remove();
+    }, [effectiveRequestId, requestExpired, acceptedProposal]);
+
     // Clear persisted service on completion
     useEffect(() => {
         if (completedService && completedService.requestId === effectiveRequestId) {
@@ -681,45 +834,148 @@ export default function LiveOffersScreen() {
         }
     }, [completedService, effectiveRequestId]);
 
-    // Request expiry timer effect with mounted state check
-    useEffect(() => {
-        // Skip if proposal already accepted
-        if (acceptedProposal) return;
+    // Request expiry timer - uses restored expiresAt OR backend expires_at OR local countdown fallback
+    // Priority: 1) URL params expiresAt (restored from SecureStore), 2) currentRequest.expires_at (from backend), 3) local fallback
+    const requestStartTimeRef = useRef<number>(Date.now());
 
-        // Get expiry from currentRequest
-        if (!currentRequest?.expires_at && !effectiveRequestId) return;
+    // Check if restored from storage as already expired
+    useEffect(() => {
+        if (params.restoredStatus === 'expired') {
+            setRequestExpired(true);
+        }
+    }, [params.restoredStatus]);
+
+    useEffect(() => {
+        // Skip if proposal already accepted or request already expired
+        if (acceptedProposal || requestExpired) return;
 
         const calculateTimeLeft = () => {
+            // Priority 1: URL params expiresAt (restored from SecureStore - most reliable)
+            if (params.expiresAt) {
+                const expiresAt = new Date(params.expiresAt).getTime();
+                return Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+            }
+            // Priority 2: Backend expires_at from currentRequest
             if (currentRequest?.expires_at) {
                 const expiresAt = new Date(currentRequest.expires_at).getTime();
                 return Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
             }
-            return requestTimeLeft;
+            // Priority 3: Fallback to local countdown from component mount/start
+            const elapsed = Math.floor((Date.now() - requestStartTimeRef.current) / 1000);
+            return Math.max(0, CONSTANTS.REQUEST_TIMEOUT_SECONDS - elapsed);
         };
 
+        // Initial calculation
+        const initialTime = calculateTimeLeft();
         if (isMountedRef.current) {
-            setRequestTimeLeft(calculateTimeLeft());
+            setRequestTimeLeft(initialTime);
+            if (initialTime <= 0) {
+                setRequestExpired(true);
+                // Persist expired state to SecureStore
+                markCustomerActiveServiceExpired().catch((err) => {
+                    if (__DEV__) console.error('[LiveOffers] Failed to mark expired:', err);
+                });
+                return;
+            }
         }
 
-        const interval = setInterval(() => {
+        // Use setTimeout chain for better stability on low-end devices
+        let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
+        const updateTimer = () => {
             if (!isMountedRef.current) return;
 
             const remaining = calculateTimeLeft();
             setRequestTimeLeft(remaining);
-            if (remaining <= 0 && !acceptedProposal) {
+
+            if (remaining <= 0) {
                 setRequestExpired(true);
+                // Persist expired state to SecureStore
+                markCustomerActiveServiceExpired().catch((err) => {
+                    if (__DEV__) console.error('[LiveOffers] Failed to mark expired:', err);
+                });
+            } else {
+                // Schedule next update
+                timeoutId = setTimeout(updateTimer, 1000);
             }
-        }, 1000);
+        };
 
-        return () => clearInterval(interval);
-    }, [currentRequest?.expires_at, effectiveRequestId, acceptedProposal]);
+        // Start timer chain
+        timeoutId = setTimeout(updateTimer, 1000);
 
-    // Connect socket on mount if not connected
+        return () => {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+        };
+    }, [params.expiresAt, currentRequest?.expires_at, acceptedProposal, requestExpired]);
+
+    // =========================================================================
+    // STAGED INITIALIZATION EFFECT
+    // Serializes heavy operations to prevent crash on low-end devices
+    // Flow: loading (500ms) → connecting → syncing (max 3s) → ready
+    // Increased initial delay to let any rapid socket events settle
+    // =========================================================================
     useEffect(() => {
-        if (!isConnected && connectionStatus !== 'connecting') {
-            dispatch(connectSocket());
-        }
-    }, [dispatch, isConnected, connectionStatus]);
+        let mounted = true;
+
+        const initialize = async () => {
+            // Stage 1: Extended delay to let component stabilize AND socket events settle
+            // This prevents CPU spike from immediate heavy operations
+            // Also allows batched expired events to process before we render the map
+            await new Promise(r => setTimeout(r, 500));
+            if (!mounted) return;
+
+            // Stage 2: Connect socket if needed
+            if (!isConnected && connectionStatus !== 'connecting') {
+                if (mounted) setInitStage('connecting');
+                try {
+                    await dispatch(connectSocket());
+                } catch (error) {
+                    if (__DEV__) console.error('[LiveOffers] Socket connect failed:', error);
+                }
+            }
+            if (!mounted) return;
+
+            // Additional delay after connection to let any burst of events settle
+            // This is critical - backend sends multiple events (synced, expired) rapidly
+            await new Promise(r => setTimeout(r, 300));
+            if (!mounted) return;
+
+            // Stage 3: Wait for data sync (with timeout)
+            if (mounted) setInitStage('syncing');
+            const syncTimeout = 3000; // 3 second max wait (reduced - events already settled)
+            const startTime = Date.now();
+
+            // Wait for customerRequests to populate OR timeout
+            while (customerRequests.length === 0 && Date.now() - startTime < syncTimeout) {
+                await new Promise(r => setTimeout(r, 200));
+                if (!mounted) return;
+            }
+
+            // Stage 4: Ready - map can now render
+            // Additional small delay to ensure Redux state is stable
+            if (mounted) {
+                await new Promise(r => setTimeout(r, 100));
+                // Use InteractionManager to defer final state update
+                InteractionManager.runAfterInteractions(() => {
+                    if (mounted) {
+                        if (__DEV__) {
+                            console.log('[LiveOffers] Initialization complete, rendering map');
+                        }
+                        setInitStage('ready');
+                    }
+                });
+            }
+        };
+
+        initialize();
+
+        return () => {
+            mounted = false;
+        };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []); // Only run once on mount
 
     // Handle service completion - Show rating modal
     useEffect(() => {
@@ -741,32 +997,52 @@ export default function LiveOffersScreen() {
     }, [dispatch, effectiveRequestId, router]);
 
     // Animate map to service location when available
+    // IMPORTANT: Only animate after initialization is complete to prevent CPU spike
     useEffect(() => {
-        if (serviceLocation && !acceptedProposal) {
-            mapRef.current?.animateToRegion({
-                ...serviceLocation,
-                latitudeDelta: CONSTANTS.MAP_DELTA,
-                longitudeDelta: CONSTANTS.MAP_DELTA,
-            }, 1000);
+        if (serviceLocation && !acceptedProposal && initStage === 'ready') {
+            // Defer animation to avoid blocking main thread during initial render
+            InteractionManager.runAfterInteractions(() => {
+                mapRef.current?.animateToRegion({
+                    ...serviceLocation,
+                    latitudeDelta: CONSTANTS.MAP_DELTA,
+                    longitudeDelta: CONSTANTS.MAP_DELTA,
+                }, 1000);
+            });
         }
-    }, [serviceLocation, acceptedProposal]);
+    }, [serviceLocation, acceptedProposal, initStage]);
 
     // Handlers
+    // Accept proposal with proper serialization to prevent crash on low-end devices
     const handleAcceptProposal = useCallback(async (proposalId: number) => {
         try {
             setAcceptingId(proposalId);
+
+            // Wait for any pending animations/interactions to complete before heavy operation
+            // This prevents CPU spike from concurrent animations + network + state updates
+            await new Promise<void>(resolve => {
+                InteractionManager.runAfterInteractions(() => resolve());
+            });
+
+            // Now do the socket accept (this waits for ACK)
             await dispatch(acceptProposal(proposalId)).unwrap();
-            bottomSheetRef.current?.snapToIndex(0);
 
-            // Set cancel disable timer (1 minute)
-            const now = Date.now();
-            setAcceptedAt(now);
-            setCancelDisableTimeLeft(Math.ceil(CANCEL_DISABLE_DURATION_MS / 1000));
+            // Defer non-critical UI operations to after the main thread is free
+            // This prevents jank and potential crash from too many simultaneous updates
+            InteractionManager.runAfterInteractions(() => {
+                // Safe null check for bottomSheetRef
+                if (bottomSheetRef.current) {
+                    bottomSheetRef.current.snapToIndex(0);
+                }
 
-            // Update persisted service with acceptance data
-            // (Service was already persisted when request was created)
-            updateCustomerActiveServiceAcceptance(proposalId, now).catch((error) => {
-                if (__DEV__) console.error('[LiveOffers] Failed to update acceptance:', error);
+                // Set cancel disable timer (1 minute)
+                const now = Date.now();
+                setAcceptedAt(now);
+                setCancelDisableTimeLeft(Math.ceil(CANCEL_DISABLE_DURATION_MS / 1000));
+
+                // SecureStore write in background - don't block UI
+                updateCustomerActiveServiceAcceptance(proposalId, now).catch((error) => {
+                    if (__DEV__) console.error('[LiveOffers] Failed to update acceptance:', error);
+                });
             });
         } catch (err: unknown) {
             const errorMessage = err instanceof Error ? err.message : 'Failed to accept proposal. Please try again.';
@@ -789,16 +1065,6 @@ export default function LiveOffersScreen() {
     }, [dispatch]);
 
     const handleCancelRequest = useCallback(() => {
-        // Check if cancel is disabled (within 1 minute of accepting)
-        if (acceptedProposal && cancelDisableTimeLeft > 0) {
-            Alert.alert(
-                'Cannot Cancel Yet',
-                `Please wait ${cancelDisableTimeLeft} seconds before cancelling. This allows the vendor to prepare for your service.`,
-                [{ text: 'OK' }]
-            );
-            return;
-        }
-
         Alert.alert(
             'Cancel Request',
             'Are you sure you want to cancel this request?',
@@ -808,14 +1074,36 @@ export default function LiveOffersScreen() {
                     text: 'Yes, Cancel',
                     style: 'destructive',
                     onPress: async () => {
-                        // Clear persisted active service
+                        // 1. Cancel on backend (notify vendors via WebSocket, update status)
+                        if (effectiveRequestId) {
+                            try {
+                                await serviceRequestApi.cancel(effectiveRequestId);
+                                if (__DEV__) {
+                                    console.log('[LiveOffers] Request cancelled on backend:', effectiveRequestId);
+                                }
+                            } catch (error) {
+                                // Log but don't block - user wants to leave
+                                if (__DEV__) {
+                                    console.error('[LiveOffers] Cancel API failed:', error);
+                                }
+                            }
+                        }
+
+                        // 2. Clear persisted active service
                         await clearCustomerActiveService().catch(() => { });
-                        router.back();
+
+                        // 3. Safe navigation - check if back is possible
+                        if (router.canGoBack()) {
+                            router.back();
+                        } else {
+                            // Fallback to home when no back history
+                            router.replace('/(customer)/(home)/');
+                        }
                     },
                 },
             ]
         );
-    }, [router, acceptedProposal, cancelDisableTimeLeft]);
+    }, [router, effectiveRequestId]);
 
     // Handle retry request - create new request with same parameters
     const handleRetryRequest = useCallback(async () => {
@@ -887,7 +1175,7 @@ export default function LiveOffersScreen() {
                         description={vendorHasArrived ? "Vendor has arrived!" : "Vendor is on the way"}
                     >
                         <LinearGradient
-                            colors={vendorHasArrived ? [COLORS.success, '#059669'] : [COLORS.warning, '#d97706']}
+                            colors={vendorMarkerColors}
                             start={{ x: 0, y: 0 }}
                             end={{ x: 1, y: 1 }}
                             style={styles.acceptedVendorMarker}
@@ -919,8 +1207,25 @@ export default function LiveOffersScreen() {
         index,
     }), []);
 
-    // Loading state - show while waiting for service location
-    if (!serviceLocation) {
+    // =========================================================================
+    // STAGED LOADING MESSAGE
+    // Computed before render to avoid hook inside conditional
+    // =========================================================================
+    const loadingMessage = useMemo(() => {
+        if (!serviceLocation) return 'Loading service request...';
+        switch (initStage) {
+            case 'loading': return 'Preparing...';
+            case 'connecting': return 'Connecting to server...';
+            case 'syncing': return 'Loading offers...';
+            default: return 'Almost ready...';
+        }
+    }, [serviceLocation, initStage]);
+
+    // =========================================================================
+    // STAGED LOADING SCREEN
+    // Shows different messages based on initialization stage
+    // =========================================================================
+    if (!serviceLocation || initStage !== 'ready') {
         return (
             <View style={styles.centerContainer}>
                 <LinearGradient
@@ -930,7 +1235,13 @@ export default function LiveOffersScreen() {
                     style={styles.loadingGradient}
                 >
                     <ActivityIndicator size="large" color={COLORS.white} />
-                    <Text style={styles.loadingText}>Loading service request...</Text>
+                    <Text style={styles.loadingText}>{loadingMessage}</Text>
+                    {/* Stage indicator for debugging */}
+                    {__DEV__ && (
+                        <Text style={[styles.loadingText, { fontSize: 12, marginTop: 8, opacity: 0.7 }]}>
+                            Stage: {initStage}
+                        </Text>
+                    )}
                 </LinearGradient>
             </View>
         );
@@ -948,7 +1259,14 @@ export default function LiveOffersScreen() {
                 >
                     <TouchableOpacity
                         style={styles.backButton}
-                        onPress={() => router.back()}
+                        onPress={() => {
+                            // Safe navigation - check if back is possible
+                            if (router.canGoBack()) {
+                                router.back();
+                            } else {
+                                router.replace('/(customer)/(home)/');
+                            }
+                        }}
                         activeOpacity={0.8}
                     >
                         <Ionicons name="arrow-back" size={24} color={COLORS.white} />
@@ -978,12 +1296,15 @@ export default function LiveOffersScreen() {
                     longitudeDelta: CONSTANTS.MAP_DELTA,
                 }}
             >
-                {Platform.OS === "web" && (
+                {/* OpenStreetMap tiles - COMMENTED OUT for Google Maps dev build */}
+                {/* Uncomment below for Expo Go testing (no native Google Maps) */}
+                {/* {(Platform.OS === "web" || (Platform.OS === "android" && __DEV__)) && (
                     <UrlTile
-                        urlTemplate="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
                         maximumZ={19}
+                        shouldReplaceMapContent={true}
                     />
-                )}
+                )} */}
                 {routeCoords.length > 0 && (
                     <Polyline
                         coordinates={routeCoords}
@@ -1016,39 +1337,23 @@ export default function LiveOffersScreen() {
                 </View>
             )}
 
-            {/* Cancel Button - Show before acceptance OR after acceptance with timer */}
-            {(!acceptedProposal || cancelDisableTimeLeft > 0) && (
+            {/* Floating Cancel Button - Only show during 60s cancel window after acceptance */}
+            {acceptedProposal && cancelDisableTimeLeft > 0 && (
                 <TouchableOpacity
-                    style={[
-                        styles.cancelButton,
-                        acceptedProposal && cancelDisableTimeLeft > 0 && styles.cancelButtonDisabled
-                    ]}
+                    style={styles.cancelButton}
                     onPress={handleCancelRequest}
-                    activeOpacity={acceptedProposal && cancelDisableTimeLeft > 0 ? 1 : 0.8}
-                    disabled={acceptedProposal && cancelDisableTimeLeft > 0}
+                    activeOpacity={0.8}
                 >
                     <LinearGradient
-                        colors={acceptedProposal && cancelDisableTimeLeft > 0
-                            ? [COLORS.gray400, COLORS.gray500]
-                            : [COLORS.error, '#dc2626']
-                        }
+                        colors={[COLORS.error, '#dc2626']}
                         start={{ x: 0, y: 0 }}
                         end={{ x: 1, y: 0 }}
                         style={styles.cancelButtonInner}
                     >
-                        {acceptedProposal && cancelDisableTimeLeft > 0 ? (
-                            <>
-                                <Ionicons name="time" size={20} color={COLORS.white} />
-                                <Text style={styles.cancelButtonText}>
-                                    Cancel available in {cancelDisableTimeLeft}s
-                                </Text>
-                            </>
-                        ) : (
-                            <>
-                                <X size={20} color={COLORS.white} />
-                                <Text style={styles.cancelButtonText}>Cancel Request</Text>
-                            </>
-                        )}
+                        <X size={20} color={COLORS.white} />
+                        <Text style={styles.cancelButtonText}>
+                            Cancel ({cancelDisableTimeLeft}s left)
+                        </Text>
                     </LinearGradient>
                 </TouchableOpacity>
             )}
@@ -1066,7 +1371,9 @@ export default function LiveOffersScreen() {
                     {/* Title */}
                     <View style={styles.sheetTitleContainer}>
                         <LinearGradient
-                            colors={[COLORS.primary, COLORS.accent]}
+                            colors={requestExpired && !acceptedProposal
+                                ? [COLORS.warning, '#f59e0b']
+                                : [COLORS.primary, COLORS.accent]}
                             start={{ x: 0, y: 0 }}
                             end={{ x: 1, y: 0 }}
                             style={styles.sheetTitleGradient}
@@ -1076,9 +1383,11 @@ export default function LiveOffersScreen() {
                                     ? vendorHasArrived
                                         ? 'Vendor Arrived!'
                                         : 'Vendor on the way'
-                                    : activeProposals.length === 0
-                                        ? 'Waiting for proposals...'
-                                        : `${activeProposals.length} Proposal${activeProposals.length > 1 ? 's' : ''} Received`
+                                    : requestExpired
+                                        ? 'Request Expired'
+                                        : activeProposals.length === 0
+                                            ? 'Waiting for proposals...'
+                                            : `${activeProposals.length} Proposal${activeProposals.length > 1 ? 's' : ''} Received`
                                 }
                             </Text>
                         </LinearGradient>
@@ -1097,10 +1406,16 @@ export default function LiveOffersScreen() {
                             />
 
                             {/* Vendor Contact Info */}
-                            {acceptedProposal.vendor?.phone && (
+                            {acceptedProposal?.vendor?.phone && (
                                 <TouchableOpacity
                                     style={styles.contactCard}
-                                    onPress={() => Linking.openURL(`tel:${acceptedProposal.vendor?.phone}`)}
+                                    onPress={() => {
+                                        // Safe access in callback - acceptedProposal might change between render and callback
+                                        const phone = acceptedProposal?.vendor?.phone;
+                                        if (phone) {
+                                            Linking.openURL(`tel:${phone}`);
+                                        }
+                                    }}
                                     activeOpacity={0.8}
                                 >
                                     <Ionicons name="call" size={20} color={COLORS.success} />
@@ -1155,100 +1470,126 @@ export default function LiveOffersScreen() {
                                 </View>
                             )}
                         </View>
-                    ) : activeProposals.length === 0 ? (
-                        // Waiting state or Expired state
+                    ) : requestExpired ? (
+                        // Request expired - show search again + cancel buttons
                         <View style={styles.emptyState}>
-                            {requestExpired ? (
-                                // Request expired - show retry button
-                                <>
-                                    <View style={styles.expiredIconContainer}>
-                                        <Ionicons name="time-outline" size={64} color={COLORS.warning} />
-                                    </View>
-                                    <Text type="body" style={styles.emptyTitle}>
-                                        Request Expired
-                                    </Text>
-                                    <Text style={styles.emptyText}>
-                                        No vendors responded in time. Would you like to try again?
-                                    </Text>
-                                    <TouchableOpacity
-                                        style={styles.retryButton}
-                                        onPress={handleRetryRequest}
-                                        disabled={isRetrying}
-                                        activeOpacity={0.8}
-                                    >
-                                        <LinearGradient
-                                            colors={[COLORS.primary, COLORS.accent]}
-                                            start={{ x: 0, y: 0 }}
-                                            end={{ x: 1, y: 0 }}
-                                            style={styles.retryGradient}
-                                        >
-                                            {isRetrying ? (
-                                                <ActivityIndicator color={COLORS.white} size="small" />
-                                            ) : (
-                                                <>
-                                                    <Ionicons name="refresh" size={20} color={COLORS.white} />
-                                                    <Text style={styles.retryText}>Retry Request</Text>
-                                                </>
-                                            )}
-                                        </LinearGradient>
-                                    </TouchableOpacity>
-                                </>
-                            ) : (
-                                // Still waiting for vendors
-                                <>
-                                    <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-                                        <LinearGradient
-                                            colors={[COLORS.primary, COLORS.accent]}
-                                            start={{ x: 0, y: 0 }}
-                                            end={{ x: 1, y: 1 }}
-                                            style={styles.emptyGradient}
-                                        >
-                                            <ActivityIndicator size="large" color={COLORS.white} />
-                                        </LinearGradient>
-                                    </Animated.View>
-                                    <Text type="body" style={styles.emptyTitle}>
-                                        Finding nearby vendors...
-                                    </Text>
-                                    <View style={styles.timerContainer}>
-                                        <Ionicons name="time" size={18} color={COLORS.gray500} />
-                                        <Text style={styles.timerText}>
-                                            {Math.floor(requestTimeLeft / 60)}:{(requestTimeLeft % 60).toString().padStart(2, '0')}
-                                        </Text>
-                                    </View>
-                                    <Text style={styles.emptyText}>
-                                        Nearby vendors are reviewing your request.
-                                    </Text>
-                                    {!isConnected && (
-                                        <View style={styles.connectionWarning}>
-                                            <Ionicons name="warning" size={16} color={COLORS.warning} />
-                                            <Text style={styles.connectionWarningText}>
-                                                Connecting to server...
-                                            </Text>
-                                        </View>
+                            <View style={styles.expiredIconContainer}>
+                                <Ionicons name="time-outline" size={64} color={COLORS.warning} />
+                            </View>
+                            <Text type="body" style={styles.emptyTitle}>
+                                Request Expired
+                            </Text>
+                            <Text style={styles.emptyText}>
+                                No vendors responded in time. Would you like to search again?
+                            </Text>
+
+                            {/* Search Again Button (Primary) */}
+                            <TouchableOpacity
+                                style={styles.searchAgainButton}
+                                onPress={handleRetryRequest}
+                                disabled={isRetrying}
+                                activeOpacity={0.8}
+                            >
+                                <LinearGradient
+                                    colors={[COLORS.primary, COLORS.accent]}
+                                    start={{ x: 0, y: 0 }}
+                                    end={{ x: 1, y: 0 }}
+                                    style={styles.searchAgainButtonInner}
+                                >
+                                    {isRetrying ? (
+                                        <ActivityIndicator color={COLORS.white} size="small" />
+                                    ) : (
+                                        <>
+                                            <Ionicons name="search" size={20} color={COLORS.white} />
+                                            <Text style={styles.searchAgainText}>Search Again</Text>
+                                        </>
                                     )}
-                                </>
+                                </LinearGradient>
+                            </TouchableOpacity>
+
+                            {/* Cancel Button (Secondary) */}
+                            <TouchableOpacity
+                                style={styles.cancelButtonSecondary}
+                                onPress={handleCancelRequest}
+                                activeOpacity={0.7}
+                            >
+                                <Text style={styles.cancelButtonSecondaryText}>Cancel Request</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : activeProposals.length === 0 ? (
+                        // Waiting state - no proposals yet
+                        <View style={styles.emptyState}>
+                            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+                                <LinearGradient
+                                    colors={[COLORS.primary, COLORS.accent]}
+                                    start={{ x: 0, y: 0 }}
+                                    end={{ x: 1, y: 1 }}
+                                    style={styles.emptyGradient}
+                                >
+                                    <ActivityIndicator size="large" color={COLORS.white} />
+                                </LinearGradient>
+                            </Animated.View>
+                            <Text type="body" style={styles.emptyTitle}>
+                                Finding nearby vendors...
+                            </Text>
+                            <View style={styles.timerContainer}>
+                                <Ionicons name="time" size={18} color={COLORS.gray500} />
+                                <Text style={styles.timerText}>
+                                    {Math.floor(requestTimeLeft / 60)}:{(requestTimeLeft % 60).toString().padStart(2, '0')}
+                                </Text>
+                            </View>
+                            <Text style={styles.emptyText}>
+                                Nearby vendors are reviewing your request.
+                            </Text>
+                            {!isConnected && (
+                                <View style={styles.connectionWarning}>
+                                    <Ionicons name="warning" size={16} color={COLORS.warning} />
+                                    <Text style={styles.connectionWarningText}>
+                                        Connecting to server...
+                                    </Text>
+                                </View>
                             )}
+
+                            {/* Cancel Button inside bottom sheet */}
+                            <TouchableOpacity
+                                style={styles.cancelButtonInSheet}
+                                onPress={handleCancelRequest}
+                                activeOpacity={0.7}
+                            >
+                                <Text style={styles.cancelButtonInSheetText}>Cancel Request</Text>
+                            </TouchableOpacity>
                         </View>
                     ) : (
-                        // Proposals list
-                        <FlatList
-                            data={activeProposals}
-                            renderItem={renderProposalItem}
-                            keyExtractor={keyExtractor}
-                            getItemLayout={getItemLayout}
-                            showsVerticalScrollIndicator={false}
-                            contentContainerStyle={styles.proposalsList}
-                            removeClippedSubviews={true}
-                            maxToRenderPerBatch={5}
-                            windowSize={5}
-                            initialNumToRender={CONSTANTS.FLATLIST_INITIAL_NUM}
-                            updateCellsBatchingPeriod={CONSTANTS.FLATLIST_BATCH_PERIOD}
-                            ListEmptyComponent={
-                                <View style={styles.emptyState}>
-                                    <Text style={styles.emptyText}>No proposals yet</Text>
-                                </View>
-                            }
-                        />
+                        // Proposals list with cancel button
+                        <View style={styles.proposalsContainer}>
+                            <FlatList
+                                data={activeProposals}
+                                renderItem={renderProposalItem}
+                                keyExtractor={keyExtractor}
+                                getItemLayout={getItemLayout}
+                                showsVerticalScrollIndicator={false}
+                                contentContainerStyle={styles.proposalsList}
+                                removeClippedSubviews={true}
+                                maxToRenderPerBatch={5}
+                                windowSize={5}
+                                initialNumToRender={CONSTANTS.FLATLIST_INITIAL_NUM}
+                                updateCellsBatchingPeriod={CONSTANTS.FLATLIST_BATCH_PERIOD}
+                                ListEmptyComponent={
+                                    <View style={styles.emptyState}>
+                                        <Text style={styles.emptyText}>No proposals yet</Text>
+                                    </View>
+                                }
+                            />
+
+                            {/* Cancel Button at bottom of proposals */}
+                            <TouchableOpacity
+                                style={styles.cancelButtonInSheet}
+                                onPress={handleCancelRequest}
+                                activeOpacity={0.7}
+                            >
+                                <Text style={styles.cancelButtonInSheetText}>Cancel Request</Text>
+                            </TouchableOpacity>
+                        </View>
                     )}
                 </BottomSheetView>
             </BottomSheet>
@@ -1577,6 +1918,62 @@ const styles = StyleSheet.create({
         color: COLORS.white,
         fontWeight: '600',
         fontSize: moderateScale(15),
+    },
+
+    // Search Again button (primary action in expired state)
+    searchAgainButton: {
+        marginTop: verticalScale(20),
+        borderRadius: moderateScale(12),
+        overflow: 'hidden',
+        width: '100%',
+        shadowColor: COLORS.primary,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3,
+        shadowRadius: 4,
+        elevation: 4,
+    },
+    searchAgainButtonInner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: verticalScale(14),
+        paddingHorizontal: scale(24),
+        gap: scale(8),
+    },
+    searchAgainText: {
+        color: COLORS.white,
+        fontWeight: '700',
+        fontSize: moderateScale(16),
+    },
+
+    // Cancel button (secondary, inside bottom sheet)
+    cancelButtonInSheet: {
+        marginTop: verticalScale(16),
+        paddingVertical: verticalScale(12),
+        alignItems: 'center',
+    },
+    cancelButtonInSheetText: {
+        color: COLORS.error,
+        fontSize: moderateScale(14),
+        fontWeight: '600',
+    },
+
+    // Cancel button secondary (in expired state)
+    cancelButtonSecondary: {
+        marginTop: verticalScale(16),
+        paddingVertical: verticalScale(12),
+        alignItems: 'center',
+    },
+    cancelButtonSecondaryText: {
+        color: COLORS.gray600,
+        fontSize: moderateScale(14),
+        fontWeight: '500',
+        textDecorationLine: 'underline',
+    },
+
+    // Proposals container (wraps FlatList + cancel button)
+    proposalsContainer: {
+        flex: 1,
     },
 
     // Vendor contact card

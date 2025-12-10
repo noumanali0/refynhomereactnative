@@ -7,8 +7,8 @@
  * Integrated with backend API for real data.
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { View, ScrollView, TouchableOpacity, StyleSheet, FlatList, RefreshControl, ActivityIndicator } from 'react-native';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { View, ScrollView, TouchableOpacity, StyleSheet, FlatList, RefreshControl, ActivityIndicator, Platform } from 'react-native';
 import Text from '@/components/common/Text';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -36,6 +36,7 @@ export default function CustomerHistoryScreen() {
 
     // Redux state
     const filteredServices = useSelector(selectFilteredHistory);
+    // console.log("🚀 ~ CustomerHistoryScreen ~ filteredServices:", filteredServices)
     const stats = useSelector(selectHistoryStats);
     const isLoading = useSelector(selectIsLoading);
     const isRefreshing = useSelector(selectIsRefreshing);
@@ -193,18 +194,19 @@ export default function CustomerHistoryScreen() {
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.filterTabs}
                 style={styles.filterTabsContainer}
+                scrollEventThrottle={16}
             >
                 {renderFilterTab('all', 'All', 'list', COLORS.gray700)}
-                {renderFilterTab('active', 'Active', 'time', COLORS.warning)}
-                {renderFilterTab('completed', 'Completed', 'checkmark-circle', COLORS.success)}
-                {renderFilterTab('cancelled', 'Cancelled', 'close-circle', COLORS.error)}
+                {/* {renderFilterTab('active', 'Active', 'time', COLORS.warning)} */}
+                {/* {renderFilterTab('completed', 'Completed', 'checkmark-circle', COLORS.success)} */}
+                {/* {renderFilterTab('cancelled', 'Cancelled', 'close-circle', COLORS.error)} */}
             </ScrollView>
 
-            {/* History List */}
+            {/* History List - Optimized for low-end devices */}
             <FlatList
                 data={filteredServices}
                 renderItem={({ item }) => (
-                    <ServiceHistoryCard request={item} />
+                    <ServiceHistoryCard request={item} disablePress />
                 )}
                 keyExtractor={(item) => item.id.toString()}
                 contentContainerStyle={styles.listContent}
@@ -218,6 +220,12 @@ export default function CustomerHistoryScreen() {
                     />
                 }
                 showsVerticalScrollIndicator={false}
+                // Performance optimizations for low-end devices
+                initialNumToRender={5}
+                maxToRenderPerBatch={5}
+                windowSize={3}
+                removeClippedSubviews={Platform.OS !== 'web'}
+                updateCellsBatchingPeriod={100}
             />
         </View>
     );

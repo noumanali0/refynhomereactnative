@@ -162,14 +162,15 @@ const vendorHistorySlice = createSlice({
       const now = new Date();
       const thisMonth = now.getMonth();
       const thisYear = now.getFullYear();
+      const isCompleted = (status: string) => status === 'completed' || status === 'done';
 
-      state.stats.totalCompleted = state.jobs.filter(j => j.status === 'completed').length;
+      state.stats.totalCompleted = state.jobs.filter(j => isCompleted(j.status)).length;
       state.stats.totalCancelled = state.jobs.filter(j => j.status === 'cancelled').length;
       state.stats.totalEarnings = state.jobs
-        .filter(j => j.status === 'completed')
+        .filter(j => isCompleted(j.status))
         .reduce((sum, j) => sum + (j.price_quote || 0), 0);
       state.stats.thisMonthCompleted = state.jobs.filter(j => {
-        if (j.status !== 'completed') return false;
+        if (!isCompleted(j.status)) return false;
         const jobDate = new Date(j.completed_at || j.created_at);
         return jobDate.getMonth() === thisMonth && jobDate.getFullYear() === thisYear;
       }).length;
@@ -259,6 +260,10 @@ export const selectFilteredVendorHistory = (state: { vendorHistory: VendorHistor
   const { jobs, filter } = state.vendorHistory;
 
   if (filter === 'all') return jobs;
+  if (filter === 'completed') {
+    // Include both 'completed' and 'done' statuses
+    return jobs.filter(j => j.status === 'completed' || j.status === 'done');
+  }
   return jobs.filter(j => j.status === filter);
 };
 

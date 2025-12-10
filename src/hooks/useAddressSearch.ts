@@ -83,6 +83,12 @@ export function useAddressSearch(
         setLoading(false);
       }
     } catch (err) {
+      // Ignore AbortError - it's expected when requests are cancelled
+      if (err instanceof Error && err.name === 'AbortError') {
+        if (__DEV__) console.log('[AddressSearch] Request cancelled (expected)');
+        return;
+      }
+
       // Only update if still mounted and this is the latest request
       if (mountedRef.current && requestId === latestRequestRef.current) {
         const message = err instanceof Error

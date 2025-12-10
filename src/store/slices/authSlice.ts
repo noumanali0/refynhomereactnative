@@ -19,6 +19,7 @@ import { getErrorMessage } from '@/api/client';
 import type {
   SignupRequest,
   VendorOnboardingRequest,
+  UpdateProfileRequest,
 } from '@/types/api';
 import tokenService from '@/services/tokenService';
 
@@ -171,6 +172,8 @@ export const loginUser = createAsyncThunk(
         user: response.user,
         accessToken: response.access,
         refreshToken: response.refresh,
+        isVerified: response.isVerified,
+        isOnboardingComplete: response.isOnboardingComplete,
       };
     } catch (error: any) {
       const message = getErrorMessage(error);
@@ -223,6 +226,33 @@ export const fetchUserProfile = createAsyncThunk(
 );
 
 /**
+ * Update User Profile - Update current user's profile
+ * PATCH /api/auth/update-profile/
+ *
+ * Supports both Customer and Vendor profile updates
+ * Handles file uploads for profile photos
+ */
+export const updateUserProfile = createAsyncThunk(
+  'auth/updateProfile',
+  async (payload: UpdateProfileRequest, { rejectWithValue }) => {
+    try {
+      const response = await authService.updateProfile(payload);
+
+      // Update user in SecureStore
+      await tokenService.saveUserData(response.user);
+
+      return {
+        user: response.user,
+        message: response.message,
+      };
+    } catch (error: any) {
+      const message = getErrorMessage(error);
+      return rejectWithValue(message);
+    }
+  }
+);
+
+/**
  * Refresh Access Token - Get new access token
  * POST /api/auth/refresh/
  */
@@ -252,7 +282,10 @@ export const refreshAccessToken = createAsyncThunk(
 );
 
 /**
- * Logout - Clear session and disconnect socket
+ * Logout - Clear session, disconnect socket, and cleanup all persisted state
+ *
+ * IMPORTANT: This thunk performs complete cleanup to ensure no stale state
+ * remains after logout, preventing issues on next login.
  */
 export const logoutUser = createAsyncThunk(
   'auth/logout',
@@ -272,16 +305,285 @@ export const logoutUser = createAsyncThunk(
       // Reset dispatch state (sync action)
       dispatch(resetDispatchState());
 
-      await authService.logout();
+      // Reset other slices that may contain user-specific data
+      try {
+        const { clearReviewState } = await import('./reviewSlice');
+        const { resetHistory: resetServiceHistory } = await import('./serviceHistorySlice');
+        const { resetHistory: resetVendorHistory } = await import('./vendorHistorySlice');
+
+        dispatch(clearReviewState());
+        dispatch(resetServiceHistory());
+        dispatch(resetVendorHistory());
+
+        if (__DEV__) console.log('[Auth] All user-specific slices reset');
+      } catch (sliceError) {
+        // Slices might not be loaded, ignore
+        console.log('[Auth] Slice reset skipped:', sliceError);
+      }
+
+      // Stop background location tracking if running (for vendors)
+      try {
+        const { stopBackgroundLocationTracking } = await import('@/services/backgroundLocationService');
+        await stopBackgroundLocationTracking();
+        if (__DEV__) console.log('[Auth] Background location tracking stopped');
+      } catch (locationError) {
+        // Background task might not be running, ignore
+        console.log('[Auth] Background location stop skipped:', locationError);
+      }
+
+      // Clear persisted active job from SecureStore
+      try {
+        const { clearActiveJob } = await import('@/services/activeJobService');
+        await clearActiveJob();
+        if (__DEV__) console.log('[Auth] Persisted active job cleared');
+      } catch (jobError) {
+        // No active job to clear, ignore
+        console.log('[Auth] Clear active job skipped:', jobError);
+      }
+
+      // Call logout API to blacklist refresh token
+      const refreshToken = await tokenService.getRefreshToken();
+      if (refreshToken) {
+        await authService.logout(refreshToken);
+        if (__DEV__) console.log('[Auth] Refresh token blacklisted on server');
+      }
 
       // Clear all tokens and user data from SecureStore
       await tokenService.clearSession();
 
       return null;
     } catch (error: any) {
-      // Logout locally even if API fails
+      // Logout locally even if API fails - ensure cleanup still happens
+      try {
+        const { stopBackgroundLocationTracking } = await import('@/services/backgroundLocationService');
+        await stopBackgroundLocationTracking();
+      } catch { /* ignore */ }
+
+      try {
+        const { clearActiveJob } = await import('@/services/activeJobService');
+        await clearActiveJob();
+      } catch { /* ignore */ }
+
       await tokenService.clearSession();
       return null;
+    }
+  }
+);
+
+/**
+ * Delete Account - Permanently delete user account
+ *
+ * This thunk performs complete cleanup similar to logout:
+ * 1. Verify password with backend and delete account
+ * 2. Disconnect WebSocket
+ * 3. Reset all Redux slices
+ * 4. Stop background location tracking
+ * 5. Clear active job storage
+ * 6. Clear all tokens from SecureStore
+ *
+ * IMPORTANT: This action is irreversible.
+ */
+export const deleteAccount = createAsyncThunk(
+  'auth/deleteAccount',
+  async (password: string, { dispatch, rejectWithValue }) => {
+    try {
+      // Step 1: Call backend to delete account (verifies password)
+      await authService.deleteAccount(password);
+
+      // Step 2: Cleanup (same as logout)
+      // Disconnect WebSocket first
+      const { disconnectSocket, resetDispatchState } = await import('./dispatchSlice');
+
+      try {
+        await dispatch(disconnectSocket()).unwrap();
+      } catch (socketError) {
+        // Socket might not be connected, ignore
+        console.log('[Auth] Socket disconnect skipped during account deletion:', socketError);
+      }
+
+      // Reset dispatch state
+      dispatch(resetDispatchState());
+
+      // Reset other slices
+      try {
+        const { clearReviewState } = await import('./reviewSlice');
+        const { resetHistory: resetServiceHistory } = await import('./serviceHistorySlice');
+        const { resetHistory: resetVendorHistory } = await import('./vendorHistorySlice');
+
+        dispatch(clearReviewState());
+        dispatch(resetServiceHistory());
+        dispatch(resetVendorHistory());
+
+        if (__DEV__) console.log('[Auth] All user-specific slices reset after account deletion');
+      } catch (sliceError) {
+        console.log('[Auth] Slice reset skipped:', sliceError);
+      }
+
+      // Stop background location tracking
+      try {
+        const { stopBackgroundLocationTracking } = await import('@/services/backgroundLocationService');
+        await stopBackgroundLocationTracking();
+        if (__DEV__) console.log('[Auth] Background location stopped after account deletion');
+      } catch (locationError) {
+        console.log('[Auth] Background location stop skipped:', locationError);
+      }
+
+      // Clear persisted active job
+      try {
+        const { clearActiveJob } = await import('@/services/activeJobService');
+        await clearActiveJob();
+        if (__DEV__) console.log('[Auth] Active job cleared after account deletion');
+      } catch (jobError) {
+        console.log('[Auth] Clear active job skipped:', jobError);
+      }
+
+      // Clear all tokens and user data from SecureStore
+      await tokenService.clearSession();
+
+      if (__DEV__) {
+        console.log('[Auth] Account deleted and all local data cleared');
+      }
+
+      return null;
+    } catch (error: any) {
+      const message = getErrorMessage(error);
+      return rejectWithValue(message);
+    }
+  }
+);
+
+/**
+ * Change Password Thunk
+ * Changes user password after verifying current password.
+ * Does NOT log user out - they remain authenticated.
+ */
+export const changePassword = createAsyncThunk(
+  'auth/changePassword',
+  async (
+    { currentPassword, newPassword }: { currentPassword: string; newPassword: string },
+    { rejectWithValue }
+  ) => {
+    try {
+      const response = await authService.changePassword(currentPassword, newPassword);
+
+      if (__DEV__) {
+        console.log('[Auth] Password changed successfully');
+      }
+
+      return response;
+    } catch (error: any) {
+      const message = getErrorMessage(error);
+      return rejectWithValue(message);
+    }
+  }
+);
+
+/**
+ * Deactivate Account Thunk
+ * Temporarily deactivates the user account and logs them out.
+ * User data is preserved but login is disabled.
+ */
+export const deactivateAccount = createAsyncThunk(
+  'auth/deactivateAccount',
+  async (password: string, { dispatch, rejectWithValue }) => {
+    try {
+      // Step 1: Call backend to deactivate account (verifies password)
+      await authService.deactivateAccount(password);
+
+      // Step 2: Full cleanup (same as logout/delete)
+      // Disconnect WebSocket first
+      const { disconnectSocket, resetDispatchState } = await import('./dispatchSlice');
+
+      try {
+        await dispatch(disconnectSocket()).unwrap();
+      } catch (socketError) {
+        console.log('[Auth] Socket disconnect skipped during deactivation:', socketError);
+      }
+
+      // Reset dispatch state
+      dispatch(resetDispatchState());
+
+      // Reset other slices
+      try {
+        const { clearReviewState } = await import('./reviewSlice');
+        const { resetHistory: resetServiceHistory } = await import('./serviceHistorySlice');
+        const { resetHistory: resetVendorHistory } = await import('./vendorHistorySlice');
+
+        dispatch(clearReviewState());
+        dispatch(resetServiceHistory());
+        dispatch(resetVendorHistory());
+
+        if (__DEV__) console.log('[Auth] All user-specific slices reset after deactivation');
+      } catch (sliceError) {
+        console.log('[Auth] Slice reset skipped:', sliceError);
+      }
+
+      // Stop background location tracking
+      try {
+        const { stopBackgroundLocationTracking } = await import('@/services/backgroundLocationService');
+        await stopBackgroundLocationTracking();
+        if (__DEV__) console.log('[Auth] Background location stopped after deactivation');
+      } catch (locationError) {
+        console.log('[Auth] Background location stop skipped:', locationError);
+      }
+
+      // Clear persisted active job
+      try {
+        const { clearActiveJob } = await import('@/services/activeJobService');
+        await clearActiveJob();
+        if (__DEV__) console.log('[Auth] Active job cleared after deactivation');
+      } catch (jobError) {
+        console.log('[Auth] Clear active job skipped:', jobError);
+      }
+
+      // Clear all tokens and user data from SecureStore
+      await tokenService.clearSession();
+
+      if (__DEV__) {
+        console.log('[Auth] Account deactivated and all local data cleared');
+      }
+
+      return null;
+    } catch (error: any) {
+      const message = getErrorMessage(error);
+      return rejectWithValue(message);
+    }
+  }
+);
+
+/**
+ * Reactivate Account - Reactivate a deactivated user account
+ * POST /api/auth/reactivate-account/
+ *
+ * This thunk reactivates a deactivated account after password verification.
+ * On success, it stores tokens and returns user data (same as login).
+ */
+export const reactivateAccount = createAsyncThunk(
+  'auth/reactivateAccount',
+  async (
+    { phone, password }: { phone: string; password: string },
+    { rejectWithValue }
+  ) => {
+    try {
+      const response = await authService.reactivateAccount(phone, password);
+
+      // Store tokens and user in SecureStore (same as login)
+      await tokenService.saveSession(
+        response.access,
+        response.refresh,
+        response.user
+      );
+
+      return {
+        user: response.user,
+        accessToken: response.access,
+        refreshToken: response.refresh,
+        isVerified: response.is_verified,
+        isOnboardingComplete: response.is_onboarding_complete,
+      };
+    } catch (error: any) {
+      const message = getErrorMessage(error);
+      return rejectWithValue(message);
     }
   }
 );
@@ -478,7 +780,23 @@ const authSlice = createSlice({
         state.refreshToken = action.payload.refreshToken;
         state.isAuthenticated = true;
         state.error = null;
-        state.vendorOnboardingStatus = 'complete';
+
+        // Set vendor onboarding status based on backend response
+        if (action.payload.user.role === 'vendor') {
+          if (!action.payload.isOnboardingComplete) {
+            // Vendor hasn't completed CNIC + categories submission
+            state.vendorOnboardingStatus = 'in_progress';
+          } else if (!action.payload.isVerified) {
+            // Vendor completed onboarding but awaiting admin approval
+            state.vendorOnboardingStatus = 'pending_verification';
+          } else {
+            // Vendor is fully verified
+            state.vendorOnboardingStatus = 'complete';
+          }
+        } else {
+          // Customers are always complete
+          state.vendorOnboardingStatus = 'complete';
+        }
       })
       .addCase(loginUser.rejected, (state, action) => {
         state.isLoading = false;
@@ -520,6 +838,24 @@ const authSlice = createSlice({
       });
 
     // ========================================================================
+    // Update User Profile
+    // ========================================================================
+    builder
+      .addCase(updateUserProfile.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(updateUserProfile.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.user = action.payload.user;
+        state.error = null;
+      })
+      .addCase(updateUserProfile.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      });
+
+    // ========================================================================
     // Refresh Access Token
     // ========================================================================
     builder
@@ -549,6 +885,78 @@ const authSlice = createSlice({
       });
 
     // ========================================================================
+    // Delete Account
+    // ========================================================================
+    builder
+      .addCase(deleteAccount.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(deleteAccount.fulfilled, () => {
+        return { ...initialState }; // Reset to initial state (account deleted)
+      })
+      .addCase(deleteAccount.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      });
+
+    // ========================================================================
+    // Change Password
+    // ========================================================================
+    builder
+      .addCase(changePassword.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(changePassword.fulfilled, (state) => {
+        state.isLoading = false;
+        // User remains logged in after password change
+      })
+      .addCase(changePassword.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      });
+
+    // ========================================================================
+    // Deactivate Account
+    // ========================================================================
+    builder
+      .addCase(deactivateAccount.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(deactivateAccount.fulfilled, () => {
+        return { ...initialState }; // Reset to initial state (account deactivated)
+      })
+      .addCase(deactivateAccount.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      });
+
+    // ========================================================================
+    // Reactivate Account
+    // ========================================================================
+    builder
+      .addCase(reactivateAccount.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(reactivateAccount.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.isAuthenticated = true;
+        state.user = transformApiUserToAppUser(action.payload.user);
+        state.accessToken = action.payload.accessToken;
+        state.refreshToken = action.payload.refreshToken;
+        state.vendorOnboardingStatus = action.payload.isOnboardingComplete
+          ? action.payload.isVerified ? 'complete' : 'pending_verification'
+          : 'in_progress';
+      })
+      .addCase(reactivateAccount.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      });
+
+    // ========================================================================
     // Restore Session
     // ========================================================================
     builder
@@ -563,11 +971,24 @@ const authSlice = createSlice({
         state.isAuthenticated = true;
 
         // Set vendor onboarding status based on user data
-        if (state.user?.role === 'vendor' && state.user.vendorProfile) {
-          state.vendorOnboardingStatus = state.user.vendorProfile.verified
-            ? 'complete'
-            : 'pending_verification';
+        if (state.user?.role === 'vendor') {
+          const vendorProfile = state.user.vendorProfile;
+          // Check if onboarding is complete: CNIC must be submitted
+          // (Backend creates empty VendorProfile on signup, so we check CNIC)
+          const isOnboardingComplete = vendorProfile && vendorProfile.cnic;
+
+          if (!isOnboardingComplete) {
+            // No CNIC = needs to complete onboarding form
+            state.vendorOnboardingStatus = 'in_progress';
+          } else if (!vendorProfile.verified) {
+            // Has completed onboarding but not approved by admin
+            state.vendorOnboardingStatus = 'pending_verification';
+          } else {
+            // Verified by admin
+            state.vendorOnboardingStatus = 'complete';
+          }
         } else {
+          // Customers are always complete
           state.vendorOnboardingStatus = 'complete';
         }
       })

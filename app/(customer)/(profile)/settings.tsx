@@ -1,16 +1,14 @@
-// app/(vendor)/(profile)/settings.tsx
+// app/(customer)/(profile)/settings.tsx
 /**
- * Account Settings Screen
+ * Customer Settings Screen
  *
- * Comprehensive settings screen with notifications, privacy,
- * business preferences, and app settings.
+ * Settings screen with notifications, privacy & security,
+ * and account management (deactivate/delete).
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, ScrollView, TouchableOpacity, StyleSheet, Alert, Modal, TextInput, ActivityIndicator, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
-import * as Notifications from 'expo-notifications';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { moderateScale, scale, verticalScale } from 'react-native-size-matters';
@@ -19,11 +17,13 @@ import { COLORS } from '@/constants/colors';
 import Text from '@/components/common/Text';
 import { useAppDispatch } from '@/hooks/useAppDispatch';
 import { deleteAccount, changePassword, deactivateAccount } from '@/store/slices/authSlice';
+import * as Notifications from 'expo-notifications';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Storage key for notification preference
-const PUSH_NOTIFICATION_KEY = 'vendor_push_notifications';
+const PUSH_NOTIFICATION_KEY = 'customer_push_notifications';
 
-export default function AccountSettingsScreen() {
+export default function CustomerSettingsScreen() {
     const router = useRouter();
     const dispatch = useAppDispatch();
 
@@ -78,8 +78,7 @@ export default function AccountSettingsScreen() {
         }
     };
 
-    // Handle push notification toggle
-    const handlePushNotificationToggle = useCallback(async (enabled: boolean) => {
+    const handlePushNotificationToggle = async (enabled: boolean) => {
         if (enabled) {
             // Request notification permissions
             const { status: existingStatus } = await Notifications.getPermissionsAsync();
@@ -119,7 +118,7 @@ export default function AccountSettingsScreen() {
         if (__DEV__) {
             console.log('[Settings] Push notifications:', enabled ? 'enabled' : 'disabled');
         }
-    }, []);
+    };
 
     const handleOpenPasswordModal = () => {
         setShowPasswordModal(true);
@@ -248,7 +247,7 @@ export default function AccountSettingsScreen() {
                     <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
                         <Ionicons name="arrow-back" size={24} color={COLORS.white} />
                     </TouchableOpacity>
-                    <Text type="title" style={styles.headerTitle}>Account Settings</Text>
+                    <Text type="title" style={styles.headerTitle}>Settings</Text>
                     <View style={styles.headerSpacer} />
                 </View>
             </LinearGradient>
@@ -282,22 +281,6 @@ export default function AccountSettingsScreen() {
                             type="navigation"
                             onPress={handleOpenPasswordModal}
                         />
-                        {/* <SettingItem
-                            icon="shield-checkmark-outline"
-                            label="Two-Factor Authentication"
-                            subtitle="Add an extra layer of security"
-                            type="toggle"
-                            value={false}
-                            onValueChange={handleTwoFactor}
-                        /> */}
-                        {/* <SettingItem
-                            icon="eye-outline"
-                            label="Account Visibility"
-                            subtitle="Control who can see your profile"
-                            type="navigation"
-                            onPress={() => Alert.alert('Coming Soon')}
-                            value="Public"
-                        /> */}
                         <SettingItem
                             icon="document-text-outline"
                             label="Data & Privacy"
@@ -308,91 +291,6 @@ export default function AccountSettingsScreen() {
                         />
                     </View>
                 </View>
-
-                {/* Business Preferences Section */}
-                {/* <View style={styles.section}>
-                    <Text type="title" style={styles.sectionTitle}>Business Preferences</Text>
-                    <View style={styles.settingsGroup}>
-                        <SettingItem
-                            icon="flash-outline"
-                            label="Auto-Accept Requests"
-                            subtitle="Automatically accept matching requests"
-                            type="toggle"
-                            value={autoAccept}
-                            onValueChange={setAutoAccept}
-                            badge="PRO"
-                            badgeColor={COLORS.accent}
-                        />
-                        <SettingItem
-                            icon="navigate-outline"
-                            label="Maximum Travel Distance"
-                            subtitle="Set your service radius"
-                            type="navigation"
-                            onPress={() => Alert.alert('Coming Soon')}
-                            value="20 km"
-                        />
-                        <SettingItem
-                            icon="time-outline"
-                            label="Response Time Target"
-                            subtitle="Your preferred response speed"
-                            type="navigation"
-                            onPress={() => Alert.alert('Coming Soon')}
-                            value="Fast"
-                        />
-                        <SettingItem
-                            icon="calendar-outline"
-                            label="Working Hours"
-                            subtitle="Set your availability schedule"
-                            type="navigation"
-                            onPress={() => Alert.alert('Coming Soon')}
-                            value="9 AM - 6 PM"
-                            showDivider={false}
-                        />
-                    </View>
-                </View> */}
-
-                {/* App Settings Section */}
-                {/* <View style={styles.section}>
-                    <Text type="title" style={styles.sectionTitle}>App Settings</Text>
-                    <View style={styles.settingsGroup}>
-                        <SettingItem
-                            icon="language-outline"
-                            label="Language"
-                            subtitle="Choose your preferred language"
-                            type="navigation"
-                            onPress={() => Alert.alert('Coming Soon')}
-                            value="English"
-                        />
-                        <SettingItem
-                            icon="moon-outline"
-                            label="Dark Mode"
-                            subtitle="Switch to dark theme"
-                            type="toggle"
-                            value={false}
-                            onValueChange={() => Alert.alert('Coming Soon')}
-                            disabled
-                            badge="SOON"
-                            badgeColor={COLORS.info}
-                        />
-                        <SettingItem
-                            icon="volume-high-outline"
-                            label="Notification Sound"
-                            subtitle="Play sound for notifications"
-                            type="toggle"
-                            value={notificationSound}
-                            onValueChange={setNotificationSound}
-                        />
-                        <SettingItem
-                            icon="phone-portrait-outline"
-                            label="Haptic Feedback"
-                            subtitle="Vibration for interactions"
-                            type="toggle"
-                            value={hapticFeedback}
-                            onValueChange={setHapticFeedback}
-                            showDivider={false}
-                        />
-                    </View>
-                </View> */}
 
                 {/* Danger Zone Section */}
                 <View style={styles.section}>
@@ -420,7 +318,7 @@ export default function AccountSettingsScreen() {
 
                 {/* App Version */}
                 <View style={styles.versionSection}>
-                    <Text type="body" style={styles.versionText}>RefynHome Vendor v1.0.0</Text>
+                    <Text type="body" style={styles.versionText}>RefynHome v1.0.0</Text>
                     <Text type="body" style={styles.versionSubtext}>© 2024 RefynHome. All rights reserved.</Text>
                 </View>
             </ScrollView>
@@ -439,7 +337,7 @@ export default function AccountSettingsScreen() {
                         </View>
                         <Text type="title" style={styles.modalTitle}>Delete Account</Text>
                         <Text type="body" style={styles.modalDescription}>
-                            This action is permanent and cannot be undone. All your data, service history, and profile information will be permanently deleted.
+                            This action is permanent and cannot be undone. All your data, service history, and favorites will be permanently deleted.
                         </Text>
                         <Text type="body" style={styles.modalPasswordLabel}>
                             Enter your password to confirm:
@@ -653,7 +551,7 @@ export default function AccountSettingsScreen() {
                         </View>
                         <Text type="title" style={styles.modalTitle}>Deactivate Account</Text>
                         <Text type="body" style={styles.modalDescription}>
-                            Your account will be temporarily disabled. You won't be able to log in until an admin reactivates your account. Your data will be preserved.
+                            Your account will be temporarily disabled. You won't be able to log in until you reactivate your account. Your data will be preserved.
                         </Text>
                         <Text type="body" style={styles.modalPasswordLabel}>
                             Enter your password to confirm:

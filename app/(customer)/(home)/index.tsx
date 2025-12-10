@@ -23,7 +23,11 @@ import { ServiceCard } from '@/components/customer/ServiceCard';
 import { useCurrentLocation } from '@/hooks/useCurrentLocation';
 import { updateProfile } from '@/store/slices/authSlice';
 import { AddressSearchBottomSheet } from '@/components/customer/AddressSearchBottomSheet';
-import { getCustomerActiveService, clearCustomerActiveService } from '@/services/customerActiveServiceService';
+import {
+  getCustomerActiveService,
+  clearCustomerActiveService,
+  isActiveServiceExpired,
+} from '@/services/customerActiveServiceService';
 // import { useAppSelector } from '@/store/hooks';
 // import { useGetServiceHistoryQuery } from '@/services/customerApi';
 // import { SERVICE_TYPES } from '@/utils/constants';
@@ -51,21 +55,60 @@ export default function CustomerHomeScreen() {
         const activeService = await getCustomerActiveService();
 
         if (activeService) {
+          // Check if request has already expired (based on stored expiresAt)
+          const isExpired = await isActiveServiceExpired();
+
+          if (isExpired && activeService.status !== 'accepted') {
+            // Request expired and no proposal was accepted - clear storage
+            if (__DEV__) {
+              console.log('[CustomerHome] Active service expired, clearing storage');
+            }
+            await clearCustomerActiveService();
+            setCheckingActiveService(false);
+            return;
+          }
+
           if (__DEV__) {
             console.log('[CustomerHome] Found active service, redirecting to live-offers:', activeService);
           }
 
-          // Redirect to live-offers with the stored data
+          // Redirect to live-offers with the stored data (including retry params)
+          // Pass status and expiresAt for proper state restoration
           router.replace({
             pathname: '/(customer)/(home)/live-offers',
             params: {
               requestId: activeService.requestId.toString(),
+              // Pass expiresAt for timer restoration
+              ...(activeService.expiresAt && {
+                expiresAt: activeService.expiresAt,
+              }),
+              // Pass status for state restoration
+              ...(activeService.status && {
+                restoredStatus: activeService.status,
+              }),
               ...(activeService.serviceLocation && {
                 latitude: activeService.serviceLocation.latitude.toString(),
                 longitude: activeService.serviceLocation.longitude.toString(),
               }),
               ...(activeService.serviceAddress && {
                 address: activeService.serviceAddress,
+              }),
+              // Retry params for Search Again functionality
+              ...(activeService.categoryId && {
+                categoryId: activeService.categoryId.toString(),
+              }),
+              ...(activeService.problemTitle && {
+                problemTitle: activeService.problemTitle,
+              }),
+              ...(activeService.description !== undefined && {
+                description: activeService.description,
+              }),
+              // Pass acceptance data if available (for cancel window restoration)
+              ...(activeService.proposalId && {
+                proposalId: activeService.proposalId.toString(),
+              }),
+              ...(activeService.acceptedAt && {
+                acceptedAtTimestamp: activeService.acceptedAt.toString(),
               }),
             },
           });

@@ -13,8 +13,8 @@ const GOOGLE_PLACES_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY || '
 const AUTOCOMPLETE_URL = 'https://maps.googleapis.com/maps/api/place/autocomplete/json';
 const DETAILS_URL = 'https://maps.googleapis.com/maps/api/place/details/json';
 
-// Request timeout (10 seconds)
-const TIMEOUT = 10000;
+// Request timeout (15 seconds - increased for slower networks)
+const TIMEOUT = 15000;
 
 // Google Places API response types
 interface GooglePrediction {
@@ -152,15 +152,20 @@ class GooglePlacesService {
                 );
             }
 
-            // Limit results
-            const predictions = data.predictions.slice(0, options?.limit || 7);
+            // Limit results to max 5 to reduce parallel API calls
+            const predictions = data.predictions.slice(0, Math.min(options?.limit || 5, 5));
 
-            // Get details for each prediction to get coordinates
-            const addresses = await Promise.all(
-                predictions.map(p => this.getPlaceDetails(p))
-            );
+            // Get details for each prediction sequentially to avoid timeout issues
+            // on slower networks (parallel calls can overwhelm the connection)
+            const addresses: Address[] = [];
+            for (const prediction of predictions) {
+                const address = await this.getPlaceDetails(prediction);
+                if (address) {
+                    addresses.push(address);
+                }
+            }
 
-            return addresses.filter((a): a is Address => a !== null);
+            return addresses;
         } catch (error) {
             console.log("🚀 ~ GooglePlacesService ~ forwardGeocode ~ error:", error)
             throw this.handleError(error);

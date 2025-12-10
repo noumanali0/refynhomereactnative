@@ -2,33 +2,105 @@
  * Favorite Vendors API Service
  *
  * Handles all API calls related to favorite vendors functionality.
+ * Transforms backend responses to frontend-compatible formats.
  */
 
 import { apiClient, getErrorMessage } from '@/api/client';
 import { FAVORITE_ENDPOINTS } from '@/api/endpoints';
-import type { SocketVendor } from '@/types/socket';
 
 // ============================================================================
-// TYPES
+// BACKEND RESPONSE TYPES (What the API actually returns)
 // ============================================================================
 
+/**
+ * Backend VendorProfile model serializer response
+ */
+interface BackendVendorProfile {
+  id: number;
+  verified: boolean;
+  cnic: string | null;
+  city: string | null;
+  bio: string | null;
+  profile_photo: string | null;
+  id_verification_photo: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  service_radius_km: number;
+  location_updated_at: string | null;
+  average_rating: number;
+  total_reviews: number;
+  completed_jobs: number;
+}
+
+/**
+ * Backend FavoriteVendorSerializer response
+ * This is the actual structure returned by the backend for each vendor
+ */
+interface BackendFavoriteVendor {
+  id: number;
+  phone: string;
+  first_name: string;
+  last_name: string;
+  role: string;
+  address: string | null;
+  city: string | null;
+  vendor_profile: BackendVendorProfile | null;
+}
+
+/**
+ * Backend LIST response: { count, results }
+ */
+interface ListFavoritesBackendResponse {
+  count: number;
+  results: BackendFavoriteVendor[];
+}
+
+/**
+ * Backend ADD/REMOVE response: { message, vendor, is_favorite }
+ */
+interface MutateFavoriteBackendResponse {
+  message: string;
+  detail?: string;
+  vendor: BackendFavoriteVendor;
+  is_favorite: boolean;
+}
+
+// ============================================================================
+// FRONTEND TYPES (What the UI components expect)
+// ============================================================================
+
+/**
+ * Normalized vendor data for UI consumption
+ */
+export interface VendorData {
+  id: number;
+  phone: string;
+  full_name: string;
+  first_name: string;
+  last_name: string;
+  verified: boolean;
+  average_rating: number;
+  total_reviews: number;
+  completed_jobs: number;
+  profile_photo_url: string | null;
+  service_radius_km: number;
+  city: string | null;
+  bio: string | null;
+}
+
+/**
+ * Frontend favorite vendor structure
+ */
 export interface FavoriteVendor {
   id: number;
   vendor_id: number;
-  vendor: {
-    id: number;
-    phone: string;
-    full_name: string;
-    verified: boolean;
-    average_rating: number;
-    total_reviews: number;
-    completed_jobs: number;
-    profile_photo_url: string | null;
-    service_radius_km: number;
-  };
+  vendor: VendorData;
   created_at: string;
 }
 
+/**
+ * Frontend response for add favorite
+ */
 export interface AddFavoriteResponse {
   message: string;
   favorite: FavoriteVendor;
@@ -39,31 +111,98 @@ export interface CheckFavoriteResponse {
 }
 
 // ============================================================================
+// TRANSFORMERS (Convert backend to frontend format)
+// ============================================================================
+
+/**
+ * Transform backend vendor to frontend VendorData format
+ */
+function transformToVendorData(backendVendor: BackendFavoriteVendor): VendorData {
+  const profile = backendVendor.vendor_profile;
+
+  return {
+    id: backendVendor.id,
+    phone: backendVendor.phone,
+    full_name: `${backendVendor.first_name || ''} ${backendVendor.last_name || ''}`.trim() || 'Unknown Vendor',
+    first_name: backendVendor.first_name || '',
+    last_name: backendVendor.last_name || '',
+    verified: profile?.verified ?? false,
+    average_rating: profile?.average_rating ?? 0,
+    total_reviews: profile?.total_reviews ?? 0,
+    completed_jobs: profile?.completed_jobs ?? 0,
+    profile_photo_url: profile?.profile_photo ?? null,
+    service_radius_km: profile?.service_radius_km ?? 10,
+    city: profile?.city ?? backendVendor.city ?? null,
+    bio: profile?.bio ?? null,
+  };
+}
+
+/**
+ * Transform backend vendor to FavoriteVendor format
+ */
+function transformToFavoriteVendor(backendVendor: BackendFavoriteVendor): FavoriteVendor {
+  return {
+    id: backendVendor.id,
+    vendor_id: backendVendor.id,
+    vendor: transformToVendorData(backendVendor),
+    created_at: new Date().toISOString(),
+  };
+}
+
+// ============================================================================
 // API FUNCTIONS
 // ============================================================================
 
 /**
  * Get list of favorite vendors for current customer
+ * Backend returns: { count, results: BackendFavoriteVendor[] }
+ * We transform to: FavoriteVendor[]
  */
 export async function getFavoriteVendors(): Promise<FavoriteVendor[]> {
   try {
-    const response = await apiClient.get<FavoriteVendor[]>(FAVORITE_ENDPOINTS.LIST);
-    return response.data;
+    const response = await apiClient.get<ListFavoritesBackendResponse>(FAVORITE_ENDPOINTS.LIST);
+
+    // Handle edge case: backend might return empty results
+    if (!response.data?.results || !Array.isArray(response.data.results)) {
+      return [];
+    }
+
+    // Transform each vendor to frontend format
+    return response.data.results.map(transformToFavoriteVendor);
   } catch (error) {
+    if (__DEV__) {
+      console.error('[FavoriteService] getFavoriteVendors error:', error);
+    }
     throw new Error(getErrorMessage(error));
   }
 }
 
 /**
  * Add a vendor to favorites
+ * Backend returns: { message, vendor, is_favorite }
+ * We transform to: { message, favorite: FavoriteVendor }
  */
 export async function addFavoriteVendor(vendorId: number): Promise<AddFavoriteResponse> {
   try {
-    const response = await apiClient.post<AddFavoriteResponse>(FAVORITE_ENDPOINTS.ADD, {
+    const response = await apiClient.post<MutateFavoriteBackendResponse>(FAVORITE_ENDPOINTS.ADD, {
       vendor_id: vendorId,
     });
-    return response.data;
+
+    const backendData = response.data;
+
+    // Handle case where vendor might not exist in response
+    if (!backendData.vendor) {
+      throw new Error(backendData.detail || backendData.message || 'Failed to add vendor to favorites');
+    }
+
+    return {
+      message: backendData.message || 'Vendor added to favorites',
+      favorite: transformToFavoriteVendor(backendData.vendor),
+    };
   } catch (error) {
+    if (__DEV__) {
+      console.error('[FavoriteService] addFavoriteVendor error:', error);
+    }
     throw new Error(getErrorMessage(error));
   }
 }
@@ -75,20 +214,26 @@ export async function removeFavoriteVendor(vendorId: number): Promise<void> {
   try {
     await apiClient.delete(FAVORITE_ENDPOINTS.REMOVE(vendorId));
   } catch (error) {
+    if (__DEV__) {
+      console.error('[FavoriteService] removeFavoriteVendor error:', error);
+    }
     throw new Error(getErrorMessage(error));
   }
 }
 
 /**
  * Check if a vendor is in favorites
+ * Note: This endpoint may not exist in backend - handles gracefully
  */
 export async function checkIsFavorite(vendorId: number): Promise<boolean> {
   try {
     const response = await apiClient.get<CheckFavoriteResponse>(FAVORITE_ENDPOINTS.CHECK(vendorId));
-    return response.data.is_favorite;
+    return response.data.is_favorite ?? false;
   } catch (error) {
-    // If endpoint doesn't exist, assume not favorite
-    console.warn('[FavoriteService] Check favorite failed:', getErrorMessage(error));
+    // If endpoint doesn't exist or any error, assume not favorite
+    if (__DEV__) {
+      console.warn('[FavoriteService] checkIsFavorite failed (assuming false):', getErrorMessage(error));
+    }
     return false;
   }
 }
@@ -109,6 +254,9 @@ export async function toggleFavoriteVendor(vendorId: number): Promise<boolean> {
       return true;
     }
   } catch (error) {
+    if (__DEV__) {
+      console.error('[FavoriteService] toggleFavoriteVendor error:', error);
+    }
     throw new Error(getErrorMessage(error));
   }
 }

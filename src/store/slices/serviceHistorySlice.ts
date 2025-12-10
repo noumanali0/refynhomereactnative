@@ -51,7 +51,6 @@ export const fetchServiceHistory = createAsyncThunk(
   async (filters: ServiceHistoryFilters | undefined, { rejectWithValue }) => {
     try {
       const response = await serviceHistoryService.getHistory(filters);
-      console.log("🚀 ~ response:", response)
       return {
         requests: response.results,
         hasMore: response.next !== null,
@@ -242,12 +241,29 @@ export const selectFilteredHistory = (state: { serviceHistory: ServiceHistorySta
 export const selectHistoryStats = (state: { serviceHistory: ServiceHistoryState }) => {
   const { requests } = state.serviceHistory;
 
+  // Calculate this month's completed services
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const thisMonthCompleted = requests.filter(r => {
+    if (r.status !== 'completed') return false;
+    const completedDate = r.completed_at ? new Date(r.completed_at) : new Date(r.updated_at);
+    return completedDate >= startOfMonth;
+  }).length;
+
+  const activeCount = requests.filter(r =>
+    ['pending', 'accepted', 'en_route', 'in_progress'].includes(r.status)
+  ).length;
+  const completedCount = requests.filter(r => r.status === 'completed').length;
+
   return {
     total: requests.length,
-    active: requests.filter(r =>
-      ['pending', 'accepted', 'en_route', 'in_progress'].includes(r.status)
-    ).length,
-    completed: requests.filter(r => r.status === 'completed').length,
+    // New field names expected by UI
+    totalActive: activeCount,
+    totalCompleted: completedCount,
+    thisMonth: thisMonthCompleted,
+    // Keep old field names for backward compatibility
+    active: activeCount,
+    completed: completedCount,
     cancelled: requests.filter(r => ['cancelled', 'expired'].includes(r.status)).length,
   };
 };
