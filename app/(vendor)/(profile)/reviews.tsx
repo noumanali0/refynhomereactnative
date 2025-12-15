@@ -4,15 +4,16 @@
  *
  * Displays all reviews for the vendor with filtering and sorting options.
  * Shows rating distribution and allows filtering by star rating.
+ * Fetches data from /api/vendors/{id}/reviews/ endpoint
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
     View,
     ScrollView,
     TouchableOpacity,
     StyleSheet,
-    FlatList,
+    ActivityIndicator,
     RefreshControl,
 } from 'react-native';
 import Text from '@/components/common/Text';
@@ -20,13 +21,22 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { moderateScale, scale, verticalScale } from 'react-native-size-matters';
-import { useSelector } from 'react-redux';
-import type { RootState } from '@/store';
+import { useSelector, useDispatch } from 'react-redux';
+import type { RootState, AppDispatch } from '@/store';
 import { RatingStars } from '@/components/common/RatingStars';
 import { RatingDistribution } from '@/components/vendor/RatingDistribution';
 import { ReviewCard } from '@/components/vendor/ReviewCard';
 import { COLORS } from '@/constants/colors';
-import type { Review } from '@/types';
+import {
+    fetchVendorReviews,
+    selectVendorReviews,
+    selectIsLoadingVendorReviews,
+    selectVendorReviewsError,
+    selectVendorReviewsCount,
+    selectVendorReviewsDistribution,
+    selectVendorAverageRating,
+    clearVendorReviews,
+} from '@/store/slices/reviewSlice';
 
 // ============================================================================
 // Types
@@ -41,6 +51,7 @@ type FilterOption = 'all' | 1 | 2 | 3 | 4 | 5;
 
 export default function ReviewsScreen() {
     const router = useRouter();
+    const dispatch = useDispatch<AppDispatch>();
     const [refreshing, setRefreshing] = useState(false);
     const [sortBy, setSortBy] = useState<SortOption>('latest');
     const [filterByStar, setFilterByStar] = useState<FilterOption>('all');
@@ -48,77 +59,74 @@ export default function ReviewsScreen() {
     // Get current vendor from auth state
     const currentUser = useSelector((state: RootState) => state.auth.user);
 
-    // Extract vendor profile from user data
-    const vendorProfile = useMemo(() => {
+    // Get vendor reviews from Redux
+    const vendorReviews = useSelector(selectVendorReviews);
+    const isLoading = useSelector(selectIsLoadingVendorReviews);
+    const error = useSelector(selectVendorReviewsError);
+    const totalCount = useSelector(selectVendorReviewsCount);
+    const distribution = useSelector(selectVendorReviewsDistribution);
+    const averageRating = useSelector(selectVendorAverageRating);
+
+    // Extract vendor ID from user data
+    const vendorId = useMemo(() => {
         if (!currentUser) return null;
-        const profile = (currentUser as any).vendorProfile || (currentUser as any).vendor_profile;
-        return {
-            id: currentUser.uid || (currentUser as any).id,
-            name: `${(currentUser as any).first_name || ''} ${(currentUser as any).last_name || ''}`.trim() || 'Vendor',
-            rating: profile?.average_rating || 0,
-            totalReviews: profile?.total_reviews || 0,
-        };
+        return (currentUser as any).id || (currentUser as any).uid;
     }, [currentUser]);
 
-    // Get all reviews for this vendor - safely access with fallback
-    // TODO: Fetch reviews from /api/vendors/{id}/reviews/ endpoint
-    const allReviews = useSelector((state: RootState) => state.review?.reviews) || [];
-    const vendorReviews = useMemo(() => {
-        if (!allReviews || !Array.isArray(allReviews)) return [];
-        return allReviews.filter(r => r.vendorId === vendorProfile?.id);
-    }, [allReviews, vendorProfile]);
+    // Fetch reviews on mount and when filter/sort changes
+    const fetchReviews = useCallback(async () => {
+        if (!vendorId) return;
 
-    // Calculate rating distribution
+        await dispatch(fetchVendorReviews({
+            vendorId,
+            stars: filterByStar === 'all' ? undefined : filterByStar,
+            sort: sortBy,
+        }));
+    }, [dispatch, vendorId, filterByStar, sortBy]);
+
+    // Fetch reviews on mount
+    useEffect(() => {
+        fetchReviews();
+
+        // Cleanup on unmount
+        return () => {
+            dispatch(clearVendorReviews());
+        };
+    }, []);
+
+    // Re-fetch when filter or sort changes
+    useEffect(() => {
+        fetchReviews();
+    }, [filterByStar, sortBy]);
+
+    // Convert distribution from string keys to number keys for RatingDistribution component
     const ratingDistribution = useMemo(() => {
-        const dist = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
-        vendorReviews.forEach(review => {
-            const rating = Math.floor(review.rating) as 1 | 2 | 3 | 4 | 5;
-            if (rating >= 1 && rating <= 5) {
-                dist[rating]++;
-            }
-        });
-        return dist;
-    }, [vendorReviews]);
+        return {
+            5: distribution['5'] || 0,
+            4: distribution['4'] || 0,
+            3: distribution['3'] || 0,
+            2: distribution['2'] || 0,
+            1: distribution['1'] || 0,
+        };
+    }, [distribution]);
 
-    // Calculate average rating
-    const averageRating = useMemo(() => {
-        if (vendorReviews.length === 0) return 0;
-        const total = vendorReviews.reduce((sum, review) => sum + review.rating, 0);
-        return total / vendorReviews.length;
-    }, [vendorReviews]);
-
-    // Filter and sort reviews
+    // Map vendor reviews to the format expected by ReviewCard
     const processedReviews = useMemo(() => {
-        let filtered = [...vendorReviews];
-
-        // Apply star filter
-        if (filterByStar !== 'all') {
-            filtered = filtered.filter(r => Math.floor(r.rating) === filterByStar);
-        }
-
-        // Apply sort
-        switch (sortBy) {
-            case 'latest':
-                filtered.sort((a, b) =>
-                    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-                );
-                break;
-            case 'highest':
-                filtered.sort((a, b) => b.rating - a.rating);
-                break;
-            case 'lowest':
-                filtered.sort((a, b) => a.rating - b.rating);
-                break;
-        }
-
-        return filtered;
-    }, [vendorReviews, filterByStar, sortBy]);
+        return vendorReviews.map(review => ({
+            id: review.id,
+            rating: review.rating,
+            comment: review.comment,
+            createdAt: review.createdAt,
+            customerName: review.customer?.name || 'Customer',
+            customerPhoto: review.customer?.photo_url,
+            serviceCategory: review.service_category,
+        }));
+    }, [vendorReviews]);
 
     // Handle refresh
     const onRefresh = async () => {
         setRefreshing(true);
-        // Simulate API call
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await fetchReviews();
         setRefreshing(false);
     };
 
@@ -245,7 +253,7 @@ export default function ReviewsScreen() {
                             </Text>
                             <RatingStars rating={averageRating} size="large" />
                             <Text type="body" style={styles.overviewCount}>
-                                Based on {vendorReviews.length} reviews
+                                Based on {totalCount} reviews
                             </Text>
                         </View>
                     </View>
@@ -254,7 +262,7 @@ export default function ReviewsScreen() {
                     <View style={styles.distributionSection}>
                         <RatingDistribution
                             distribution={ratingDistribution}
-                            totalReviews={vendorReviews.length}
+                            totalReviews={totalCount}
                             interactive={true}
                             onStarPress={handleStarFilter}
                         />
@@ -293,7 +301,7 @@ export default function ReviewsScreen() {
                                     filterByStar === 'all' && styles.filterChipCountActive,
                                 ]}
                             >
-                                ({vendorReviews.length})
+                                ({totalCount})
                             </Text>
                         </TouchableOpacity>
                         {[5, 4, 3, 2, 1].map(renderFilterChip)}
@@ -312,7 +320,20 @@ export default function ReviewsScreen() {
 
                 {/* Reviews List */}
                 <View style={styles.reviewsSection}>
-                    {processedReviews.length > 0 ? (
+                    {isLoading && processedReviews.length === 0 ? (
+                        <View style={styles.loadingContainer}>
+                            <ActivityIndicator size="large" color={COLORS.primary} />
+                            <Text type="body" style={styles.loadingText}>Loading reviews...</Text>
+                        </View>
+                    ) : error ? (
+                        <View style={styles.errorContainer}>
+                            <Ionicons name="alert-circle-outline" size={48} color={COLORS.error} />
+                            <Text type="body" style={styles.errorText}>{error}</Text>
+                            <TouchableOpacity style={styles.retryButton} onPress={fetchReviews}>
+                                <Text type="button" style={styles.retryButtonText}>Retry</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : processedReviews.length > 0 ? (
                         processedReviews.map((review) => (
                             <ReviewCard
                                 key={review.id}
@@ -411,6 +432,8 @@ const styles = StyleSheet.create({
         fontSize: moderateScale(56),
         fontWeight: '800',
         color: COLORS.gray900,
+        lineHeight: moderateScale(64),
+        includeFontPadding: false,
     },
     overviewCount: {
         fontSize: moderateScale(13),
@@ -541,6 +564,38 @@ const styles = StyleSheet.create({
         borderRadius: moderateScale(10),
     },
     clearFilterText: {
+        fontSize: moderateScale(14),
+        fontWeight: '600',
+        color: COLORS.white,
+    },
+    loadingContainer: {
+        alignItems: 'center',
+        paddingVertical: verticalScale(60),
+    },
+    loadingText: {
+        marginTop: verticalScale(12),
+        fontSize: moderateScale(14),
+        color: COLORS.gray600,
+    },
+    errorContainer: {
+        alignItems: 'center',
+        paddingVertical: verticalScale(60),
+        paddingHorizontal: scale(32),
+    },
+    errorText: {
+        marginTop: verticalScale(12),
+        fontSize: moderateScale(14),
+        color: COLORS.gray600,
+        textAlign: 'center',
+    },
+    retryButton: {
+        marginTop: verticalScale(16),
+        paddingVertical: verticalScale(10),
+        paddingHorizontal: scale(24),
+        backgroundColor: COLORS.primary,
+        borderRadius: moderateScale(10),
+    },
+    retryButtonText: {
         fontSize: moderateScale(14),
         fontWeight: '600',
         color: COLORS.white,

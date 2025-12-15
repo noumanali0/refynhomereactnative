@@ -10,12 +10,12 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import {
     View,
-    ScrollView,
     TouchableOpacity,
     StyleSheet,
     Image,
     Alert,
     ActivityIndicator,
+    ScrollView
 } from 'react-native';
 import Text from '@/components/common/Text';
 import { useRouter } from 'expo-router';
@@ -61,6 +61,7 @@ export default function VendorProfileScreen() {
 
         // Build a vendor profile object from user data
         const profile = (user as any).vendorProfile || (user as any).vendor_profile;
+        console.log("🚀 ~ VendorProfileScreen ~ profile:", profile)
 
         return {
             id: user.uid || (user as any).id,
@@ -68,16 +69,20 @@ export default function VendorProfileScreen() {
             phone: (user as any).phone || '',
             city: profile?.city || (user as any).city || 'Unknown',
             bio: profile?.bio || '',
-            profilePhoto: profile?.profile_photo || null,
+            profilePhoto: profile?.profilePhoto || null,
             verified: profile?.verified || false,
             rating: profile?.average_rating || 0,
             totalReviews: profile?.total_reviews || 0,
             completedJobs: profile?.completed_jobs || 0,
-            serviceCategories: [], // Will be fetched separately if needed
+            serviceCategories: profile?.categories || [],
             isOnline: true,
             subscriptionTier: (user as any).subscription_tier || 'basic',
+            serviceRadius: profile?.service_radius_km || profile?.serviceRadiusKm || 10,
+            memberSince: profile?.member_since || null,
+            activeRequests: profile?.active_requests || 0,
         };
     }, [user]);
+    console.log("🚀 ~ VendorProfileScreen ~ vendorProfile:", vendorProfile)
 
     // Get all reviews for this vendor
     // Note: Reviews are now fetched from API when needed
@@ -110,12 +115,12 @@ export default function VendorProfileScreen() {
         return vendorProfile.serviceCategories || [];
     }, [vendorProfile]);
 
-    // Stats from real user data
+    // Stats from real user data (now fetched from API)
     const stats = useMemo(() => ({
         jobsCompleted: vendorProfile?.completedJobs || 0,
-        responseRate: 95, // Would need separate API endpoint
-        memberSince: '2024', // Would need to get from user creation date
-        activeRequests: 0, // Would need separate API endpoint
+        // responseRate: 95, // Commented out - not yet implemented in backend
+        memberSince: vendorProfile?.memberSince || 'N/A',
+        activeRequests: vendorProfile?.activeRequests || 0,
     }), [vendorProfile]);
 
     if (isLoading && !vendorProfile) {
@@ -179,6 +184,10 @@ export default function VendorProfileScreen() {
         router.push('/(vendor)/(subscriptions)');
     };
 
+    const handleServiceRadius = () => {
+        router.push('/(vendor)/(profile)/service-radius');
+    };
+
     const handleSettings = () => {
         router.push('/(vendor)/(profile)/settings');
         // Alert.alert('Settings', 'Settings screen coming soon!');
@@ -208,8 +217,8 @@ export default function VendorProfileScreen() {
                         try {
                             await dispatch(logoutUser()).unwrap();
                             clearTimeout(logoutTimeout);
-                            // Navigation will be handled by _layout.tsx automatically
-                            router.replace('/(auth)/login');
+                            // Navigation is handled by _layout.tsx automatically when isAuthenticated becomes false
+                            // No need to call router.replace here - _layout.tsx will redirect to login
                         } catch (error: any) {
                             clearTimeout(logoutTimeout);
                             Alert.alert('Logout Failed', error.message || 'Failed to logout');
@@ -223,8 +232,8 @@ export default function VendorProfileScreen() {
     };
 
     return (
-        <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-            {/* Header Gradient Background */}
+        <View style={styles.container}>
+            {/* Header Gradient Background - Fixed at top */}
             <LinearGradient
                 colors={[COLORS.primary, COLORS.accent]}
                 start={{ x: 0, y: 0 }}
@@ -235,8 +244,14 @@ export default function VendorProfileScreen() {
                 <Text type="subtitle" style={styles.headerSubtitle}>Manage your professional information</Text>
             </LinearGradient>
 
-            {/* Profile Card */}
-            <View style={styles.profileCard}>
+            {/* Scrollable Content */}
+            <ScrollView
+                style={styles.scrollView}
+                contentContainerStyle={styles.contentContainer}
+                showsVerticalScrollIndicator={false}
+            >
+                {/* Profile Card */}
+                <View style={styles.profileCard}>
                 {/* Profile Photo Section */}
                 <TouchableOpacity
                     style={styles.profilePhotoSection}
@@ -349,12 +364,13 @@ export default function VendorProfileScreen() {
                     value={stats.jobsCompleted.toString()}
                     color={COLORS.success}
                 />
-                <DashboardStatTile
+                {/* Response Rate - Commented out until backend implements it */}
+                {/* <DashboardStatTile
                     icon={<Ionicons name="trending-up" size={24} color={COLORS.primary} />}
                     label="Response Rate"
                     value={`${stats.responseRate}%`}
                     color={COLORS.primary}
-                />
+                /> */}
                 <DashboardStatTile
                     icon={<Ionicons name="calendar" size={24} color={COLORS.accent} />}
                     label="Member Since"
@@ -373,14 +389,14 @@ export default function VendorProfileScreen() {
             <View style={styles.section}>
                 <Text type="bodySemiBold" style={styles.sectionTitle}>Services Offered</Text>
                 <View style={styles.servicesContainer}>
-                    {serviceCategories.map((service, index) => (
+                    {serviceCategories.map((service: { id: number; name: string; slug: string }, index: number) => (
                         <View key={service.id || index} style={styles.serviceChip}>
                             <Ionicons
-                                name={service.icon as any}
+                                name="construct-outline"
                                 size={16}
                                 color={COLORS.primary}
                             />
-                            <Text type="bodySemiBold" style={styles.serviceChipText}>{service.label}</Text>
+                            <Text type="bodySemiBold" style={styles.serviceChipText}>{service.name}</Text>
                         </View>
                     ))}
                 </View>
@@ -406,36 +422,43 @@ export default function VendorProfileScreen() {
                 <Text type="bodySemiBold" style={styles.sectionTitle}>Account</Text>
                 <View style={styles.optionsContainer}>
                     <ProfileOption
-                        icon="person-outline"
+                        icon={<Ionicons name="person-outline" size={20} color={COLORS.primary} />}
                         label="Edit Profile"
                         onPress={handleEditProfile}
                     />
                     <ProfileOption
-                        icon="diamond-outline"
+                        icon={<Ionicons name="locate-outline" size={20} color={COLORS.primary} />}
+                        label="Service Radius"
+                        subtitle={`${vendorProfile.serviceRadius} km`}
+                        onPress={handleServiceRadius}
+                    />
+                    <ProfileOption
+                        icon={<Ionicons name="diamond-outline" size={20} color={COLORS.primary} />}
                         label="Subscription Management"
                         onPress={handleSubscription}
                         gradient={vendorProfile.subscriptionTier === 'premium'}
                     />
                     <ProfileOption
-                        icon="settings-outline"
+                        icon={<Ionicons name="settings-outline" size={20} color={COLORS.primary} />}
                         label="Account Settings"
                         onPress={handleSettings}
                     />
                     <ProfileOption
-                        icon="help-circle-outline"
+                        icon={<Ionicons name="help-circle-outline" size={20} color={COLORS.primary} />}
                         label="Help & Support"
                         onPress={() => Alert.alert('Help', 'Support coming soon!')}
                     />
                     <ProfileOption
-                        icon="log-out-outline"
+                        icon={<Ionicons name="log-out-outline" size={20} color={COLORS.error} />}
                         label={isLoggingOut ? "Logging out..." : "Logout"}
                         onPress={handleLogout}
                         danger
-                        disabled={isLoggingOut}
+                        loading={isLoggingOut}
                     />
                 </View>
             </View>
-        </ScrollView>
+            </ScrollView>
+        </View>
     );
 }
 
@@ -448,8 +471,12 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: COLORS.gray50,
     },
+    scrollView: {
+        flex: 1,
+        marginTop: verticalScale(-30),
+    },
     contentContainer: {
-        paddingBottom: verticalScale(32),
+        paddingBottom: verticalScale(22),
     },
     loadingContainer: {
         flex: 1,
@@ -462,8 +489,8 @@ const styles = StyleSheet.create({
         color: COLORS.gray600,
     },
     headerGradient: {
-        paddingTop: verticalScale(60),
-        paddingBottom: verticalScale(100),
+        paddingTop: verticalScale(30),
+        paddingBottom: verticalScale(80),
         paddingHorizontal: scale(20),
         borderBottomLeftRadius: moderateScale(24),
         borderBottomRightRadius: moderateScale(24),
@@ -484,13 +511,14 @@ const styles = StyleSheet.create({
         borderRadius: moderateScale(20),
         padding: scale(20),
         marginHorizontal: scale(16),
-        marginTop: verticalScale(-60),
+        marginTop: verticalScale(0),
         shadowColor: COLORS.black,
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.1,
         shadowRadius: 12,
         elevation: 5,
         alignItems: 'center',
+        zIndex: 10,
     },
     profilePhotoSection: {
         marginBottom: verticalScale(16),
@@ -608,6 +636,7 @@ const styles = StyleSheet.create({
         fontSize: moderateScale(48),
         fontWeight: '800',
         color: COLORS.gray900,
+        lineHeight: moderateScale(56),
     },
     totalReviewsText: {
         fontSize: moderateScale(13),

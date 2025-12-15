@@ -144,9 +144,12 @@ export default function CustomerSettingsScreen() {
         try {
             await dispatch(deactivateAccount(deactivatePassword)).unwrap();
             setShowDeactivateModal(false);
-            router.replace("/(auth)/login");
+            // Navigation is handled by _layout.tsx automatically when isAuthenticated becomes false
         } catch (error: any) {
-            setDeactivateError(error || 'Failed to deactivate account');
+            const message = typeof error === 'string'
+                ? error
+                : error?.message || 'Failed to deactivate account';
+            setDeactivateError(message);
         } finally {
             setIsDeactivating(false);
         }
@@ -182,7 +185,10 @@ export default function CustomerSettingsScreen() {
             handleClosePasswordModal();
             Alert.alert('Success', 'Password changed successfully');
         } catch (error: any) {
-            setPasswordError(error || 'Failed to change password');
+            const message = typeof error === 'string'
+                ? error
+                : error?.message || 'Failed to change password';
+            setPasswordError(message);
         } finally {
             setIsChangingPassword(false);
         }
@@ -216,12 +222,15 @@ export default function CustomerSettingsScreen() {
         try {
             await dispatch(deleteAccount(deletePassword)).unwrap();
 
-            // Success - close modal and navigate to login
+            // Success - close modal
             setShowDeleteModal(false);
             setDeletePassword('');
-            router.replace("/(auth)/login");
+            // Navigation is handled by _layout.tsx automatically when isAuthenticated becomes false
         } catch (error: any) {
-            setDeleteError(error || 'Failed to delete account. Please try again.');
+            const message = typeof error === 'string'
+                ? error
+                : error?.message || 'Failed to delete account. Please try again.';
+            setDeleteError(message);
         } finally {
             setIsDeleting(false);
         }

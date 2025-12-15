@@ -450,8 +450,8 @@ const styles = StyleSheet.create({
     },
     headerGradient: {
         paddingBottom: moderateScale(20),
-        borderBottomLeftRadius: 24,
-        borderBottomRightRadius: 24,
+        borderBottomLeftRadius: moderateScale(24),
+        borderBottomRightRadius: moderateScale(24),
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.1,
@@ -470,7 +470,7 @@ const styles = StyleSheet.create({
     },
     screenTitle: {
         color: '#fff',
-        marginBottom: 4,
+        marginBottom: verticalScale(4),
         textShadowColor: 'rgba(0,0,0,0.1)',
         textShadowOffset: { width: 0, height: 1 },
         textShadowRadius: 2,
@@ -548,7 +548,7 @@ const styles = StyleSheet.create({
     emptyStateText: {
         color: '#64748b',
         textAlign: 'center',
-        lineHeight: 20,
+        lineHeight: moderateScale(20),
         paddingHorizontal: moderateScale(20),
     },
     emptyStateButton: {
@@ -566,7 +566,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: moderateScale(14),
         paddingHorizontal: moderateScale(28),
-        gap: 8,
+        gap: scale(8),
     },
     emptyStateButtonText: {
         color: '#fff',

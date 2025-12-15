@@ -13,12 +13,16 @@ import { StyleSheet } from 'react-native';
 import { useFonts } from "expo-font";
 import { FONTS } from '@/constants/fonts';
 import * as SplashScreen from "expo-splash-screen";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { restoreSession, logoutUser } from '@/store/slices/authSlice';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { initializeApiClient } from '@/api/client';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { connectSocket, disconnectSocket, resetDispatchState, restoreActiveJob } from '@/store/slices/dispatchSlice';
 import { defineBackgroundLocationTask } from '@/services/backgroundLocationService';
+
+// Onboarding storage key
+const ONBOARDING_COMPLETE_KEY = 'hasSeenOnboarding';
 
 // Initialize background location task at app startup
 // MUST be called before any navigation renders
@@ -37,6 +41,7 @@ function RootLayoutNav() {
   const { isAuthenticated, user, isLoading, vendorOnboardingStatus } = useAppSelector((s) => s.auth);
   const activeJobId = useAppSelector((s) => s.dispatch.activeJobId);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [hasSeenOnboarding, setHasSeenOnboarding] = useState<boolean | null>(null);
 
   // Debug: Track activeJobId changes
   useEffect(() => {
@@ -52,7 +57,7 @@ function RootLayoutNav() {
   const vendorPendingVerification = isVendor && vendorOnboardingStatus === 'pending_verification';
   const vendorVerified = isVendor && user?.vendorProfile?.verified === true;
 
-  // Restore session on mount
+  // Restore session and check onboarding status on mount
   useEffect(() => {
     // Initialize API client with logout callback ONCE at startup
     // This sets up token refresh interceptors that will trigger logout on refresh failure
@@ -65,10 +70,18 @@ function RootLayoutNav() {
     };
     initializeApiClient(logoutCallback);
 
-    const initializeAuth = async () => {
+    const initializeApp = async () => {
       try {
+        // Check if user has seen onboarding
+        const onboardingComplete = await AsyncStorage.getItem(ONBOARDING_COMPLETE_KEY);
+        setHasSeenOnboarding(onboardingComplete === 'true');
+
+        if (__DEV__) {
+          console.log('[_layout] Onboarding complete:', onboardingComplete === 'true');
+        }
+
+        // Restore session
         const session = await dispatch(restoreSession()).unwrap();
-        // console.log("🚀 ~ initializeAuth ~ session:", session)
         if (__DEV__) {
           console.log('[_layout] Session restored:', session?.user?.role);
         }
@@ -97,13 +110,13 @@ function RootLayoutNav() {
       }
     };
 
-    initializeAuth();
+    initializeApp();
   }, []);
 
-  // Handle navigation based on auth state
+  // Handle navigation based on auth state and onboarding status
   useEffect(() => {
     // Wait for initialization and loading to complete
-    if (!isInitialized || isLoading) return;
+    if (!isInitialized || isLoading || hasSeenOnboarding === null) return;
 
     if (__DEV__) {
       console.log('[_layout] Navigation effect running:', {
@@ -111,6 +124,7 @@ function RootLayoutNav() {
         role,
         activeJobId,
         vendorVerified,
+        hasSeenOnboarding,
         segments: segments.join('/'),
       });
     }
@@ -119,13 +133,28 @@ function RootLayoutNav() {
     const inCustomer = segments[0] === "(customer)";
     const inVendor = segments[0] === "(vendor)";
     const inShared = segments[0] === "(shared)";
+    const inOnboarding = segments[0] === "(onboarding)";
     const onVendorSetup = inShared && (segments as string[])[1] === "vendor-setup";
     const onPendingVerification = inShared && (segments as string[])[1] === "pending-verification";
 
     // Add a small delay to prevent navigation conflicts
-    const redirectTimeout = setTimeout(() => {
-      if (!isAuthenticated && !inAuth) {
-        // Not authenticated and not on auth screen -> redirect to login
+    const redirectTimeout = setTimeout(async () => {
+      // First check: If user hasn't seen onboarding and is not authenticated, show onboarding
+      // Re-check AsyncStorage in case onboarding was just completed
+      if (!hasSeenOnboarding && !isAuthenticated && !inOnboarding) {
+        const freshCheck = await AsyncStorage.getItem(ONBOARDING_COMPLETE_KEY);
+        if (freshCheck === 'true') {
+          // Onboarding was completed, update state and go to login
+          setHasSeenOnboarding(true);
+          router.replace("/(auth)/login");
+          return;
+        }
+        router.replace("/(onboarding)");
+        return;
+      }
+
+      if (!isAuthenticated && !inAuth && !inOnboarding) {
+        // Not authenticated and not on auth/onboarding screen -> redirect to login
         router.replace("/(auth)/login");
       } else if (isAuthenticated && role) {
         // Handle vendor onboarding status
@@ -196,7 +225,7 @@ function RootLayoutNav() {
     }, 100);
 
     return () => clearTimeout(redirectTimeout);
-  }, [isAuthenticated, role, segments, isLoading, isInitialized, activeJobId]);
+  }, [isAuthenticated, role, segments, isLoading, isInitialized, activeJobId, hasSeenOnboarding]);
 
   // WebSocket connection management
   useEffect(() => {

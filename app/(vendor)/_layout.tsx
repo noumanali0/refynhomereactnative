@@ -4,6 +4,7 @@ import { Ionicons } from "@expo/vector-icons";
 import GradientIcon from "@/components/common/GradientIcon";
 import { useAppSelector } from "@/hooks/useAppDispatch";
 import { useEffect } from "react";
+import { moderateScale, verticalScale } from "react-native-size-matters";
 
 
 export default function VendorTabsLayout() {
@@ -28,15 +29,26 @@ export default function VendorTabsLayout() {
         <Tabs
             screenOptions={{
                 headerShown: false,
-                tabBarActiveTintColor: "#007AFF",
-                tabBarStyle: { borderTopLeftRadius: 20, borderTopRightRadius: 20, height: 60 },
+                tabBarActiveTintColor: "#2563EB",
+                tabBarInactiveTintColor: "#9CA3AF",
+                tabBarStyle: {
+                    borderTopLeftRadius: moderateScale(20),
+                    borderTopRightRadius: moderateScale(20),
+                    height: verticalScale(70),
+                    paddingBottom: verticalScale(8),
+                    paddingTop: verticalScale(8),
+                },
+                tabBarLabelStyle: {
+                    fontSize: moderateScale(11),
+                    fontWeight: '500',
+                },
             }}
             initialRouteName="(servicerequests)"
         >
             <Tabs.Screen
                 name="(servicerequests)"
                 options={{
-                    title: "Service Requests",
+                    title: "Requests",
                     // tabBarIcon: ({ size }) => <GradientIcon name="home" size={size} />,
                     tabBarIcon: ({ focused, size }) => (
                         <GradientIcon

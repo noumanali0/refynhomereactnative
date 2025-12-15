@@ -91,8 +91,8 @@ export default function ProfileScreen() {
                         try {
                             await dispatch(logoutUser()).unwrap();
                             clearTimeout(logoutTimeout);
-                            // Navigation will be handled by _layout.tsx automatically
-                            router.replace("/(auth)/login");
+                            // Navigation is handled by _layout.tsx automatically when isAuthenticated becomes false
+                            // No need to call router.replace here - _layout.tsx will redirect to login
                         } catch (error: any) {
                             clearTimeout(logoutTimeout);
                             Alert.alert("Logout Failed", error.message || "Failed to logout");
@@ -123,7 +123,10 @@ export default function ProfileScreen() {
             setDeletePassword('');
             router.replace("/(auth)/login");
         } catch (error: any) {
-            setDeleteError(error || 'Failed to delete account. Please try again.');
+            const message = typeof error === 'string'
+                ? error
+                : error?.message || 'Failed to delete account. Please try again.';
+            setDeleteError(message);
         } finally {
             setIsDeleting(false);
         }
@@ -160,7 +163,10 @@ export default function ProfileScreen() {
             handleClosePasswordModal();
             Alert.alert('Success', 'Password changed successfully');
         } catch (error: any) {
-            setPasswordError(error || 'Failed to change password');
+            const message = typeof error === 'string'
+                ? error
+                : error?.message || 'Failed to change password';
+            setPasswordError(message);
         } finally {
             setIsChangingPassword(false);
         }
@@ -195,10 +201,13 @@ export default function ProfileScreen() {
                     message: 'Your profile photo has been updated successfully',
                 });
             } catch (error: any) {
+                const message = typeof error === 'string'
+                    ? error
+                    : error?.message || 'Failed to update profile photo';
                 showToast({
                     type: 'error',
                     title: 'Update Failed',
-                    message: error || 'Failed to update profile photo',
+                    message: message,
                 });
             } finally {
                 setIsUploadingPhoto(false);
@@ -669,7 +678,7 @@ const styles = StyleSheet.create({
         alignItems: "center",
     },
     cancelText: {
-        fontSize: 16,
+        fontSize: moderateScale(16),
         // fontWeight: "400",
         color: "#4b5563",
     },
@@ -682,7 +691,7 @@ const styles = StyleSheet.create({
         alignItems: "center",
     },
     deleteText: {
-        fontSize: 16,
+        fontSize: moderateScale(16),
         // fontWeight: "600",
         color: "#fff",
     },
@@ -711,7 +720,7 @@ const styles = StyleSheet.create({
         flex: 1,
         paddingVertical: moderateScale(14),
         paddingHorizontal: moderateScale(16),
-        fontSize: 16,
+        fontSize: moderateScale(16),
         color: "#1f2937",
     },
     eyeButton: {
@@ -732,7 +741,7 @@ const styles = StyleSheet.create({
         alignItems: "center",
     },
     changePasswordText: {
-        fontSize: 16,
+        fontSize: moderateScale(16),
         color: "#fff",
     },
     changePasswordBtnDisabled: {

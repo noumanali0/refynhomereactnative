@@ -130,8 +130,8 @@ export default function VendorEditProfileScreen() {
       return 'First name must be at least 2 characters';
     }
     const radiusNum = parseFloat(serviceRadius);
-    if (isNaN(radiusNum) || radiusNum < 1 || radiusNum > 100) {
-      return 'Service radius must be between 1 and 100 km';
+    if (isNaN(radiusNum) || radiusNum < 1 || radiusNum > 15) {
+      return 'Service radius must be between 1 and 15 km';
     }
     return null;
   }, [firstName, serviceRadius]);
@@ -489,7 +489,7 @@ export default function VendorEditProfileScreen() {
                 <Text type="body2" style={styles.inputSuffix}>km</Text>
               </View>
               <Text type="caption" style={styles.inputHint}>
-                Maximum distance you're willing to travel (1-100 km)
+                Maximum distance you're willing to travel (1-15 km)
               </Text>
             </View>
           </View>

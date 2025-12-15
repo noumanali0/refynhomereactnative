@@ -155,7 +155,10 @@ export default function Login() {
             });
             // Navigation handled by existing useEffect
         } catch (error: any) {
-            setReactivateError(error || 'Failed to reactivate account');
+            const message = typeof error === 'string'
+                ? error
+                : error?.message || 'Failed to reactivate account';
+            setReactivateError(message);
         } finally {
             setIsReactivating(false);
         }

@@ -567,6 +567,15 @@ export const reactivateAccount = createAsyncThunk(
     try {
       const response = await authService.reactivateAccount(phone, password);
 
+      if (__DEV__) {
+        console.log('[reactivateAccount] Backend response:', {
+          isVerified: response.isVerified,
+          isOnboardingComplete: response.isOnboardingComplete,
+          vendorProfile: (response.user as any).vendorProfile,
+          userRole: response.user.role,
+        });
+      }
+
       // Store tokens and user in SecureStore (same as login)
       await tokenService.saveSession(
         response.access,
@@ -578,8 +587,8 @@ export const reactivateAccount = createAsyncThunk(
         user: response.user,
         accessToken: response.access,
         refreshToken: response.refresh,
-        isVerified: response.is_verified,
-        isOnboardingComplete: response.is_onboarding_complete,
+        isVerified: response.isVerified,
+        isOnboardingComplete: response.isOnboardingComplete,
       };
     } catch (error: any) {
       const message = getErrorMessage(error);
@@ -831,6 +840,31 @@ const authSlice = createSlice({
       .addCase(fetchUserProfile.fulfilled, (state, action) => {
         state.isLoading = false;
         state.user = action.payload.user;
+
+        // Recalculate vendor onboarding status when user is updated
+        // This fixes infinite loop when vendor is verified and clicks refresh
+        if (action.payload.user.role === 'vendor') {
+          const vendorProfile = (action.payload.user as any).vendorProfile;
+          const isOnboardingComplete = vendorProfile &&
+            vendorProfile.cnic &&
+            vendorProfile.cnic.trim().length > 0;
+
+          if (!isOnboardingComplete) {
+            state.vendorOnboardingStatus = 'in_progress';
+          } else if (!vendorProfile.verified) {
+            state.vendorOnboardingStatus = 'pending_verification';
+          } else {
+            state.vendorOnboardingStatus = 'complete';
+          }
+
+          if (__DEV__) {
+            console.log('[fetchUserProfile.fulfilled] Vendor status updated:', {
+              cnic: vendorProfile?.cnic,
+              verified: vendorProfile?.verified,
+              vendorOnboardingStatus: state.vendorOnboardingStatus,
+            });
+          }
+        }
       })
       .addCase(fetchUserProfile.rejected, (state, action) => {
         state.isLoading = false;
@@ -944,12 +978,31 @@ const authSlice = createSlice({
       .addCase(reactivateAccount.fulfilled, (state, action) => {
         state.isLoading = false;
         state.isAuthenticated = true;
-        state.user = transformApiUserToAppUser(action.payload.user);
-        state.accessToken = action.payload.accessToken;
+        state.user = action.payload.user as any;
+        state.token = action.payload.accessToken;
         state.refreshToken = action.payload.refreshToken;
-        state.vendorOnboardingStatus = action.payload.isOnboardingComplete
-          ? action.payload.isVerified ? 'complete' : 'pending_verification'
-          : 'in_progress';
+        state.error = null;
+
+        // Set vendor onboarding status based on backend response
+        if (action.payload.user.role === 'vendor') {
+          if (!action.payload.isOnboardingComplete) {
+            state.vendorOnboardingStatus = 'in_progress';
+          } else if (!action.payload.isVerified) {
+            state.vendorOnboardingStatus = 'pending_verification';
+          } else {
+            state.vendorOnboardingStatus = 'complete';
+          }
+        } else {
+          state.vendorOnboardingStatus = 'complete';
+        }
+
+        if (__DEV__) {
+          console.log('[reactivateAccount.fulfilled] Status set:', {
+            isOnboardingComplete: action.payload.isOnboardingComplete,
+            isVerified: action.payload.isVerified,
+            vendorOnboardingStatus: state.vendorOnboardingStatus,
+          });
+        }
       })
       .addCase(reactivateAccount.rejected, (state, action) => {
         state.isLoading = false;
@@ -973,9 +1026,20 @@ const authSlice = createSlice({
         // Set vendor onboarding status based on user data
         if (state.user?.role === 'vendor') {
           const vendorProfile = state.user.vendorProfile;
-          // Check if onboarding is complete: CNIC must be submitted
-          // (Backend creates empty VendorProfile on signup, so we check CNIC)
-          const isOnboardingComplete = vendorProfile && vendorProfile.cnic;
+          // Check if onboarding is complete: CNIC must be submitted and not empty
+          // (Backend creates empty VendorProfile on signup, so we check CNIC has value)
+          const isOnboardingComplete = vendorProfile &&
+            vendorProfile.cnic &&
+            vendorProfile.cnic.trim().length > 0;
+
+          if (__DEV__) {
+            console.log('[restoreSession.fulfilled] Vendor check:', {
+              hasVendorProfile: !!vendorProfile,
+              cnic: vendorProfile?.cnic,
+              verified: vendorProfile?.verified,
+              isOnboardingComplete,
+            });
+          }
 
           if (!isOnboardingComplete) {
             // No CNIC = needs to complete onboarding form

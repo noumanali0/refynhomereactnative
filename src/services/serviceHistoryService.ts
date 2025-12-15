@@ -76,6 +76,7 @@ export interface ServiceHistoryFilters {
   status?: 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'completed' | 'cancelled' | 'expired';
   page?: number;
   page_size?: number;
+  limit?: number; // Alias for page_size, used for home screen recent services
 }
 
 // ============================================================================
@@ -87,12 +88,15 @@ export interface ServiceHistoryFilters {
  */
 export async function getServiceHistory(filters?: ServiceHistoryFilters): Promise<ServiceHistoryResponse> {
   try {
+    // Use limit as alias for page_size if provided
+    const pageSize = filters?.limit || filters?.page_size || 50;
+
     // Build URL with type=history to get completed/cancelled requests (like vendor history)
     const url = buildUrl(CUSTOMER_ENDPOINTS.SERVICE_REQUESTS, {
       type: 'history',
       status: filters?.status,
       page: filters?.page,
-      page_size: filters?.page_size || 50,
+      page_size: pageSize,
     });
 
     if (__DEV__) {

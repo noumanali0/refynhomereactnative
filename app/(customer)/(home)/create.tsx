@@ -765,13 +765,13 @@ const FormContent = memo(function FormContent({
                             {isSubmitting ? (
                                 <>
                                     <ActivityIndicator size="small" color={COLORS.white} />
-                                    <Text type="button" style={styles.submitButtonText}>
+                                    <Text type="button" style={styles.submitButtonText} numberOfLines={1}>
                                         Creating...
                                     </Text>
                                 </>
                             ) : (
                                 <>
-                                    <Text type="button" style={styles.submitButtonText}>
+                                    <Text type="button" style={styles.submitButtonText} numberOfLines={1}>
                                         Submit Request
                                     </Text>
                                     <Ionicons name="arrow-forward" size={18} color={COLORS.white} />
@@ -1102,7 +1102,7 @@ const styles = StyleSheet.create({
         backgroundColor: COLORS.gray50,
     },
     header: {
-        paddingTop: verticalScale(60),
+        paddingTop: verticalScale(30),
         paddingBottom: verticalScale(24),
         paddingHorizontal: scale(16),
         borderBottomLeftRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS * 2,
@@ -1272,32 +1272,40 @@ const styles = StyleSheet.create({
         marginTop: verticalScale(8),
     },
     cancelButton: {
-        flex: 1,
+        // flex: 1,
         borderWidth: 1.5,
         borderColor: COLORS.primary,
         borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
-        paddingVertical: FORM_CONSTANTS.INPUT_PADDING_VERTICAL,
+        paddingVertical: verticalScale(12),
+        paddingHorizontal: scale(12),
         justifyContent: 'center',
         alignItems: 'center',
         backgroundColor: COLORS.white,
+        width:moderateScale(150)
     },
     cancelButtonText: {
         color: COLORS.primary,
+        fontSize: moderateScale(13),
     },
     submitButtonWrapper: {
-        flex: 1,
+        // flex: 1,
         borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
         overflow: 'hidden',
+        marginLeft:moderateScale(20)
     },
     submitButton: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         gap: scale(8),
-        paddingVertical: FORM_CONSTANTS.INPUT_PADDING_VERTICAL,
+        paddingVertical: verticalScale(14),
+        paddingHorizontal: scale(14),
+        width:moderateScale(150)
     },
     submitButtonText: {
         color: COLORS.white,
+        fontSize: moderateScale(13),
+        flexShrink: 0,
     },
     addressButton: {
         flexDirection: 'row',
@@ -1338,9 +1346,9 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: scale(8),
-        paddingVertical: verticalScale(12),
-        paddingHorizontal: scale(12),
+        gap: scale(10),
+        paddingVertical: verticalScale(14),
+        paddingHorizontal: scale(16),
         borderRadius: moderateScale(10),
         borderWidth: 1.5,
     },

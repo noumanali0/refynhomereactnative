@@ -3,11 +3,19 @@
  * Review Slice
  *
  * Manages review submission state for completed service requests.
+ * Also manages fetching vendor reviews list.
  * Integrates with the backend review API.
  */
 
 import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
-import { reviewApi, CreateReviewParams, ReviewResponse } from '@/services/reviewApi';
+import {
+    reviewApi,
+    CreateReviewParams,
+    ReviewResponse,
+    GetVendorReviewsParams,
+    VendorReviewsResponse,
+    VendorReview,
+} from '@/services/reviewApi';
 import type { RootState } from '@/store';
 
 // ============================================================================
@@ -23,6 +31,18 @@ interface ReviewState {
     submitted: boolean;
     /** Last submitted review data */
     lastReview: ReviewResponse['review'] | null;
+    /** Vendor reviews list */
+    vendorReviews: VendorReview[];
+    /** Whether vendor reviews are loading */
+    isLoadingVendorReviews: boolean;
+    /** Error message from fetching vendor reviews */
+    vendorReviewsError: string | null;
+    /** Total count of vendor reviews */
+    vendorReviewsCount: number;
+    /** Star rating distribution */
+    vendorReviewsDistribution: Record<string, number>;
+    /** Average rating */
+    vendorAverageRating: number;
 }
 
 // ============================================================================
@@ -34,6 +54,12 @@ const initialState: ReviewState = {
     submitError: null,
     submitted: false,
     lastReview: null,
+    vendorReviews: [],
+    isLoadingVendorReviews: false,
+    vendorReviewsError: null,
+    vendorReviewsCount: 0,
+    vendorReviewsDistribution: { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 },
+    vendorAverageRating: 0,
 };
 
 // ============================================================================
@@ -71,6 +97,37 @@ export const submitReview = createAsyncThunk<
     }
 );
 
+/**
+ * Fetch vendor reviews with optional filtering and sorting
+ *
+ * @param params - Query parameters (vendorId, stars?, sort?, limit?)
+ * @returns VendorReviewsResponse on success
+ *
+ * @example
+ * ```typescript
+ * const result = await dispatch(fetchVendorReviews({
+ *   vendorId: 123,
+ *   stars: 5,
+ *   sort: 'latest'
+ * })).unwrap();
+ * ```
+ */
+export const fetchVendorReviews = createAsyncThunk<
+    VendorReviewsResponse,
+    GetVendorReviewsParams,
+    { rejectValue: string }
+>(
+    'review/fetchVendorReviews',
+    async (params, { rejectWithValue }) => {
+        try {
+            const response = await reviewApi.getVendorReviews(params);
+            return response;
+        } catch (error: any) {
+            return rejectWithValue(error.message || 'Failed to fetch reviews');
+        }
+    }
+);
+
 // ============================================================================
 // Slice
 // ============================================================================
@@ -89,6 +146,18 @@ const reviewSlice = createSlice({
          */
         clearSubmitError: (state) => {
             state.submitError = null;
+        },
+
+        /**
+         * Clear vendor reviews state
+         */
+        clearVendorReviews: (state) => {
+            state.vendorReviews = [];
+            state.isLoadingVendorReviews = false;
+            state.vendorReviewsError = null;
+            state.vendorReviewsCount = 0;
+            state.vendorReviewsDistribution = { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 };
+            state.vendorAverageRating = 0;
         },
     },
     extraReducers: (builder) => {
@@ -109,6 +178,24 @@ const reviewSlice = createSlice({
             .addCase(submitReview.rejected, (state, action) => {
                 state.isSubmitting = false;
                 state.submitError = action.payload || 'Failed to submit review';
+            })
+            // Fetch vendor reviews: Pending
+            .addCase(fetchVendorReviews.pending, (state) => {
+                state.isLoadingVendorReviews = true;
+                state.vendorReviewsError = null;
+            })
+            // Fetch vendor reviews: Fulfilled
+            .addCase(fetchVendorReviews.fulfilled, (state, action) => {
+                state.isLoadingVendorReviews = false;
+                state.vendorReviews = action.payload.results;
+                state.vendorReviewsCount = action.payload.count;
+                state.vendorReviewsDistribution = action.payload.distribution;
+                state.vendorAverageRating = action.payload.average_rating;
+            })
+            // Fetch vendor reviews: Rejected
+            .addCase(fetchVendorReviews.rejected, (state, action) => {
+                state.isLoadingVendorReviews = false;
+                state.vendorReviewsError = action.payload || 'Failed to fetch reviews';
             });
     },
 });
@@ -117,7 +204,7 @@ const reviewSlice = createSlice({
 // Actions
 // ============================================================================
 
-export const { clearReviewState, clearSubmitError } = reviewSlice.actions;
+export const { clearReviewState, clearSubmitError, clearVendorReviews } = reviewSlice.actions;
 
 // ============================================================================
 // Selectors
@@ -134,6 +221,24 @@ export const selectReviewSubmitted = (state: RootState) => state.review.submitte
 
 /** Last submitted review data */
 export const selectLastReview = (state: RootState) => state.review.lastReview;
+
+/** Vendor reviews list */
+export const selectVendorReviews = (state: RootState) => state.review.vendorReviews;
+
+/** Whether vendor reviews are loading */
+export const selectIsLoadingVendorReviews = (state: RootState) => state.review.isLoadingVendorReviews;
+
+/** Error message from fetching vendor reviews */
+export const selectVendorReviewsError = (state: RootState) => state.review.vendorReviewsError;
+
+/** Total count of vendor reviews */
+export const selectVendorReviewsCount = (state: RootState) => state.review.vendorReviewsCount;
+
+/** Star rating distribution */
+export const selectVendorReviewsDistribution = (state: RootState) => state.review.vendorReviewsDistribution;
+
+/** Average vendor rating */
+export const selectVendorAverageRating = (state: RootState) => state.review.vendorAverageRating;
 
 // ============================================================================
 // Export

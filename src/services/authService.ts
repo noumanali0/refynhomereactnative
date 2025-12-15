@@ -579,18 +579,33 @@ class AuthService {
    * @param password - Current password for verification
    * @returns Promise with JWT tokens and user data (same as login)
    */
-  async reactivateAccount(phone: string, password: string): Promise<LoginResponse> {
+  async reactivateAccount(phone: string, password: string): Promise<{
+    access: string;
+    refresh: string;
+    user: Customer | Vendor;
+    isVerified: boolean;
+    isOnboardingComplete: boolean;
+  }> {
     try {
       const response = await apiClient.post<LoginResponse>(
         AUTH_ENDPOINTS.REACTIVATE_ACCOUNT,
         { phone, password }
       );
 
+      // Convert API user to frontend format (same as login)
+      const user = convertAPIUserToFrontend(response.data.user);
+
       if (__DEV__) {
         console.log('[AuthService] Account reactivated successfully');
       }
 
-      return response.data;
+      return {
+        access: response.data.access,
+        refresh: response.data.refresh,
+        user,
+        isVerified: response.data.is_verified,
+        isOnboardingComplete: response.data.is_onboarding_complete,
+      };
     } catch (error) {
       console.error('[AuthService] Reactivate account error:', error);
       throw error;

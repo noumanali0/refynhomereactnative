@@ -142,6 +142,7 @@ export default function CustomerProfileSetup() {
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
         >
           <Animated.View style={[styles.formCard, { opacity: fadeAnim }]}>
             {/* Info Banner */}
@@ -425,7 +426,7 @@ const styles = StyleSheet.create({
     fontSize: moderateScale(15),
     color: '#1e293b',
     textAlignVertical: 'top',
-    paddingTop: 4,
+    paddingTop: moderateScale(4),
   },
   errorText: {
     color: '#ef4444',

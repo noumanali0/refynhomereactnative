@@ -7,22 +7,22 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
+  Pressable,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAppSelector, useAppDispatch } from '@/hooks/useAppDispatch';
 import { SERVICE_CATEGORIES } from '@/constants/serviceCategories';
-import { moderateScale } from "react-native-size-matters";
+import { moderateScale, verticalScale, scale } from "react-native-size-matters";
 import Text from '@/components/common/Text';
 import { COLORS } from '@/constants/colors';
 import AppHeader from '@/components/common/AppHeader';
 import { AppButton } from '@/components/common/AppButton';
 import { LinearGradient } from "expo-linear-gradient";
-import { mockActiveServices } from '@/mock/services';
-import { ServiceCard } from '@/components/customer/ServiceCard';
+import { ServiceHistoryCard } from '@/components/customer/ServiceHistoryCard';
 import { useCurrentLocation } from '@/hooks/useCurrentLocation';
-import { updateProfile } from '@/store/slices/authSlice';
-import { AddressSearchBottomSheet } from '@/components/customer/AddressSearchBottomSheet';
+import { updateProfile, fetchUserProfile } from '@/store/slices/authSlice';
+import { fetchServiceHistory, selectServiceHistory, selectIsLoading as selectHistoryLoading } from '@/store/slices/serviceHistorySlice';
 import {
   getCustomerActiveService,
   clearCustomerActiveService,
@@ -37,7 +37,8 @@ export default function CustomerHomeScreen() {
   const router = useRouter();
   const dispatch = useAppDispatch();
   const { user } = useAppSelector((state) => state.auth);
-  const { data: history, isLoading, refetch } = { data: [], isLoading: false, refetch: async () => { } }; // useGetServiceHistoryQuery();
+  const recentServices = useAppSelector(selectServiceHistory);
+  const historyLoading = useAppSelector(selectHistoryLoading);
   const [refreshing, setRefreshing] = useState(false);
   const [checkingActiveService, setCheckingActiveService] = useState(true);
   const hasCheckedActiveService = useRef(false);
@@ -127,6 +128,13 @@ export default function CustomerHomeScreen() {
     checkActiveService();
   }, [router]);
 
+  // Fetch user profile and recent services on mount
+  useEffect(() => {
+    dispatch(fetchUserProfile());
+    // Fetch recent services (limit to 5 for home screen)
+    dispatch(fetchServiceHistory({ limit: 5 }));
+  }, [dispatch]);
+
   // Get current location
   const {
     city: currentCity,
@@ -144,7 +152,10 @@ export default function CustomerHomeScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([refetch(), refetchLocation()]);
+    await Promise.all([
+      dispatch(fetchServiceHistory({ limit: 5 })),
+      refetchLocation(),
+    ]);
     setRefreshing(false);
   };
 
@@ -274,28 +285,38 @@ export default function CustomerHomeScreen() {
         </View> */}
 
         {/* Recent Services */}
-        <Text style={styles.sectionTitle}>Recent Services</Text>
-        {isLoading ? (
-          <View style={styles.loadingContainer}>
-            <Text>Loading...</Text>
-          </View>
-        )
-          // : mockActiveServices && mockActiveServices.length > 0 ? (
-          //   mockActiveServices.slice(0, 3).map((item) => (
-          //     // <View style={styles.historyCard}>
-          //     <ServiceCard service={item} vendorOffer={{}} />
-
-          //   ))
-          // )
-          : (
-            <View style={styles.emptyState}>
-              <Ionicons name="folder-open-outline" size={64} color="#8E8E93" />
-              <Text style={styles.emptyText}>No service history yet</Text>
-              <Text style={styles.emptySubtext}>
-                Request your first service to get started
-              </Text>
-            </View>
+        <View style={styles.sectionHeader}>
+          <Text style={styles.sectionTitle}>Recent Services</Text>
+          {recentServices.length > 0 && (
+            <Pressable onPress={() => router.push('/(customer)/(history)')}>
+              <Text style={styles.viewAllText}>View All</Text>
+            </Pressable>
           )}
+        </View>
+        {historyLoading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="small" color={COLORS.primary} />
+          </View>
+        ) : recentServices.length > 0 ? (
+          recentServices.slice(0, 3).map((service) => (
+            <ServiceHistoryCard
+              key={service.id}
+              request={service}
+              onPress={() => router.push({
+                pathname: '/(customer)/(history)/service-details',
+                params: { id: service.id.toString() },
+              })}
+            />
+          ))
+        ) : (
+          <View style={styles.emptyState}>
+            <Ionicons name="folder-open-outline" size={64} color="#8E8E93" />
+            <Text style={styles.emptyText}>No service history yet</Text>
+            <Text style={styles.emptySubtext}>
+              Request your first service to get started
+            </Text>
+          </View>
+        )}
       </ScrollView>
     </View>
   );
@@ -333,14 +354,14 @@ const styles = StyleSheet.create({
     borderColor: COLORS.gray300
   },
   greeting: {
-    fontSize: 14,
+    fontSize: moderateScale(14),
     color: '#8E8E93',
   },
   userName: {
-    fontSize: 24,
+    fontSize: moderateScale(24),
     fontWeight: 'bold',
     color: '#000',
-    marginTop: 4,
+    marginTop: verticalScale(4),
   },
   notificationButton: {
     position: 'relative',
@@ -364,7 +385,7 @@ const styles = StyleSheet.create({
   },
   offlineText: {
     color: '#fff',
-    fontSize: 12,
+    fontSize: moderateScale(12),
     fontWeight: '600',
   },
   content: {
@@ -378,22 +399,32 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   cardTitle: {
-    fontSize: 20,
+    fontSize: moderateScale(20),
     fontWeight: 'bold',
     color: '#fff',
-    marginBottom: 8,
+    marginBottom: verticalScale(8),
   },
   cardSubtitle: {
-    fontSize: 14,
+    fontSize: moderateScale(14),
     color: '#fff',
     opacity: 0.9,
     marginBottom: moderateScale(10)
   },
+  sectionHeader: {
+    flexDirection: 'row' as const,
+    justifyContent: 'space-between' as const,
+    alignItems: 'center' as const,
+    marginBottom: verticalScale(16),
+  },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    fontSize: moderateScale(18),
+    fontWeight: 'bold' as const,
     color: '#000',
-    marginBottom: 16,
+  },
+  viewAllText: {
+    fontSize: moderateScale(14),
+    color: COLORS.primary,
+    fontWeight: '600' as const,
   },
   servicesGrid: {
     flexDirection: 'row',
@@ -414,16 +445,16 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   serviceIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
+    width: moderateScale(60),
+    height: moderateScale(60),
+    borderRadius: moderateScale(30),
     backgroundColor: '#F0F8FF',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: verticalScale(12),
   },
   serviceLabel: {
-    fontSize: 12,
+    fontSize: moderateScale(12),
     fontWeight: '600',
     color: '#000',
     textAlign: 'center',
@@ -446,18 +477,18 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   historyService: {
-    fontSize: 16,
+    fontSize: moderateScale(16),
     fontWeight: '600',
     color: '#000',
-    marginBottom: 4,
+    marginBottom: verticalScale(4),
   },
   historyVendor: {
-    fontSize: 14,
+    fontSize: moderateScale(14),
     color: '#8E8E93',
-    marginBottom: 2,
+    marginBottom: verticalScale(2),
   },
   historyDate: {
-    fontSize: 12,
+    fontSize: moderateScale(12),
     color: '#8E8E93',
   },
   historyStatus: {
@@ -466,7 +497,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   statusBadge: {
-    fontSize: 12,
+    fontSize: moderateScale(12),
     fontWeight: '600',
     textTransform: 'capitalize',
   },
@@ -479,15 +510,15 @@ const styles = StyleSheet.create({
     padding: 40,
   },
   emptyText: {
-    fontSize: 16,
+    fontSize: moderateScale(16),
     fontWeight: '600',
     color: '#000',
-    marginTop: 16,
+    marginTop: verticalScale(16),
   },
   emptySubtext: {
-    fontSize: 14,
+    fontSize: moderateScale(14),
     color: '#8E8E93',
-    marginTop: 8,
+    marginTop: verticalScale(8),
     textAlign: 'center',
   },
   sectionTop: {

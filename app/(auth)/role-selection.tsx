@@ -283,7 +283,7 @@ const styles = StyleSheet.create({
   tagline: {
     color: 'rgba(255,255,255,0.9)',
     textAlign: 'center',
-    paddingHorizontal: 40,
+    paddingHorizontal: moderateScale(40),
   },
   content: {
     flex: 1,

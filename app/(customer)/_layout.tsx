@@ -2,6 +2,7 @@
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import GradientIcon from "@/components/common/GradientIcon";
+import { moderateScale, verticalScale } from "react-native-size-matters";
 
 
 export default function CustomerTabsLayout() {
@@ -9,8 +10,19 @@ export default function CustomerTabsLayout() {
         <Tabs
             screenOptions={{
                 headerShown: false,
-                tabBarActiveTintColor: "#007AFF",
-                tabBarStyle: { borderTopLeftRadius: 20, borderTopRightRadius: 20, height: 60 },
+                tabBarActiveTintColor: "#2563EB",
+                tabBarInactiveTintColor: "#9CA3AF",
+                tabBarStyle: {
+                    borderTopLeftRadius: moderateScale(20),
+                    borderTopRightRadius: moderateScale(20),
+                    height: verticalScale(70),
+                    paddingBottom: verticalScale(8),
+                    paddingTop: verticalScale(8),
+                },
+                tabBarLabelStyle: {
+                    fontSize: moderateScale(11),
+                    fontWeight: '500',
+                },
             }}
         >
             <Tabs.Screen

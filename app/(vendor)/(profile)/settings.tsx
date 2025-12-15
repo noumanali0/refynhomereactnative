@@ -145,7 +145,7 @@ export default function AccountSettingsScreen() {
         try {
             await dispatch(deactivateAccount(deactivatePassword)).unwrap();
             setShowDeactivateModal(false);
-            router.replace("/(auth)/login");
+            // Navigation is handled by _layout.tsx automatically when isAuthenticated becomes false
         } catch (error: any) {
             setDeactivateError(error || 'Failed to deactivate account');
         } finally {
@@ -217,10 +217,10 @@ export default function AccountSettingsScreen() {
         try {
             await dispatch(deleteAccount(deletePassword)).unwrap();
 
-            // Success - close modal and navigate to login
+            // Success - close modal
             setShowDeleteModal(false);
             setDeletePassword('');
-            router.replace("/(auth)/login");
+            // Navigation is handled by _layout.tsx automatically when isAuthenticated becomes false
         } catch (error: any) {
             setDeleteError(error || 'Failed to delete account. Please try again.');
         } finally {
@@ -790,7 +790,7 @@ const styles = StyleSheet.create({
         color: COLORS.gray600,
         textAlign: 'center',
         marginBottom: verticalScale(16),
-        lineHeight: 20,
+        lineHeight: moderateScale(20),
     },
     modalPasswordLabel: {
         color: COLORS.gray700,

@@ -182,6 +182,7 @@ export default function Signup() {
                 <ScrollView
                     showsVerticalScrollIndicator={false}
                     contentContainerStyle={styles.scrollContent}
+                    keyboardShouldPersistTaps="handled"
                 >
                     <Animated.View style={[styles.formCard, { opacity: fadeAnim }]}>
                         {/* Welcome Text */}
@@ -494,9 +495,9 @@ const styles = StyleSheet.create({
         position: 'absolute',
         top: moderateScale(10),
         left: moderateScale(16),
-        width: 40,
-        height: 40,
-        borderRadius: 20,
+        width: moderateScale(40),
+        height: moderateScale(40),
+        borderRadius: moderateScale(20),
         backgroundColor: 'rgba(255,255,255,0.2)',
         justifyContent: 'center',
         alignItems: 'center',

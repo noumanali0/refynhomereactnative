@@ -1,6 +1,6 @@
 // src/components/common/ProfileOption.tsx
 import React from "react";
-import { View, StyleSheet, TouchableOpacity } from "react-native";
+import { View, StyleSheet, TouchableOpacity, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import { moderateScale } from "react-native-size-matters";
@@ -8,20 +8,24 @@ import Text from "./Text";
 
 interface Props {
     label: string;
+    subtitle?: string;
     icon: React.ReactNode;
     onPress: () => void;
     gradient?: boolean;
     danger?: boolean;
     disabled?: boolean;
+    loading?: boolean;
 }
 
 export const ProfileOption: React.FC<Props> = ({
     label,
+    subtitle,
     icon,
     onPress,
     gradient = false,
     danger = false,
     disabled = false,
+    loading = false,
 }) => {
     return (
         <TouchableOpacity
@@ -29,11 +33,11 @@ export const ProfileOption: React.FC<Props> = ({
                 styles.row,
                 gradient && styles.rowGradient,
                 danger && styles.rowDanger,
-                disabled && styles.rowDisabled,
+                (disabled || loading) && styles.rowDisabled,
             ]}
             onPress={onPress}
             activeOpacity={0.7}
-            disabled={disabled}
+            disabled={disabled || loading}
         >
             {gradient && (
                 <LinearGradient
@@ -44,10 +48,19 @@ export const ProfileOption: React.FC<Props> = ({
                 />
             )}
 
-            <View style={[styles.iconBox, danger && styles.iconBoxDanger, disabled && styles.iconBoxDisabled]}>
-                {icon}
+            <View style={[styles.iconBox, danger && styles.iconBoxDanger, (disabled || loading) && styles.iconBoxDisabled]}>
+                {loading ? (
+                    <ActivityIndicator size="small" color={danger ? "#ef4444" : "#2563EB"} />
+                ) : (
+                    icon
+                )}
             </View>
-            <Text type="body2" style={[styles.label, danger && styles.dangerText, disabled && styles.labelDisabled]}>{label}</Text>
+            <View style={styles.labelContainer}>
+                <Text type="body2" style={[styles.label, danger && styles.dangerText, disabled && styles.labelDisabled]}>{label}</Text>
+                {subtitle && (
+                    <Text type="caption" style={styles.subtitle}>{subtitle}</Text>
+                )}
+            </View>
             <Ionicons name="chevron-forward" size={20} color={disabled ? "#d1d5db80" : "#d1d5db"} />
         </TouchableOpacity>
     );
@@ -103,12 +116,20 @@ const styles = StyleSheet.create({
     iconBoxDisabled: {
         backgroundColor: "#f3f4f6",
     },
-    label: {
+    labelContainer: {
         flex: 1,
+        justifyContent: "center",
+    },
+    label: {
         fontSize: moderateScale(16),
         // fontWeight: "700",
         // color: "#1f2937",
         color: "black",
+    },
+    subtitle: {
+        fontSize: moderateScale(12),
+        color: "#6b7280",
+        marginTop: 2,
     },
     dangerText: {
         color: "#ef4444",
