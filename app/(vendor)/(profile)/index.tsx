@@ -32,6 +32,7 @@ import { ProfileOption } from '@/components/common/ProfileOption';
 import { COLORS } from '@/constants/colors';
 import { useAppDispatch } from '@/hooks/useAppDispatch';
 import { logoutUser, fetchUserProfile, updateUserProfile } from '@/store/slices/authSlice';
+import { selectVendorHasActiveJob } from '@/store/slices/dispatchSlice';
 import useImagePicker from '@/hooks/useImagePicker';
 import { useToast } from '@/contexts/ToastContext';
 
@@ -49,6 +50,9 @@ export default function VendorProfileScreen() {
 
     // Get current user from auth state
     const { user, isLoading } = useSelector((state: RootState) => state.auth);
+
+    // Check if vendor has active job (prevents logout)
+    const { hasActiveJob, reason: activeJobReason } = useSelector(selectVendorHasActiveJob);
 
     // Fetch user profile on mount
     useEffect(() => {
@@ -69,17 +73,18 @@ export default function VendorProfileScreen() {
             phone: (user as any).phone || '',
             city: profile?.city || (user as any).city || 'Unknown',
             bio: profile?.bio || '',
-            profilePhoto: profile?.profilePhoto || null,
+            // Use camelCase (from authService) with snake_case fallback (from API)
+            profilePhoto: profile?.profilePhoto || profile?.profile_photo_url || profile?.profile_photo || null,
             verified: profile?.verified || false,
-            rating: profile?.average_rating || 0,
-            totalReviews: profile?.total_reviews || 0,
-            completedJobs: profile?.completed_jobs || 0,
+            rating: profile?.averageRating || profile?.average_rating || 0,
+            totalReviews: profile?.totalReviews || profile?.total_reviews || 0,
+            completedJobs: profile?.completedJobs || profile?.completed_jobs || 0,
             serviceCategories: profile?.categories || [],
             isOnline: true,
-            subscriptionTier: (user as any).subscription_tier || 'basic',
-            serviceRadius: profile?.service_radius_km || profile?.serviceRadiusKm || 10,
-            memberSince: profile?.member_since || null,
-            activeRequests: profile?.active_requests || 0,
+            subscriptionTier: (user as any).subscription_tier || (user as any).subscriptionTier || 'basic',
+            serviceRadius: profile?.serviceRadiusKm || profile?.service_radius_km || 10,
+            memberSince: profile?.memberSince || profile?.member_since || null,
+            activeRequests: profile?.activeRequests || profile?.active_requests || 0,
         };
     }, [user]);
     console.log("🚀 ~ VendorProfileScreen ~ vendorProfile:", vendorProfile)
@@ -194,6 +199,16 @@ export default function VendorProfileScreen() {
     };
 
     const handleLogout = () => {
+        // Block logout if vendor has active job
+        if (hasActiveJob) {
+            Alert.alert(
+                'Cannot Logout',
+                activeJobReason || 'You have an active job. Please complete or cancel it before logging out.',
+                [{ text: 'OK', style: 'default' }]
+            );
+            return;
+        }
+
         Alert.alert(
             'Logout',
             'Are you sure you want to logout?',

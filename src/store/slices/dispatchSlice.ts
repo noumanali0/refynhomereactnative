@@ -37,6 +37,47 @@ import type {
 import { ACK_TIMEOUT } from '@/config/socket';
 
 // ============================================================================
+// Constants for Vendor Distance Tracking
+// ============================================================================
+
+/** Distance threshold in meters - cancel button disappears after this */
+const VENDOR_DISTANCE_THRESHOLD_M = 1000; // 1km
+
+/**
+ * Time in ms vendor must be stationary to re-enable cancel (after 1km).
+ * Note: Backend uses 20 minutes for stationary detection.
+ * Frontend uses 10 minutes as a fallback/safety margin.
+ * The backend 'vendor_stationary' event is the authoritative source.
+ */
+const VENDOR_STATIONARY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes (frontend fallback)
+
+/** Minimum movement in meters to consider vendor as "moving" */
+const SIGNIFICANT_MOVEMENT_M = 20; // 20 meters
+
+/**
+ * Calculate distance between two coordinates using Haversine formula.
+ * Returns distance in meters.
+ */
+function calculateDistanceMeters(
+  coord1: Coordinates,
+  coord2: Coordinates
+): number {
+  const R = 6371000; // Earth radius in meters
+  const dLat = (coord2.latitude - coord1.latitude) * Math.PI / 180;
+  const dLon = (coord2.longitude - coord1.longitude) * Math.PI / 180;
+  const lat1Rad = coord1.latitude * Math.PI / 180;
+  const lat2Rad = coord2.latitude * Math.PI / 180;
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1Rad) * Math.cos(lat2Rad) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
+
+// ============================================================================
 // Module-level state for socket listener cleanup
 // ============================================================================
 
@@ -120,12 +161,42 @@ interface DispatchState {
   activeProposalId: number | null;
   vendorLocation: Coordinates | null;
 
+  // Current Customer Request (for tracking cancellation even before proposal acceptance)
+  currentCustomerRequestId: number | null;
+
   // Service Completion Tracking
   completedService: {
     requestId: number;
     vendorId: number;
     vendorName: string;
   } | null;
+
+  // Service Cancellation Tracking
+  cancelledService: {
+    requestId: number;
+    cancelledBy: 'customer' | 'vendor';
+    reason?: string;
+    reasonCode?: string;
+  } | null;
+
+  // Vendor Distance Tracking (for customer cancel eligibility)
+  // Now primarily driven by backend WebSocket events:
+  // - 'vendor.distance.1km.reached' when vendor covers 1km towards customer
+  // - 'vendor.inactive.20min' when vendor stationary for 20 minutes
+  vendorDistanceTracking: {
+    // Backend-driven state (source of truth)
+    hasReached1km: boolean;           // true when vendor covered 1km towards customer
+    isVendorStationary: boolean;      // true when vendor inactive for 20 mins
+    distanceTowardsLocationKm: number; // km traveled towards customer location
+    currentDistanceKm: number;        // current distance from vendor to customer
+    initialDistanceKm: number;        // initial distance when vendor started
+    lastBackendEventAt: number | null; // timestamp of last backend event
+
+    // Legacy frontend tracking (kept as fallback)
+    totalDistanceCovered: number;     // in meters (frontend calculation)
+    lastMovementAt: number | null;    // timestamp of last significant movement
+    previousLocation: Coordinates | null; // for calculating distance delta
+  };
 
   // UI State
   pendingActions: Record<string, boolean>;
@@ -159,8 +230,29 @@ const initialState: DispatchState = {
   activeProposalId: null,
   vendorLocation: null,
 
+  // Current Customer Request
+  currentCustomerRequestId: null,
+
   // Service Completion
   completedService: null,
+
+  // Service Cancellation
+  cancelledService: null,
+
+  // Vendor Distance Tracking
+  vendorDistanceTracking: {
+    // Backend-driven state
+    hasReached1km: false,
+    isVendorStationary: false,
+    distanceTowardsLocationKm: 0,
+    currentDistanceKm: 0,
+    initialDistanceKm: 0,
+    lastBackendEventAt: null,
+    // Legacy frontend tracking (fallback)
+    totalDistanceCovered: 0,
+    lastMovementAt: null,
+    previousLocation: null,
+  },
 
   // UI State
   pendingActions: {},
@@ -371,6 +463,73 @@ export const connectSocket = createAsyncThunk(
           }
         }
 
+        // Check if service was cancelled - notify the other party
+        if (request.status === 'cancelled') {
+          const state = getState() as RootState;
+          const cancelledBy = request.cancelled_by || 'unknown';
+
+          if (__DEV__) {
+            console.log('[Dispatch] Service cancelled:', {
+              requestId: request.id,
+              cancelledBy,
+              reason: request.cancellation_reason,
+            });
+          }
+
+          // For VENDOR: Customer cancelled the request they were viewing/working on
+          if (state.dispatch.serviceRequestsById[request.id]) {
+            // Remove from vendor's list
+            dispatch(removeServiceRequest(request.id));
+            // Remove notification if any
+            removeServiceRequestNotification(request.id);
+
+            // Show cancellation alert to vendor (if it was an active/accepted job)
+            if (cancelledBy === 'customer') {
+              dispatch(setServiceCancelled({
+                requestId: request.id,
+                cancelledBy: 'customer',
+                reason: request.cancellation_reason,
+                reasonCode: request.cancellation_reason_code,
+              }));
+
+              // Clear persisted active job from SecureStore
+              // This prevents "already active request" error on next app open
+              clearActiveJobStorage().catch((error) => {
+                if (__DEV__) console.error('[Dispatch] Failed to clear job on customer cancel:', error);
+              });
+            }
+          }
+
+          // For CUSTOMER: Vendor cancelled the job
+          // Check customerRequestsById, activeJobId, AND currentCustomerRequestId
+          // This ensures cancellation is detected in ALL scenarios:
+          // 1. Request in customerRequestsById (synced via WebSocket)
+          // 2. activeJobId set (after proposal acceptance)
+          // 3. currentCustomerRequestId set (customer's current active request)
+          const isCustomerRequest = !!state.dispatch.customerRequestsById[request.id];
+          const isActiveJob = state.dispatch.activeJobId === request.id;
+          const isCurrentRequest = state.dispatch.currentCustomerRequestId === request.id;
+
+          if (isCustomerRequest || isActiveJob || isCurrentRequest) {
+            if (cancelledBy === 'vendor') {
+              dispatch(setServiceCancelled({
+                requestId: request.id,
+                cancelledBy: 'vendor',
+                reason: request.cancellation_reason,
+                reasonCode: request.cancellation_reason_code,
+              }));
+
+              // Clear currentCustomerRequestId when vendor cancels
+              dispatch(clearCurrentCustomerRequest());
+            }
+
+            // Clear active job if it was the cancelled one
+            if (isActiveJob) {
+              dispatch(clearActiveJob());
+            }
+          }
+        }
+
         dispatch(updateServiceRequest(request));
       })
     );
@@ -534,11 +693,16 @@ export const connectSocket = createAsyncThunk(
     // Backend sends 'vendor.location.updated' event
     // IMPORTANT: Debounced to prevent crash on low-end devices from rapid updates
     // BUT: Always allow first update through (when lastTime <= 0)
+    // Also tracks cumulative distance for customer cancel eligibility
     activeUnsubscribers.push(
       socketService.on('vendor.location.updated', (data: { payload?: Coordinates } & Partial<Coordinates>) => {
         const payload = data.payload || data;
         if (payload && payload.latitude && payload.longitude) {
           const now = Date.now();
+          const newLocation: Coordinates = {
+            latitude: payload.latitude,
+            longitude: payload.longitude,
+          };
 
           // ALWAYS allow first location update (when lastTime is 0 or negative)
           // This ensures customer gets initial vendor position immediately
@@ -558,11 +722,64 @@ export const connectSocket = createAsyncThunk(
             console.log('[Dispatch] First vendor location update received:', payload);
           }
 
-          dispatch(setVendorLocation({
-            latitude: payload.latitude,
-            longitude: payload.longitude,
-          }));
+          // Update vendor location in state
+          dispatch(setVendorLocation(newLocation));
+
+          // Update distance tracking for customer cancel eligibility
+          dispatch(updateVendorDistanceTracking({ location: newLocation, timestamp: now }));
         }
+      })
+    );
+
+    // Backend event: Vendor reached 1km towards customer location
+    // This is the authoritative event from backend - hide cancel button
+    activeUnsubscribers.push(
+      socketService.on('vendor.distance.1km.reached', (data: {
+        payload?: {
+          vendor_id: number;
+          vendor_name: string;
+          service_request_id: number;
+          distance_towards_location_km: number;
+          current_distance_km: number;
+          initial_distance_km: number;
+          reached_at: string;
+        };
+      }) => {
+        const payload = data.payload || data;
+        if (__DEV__) {
+          console.log('[Dispatch] Backend event: Vendor reached 1km towards customer:', payload);
+        }
+
+        dispatch(setVendorReached1km({
+          distanceTowardsLocationKm: (payload as any).distance_towards_location_km || 0,
+          currentDistanceKm: (payload as any).current_distance_km || 0,
+          initialDistanceKm: (payload as any).initial_distance_km || 0,
+        }));
+      })
+    );
+
+    // Backend event: Vendor inactive for 20 minutes
+    // This is the authoritative event from backend - show cancel button
+    activeUnsubscribers.push(
+      socketService.on('vendor.inactive.20min', (data: {
+        payload?: {
+          vendor_id: number;
+          vendor_name: string;
+          service_request_id: number;
+          last_location_at: string;
+          inactive_duration_minutes: number;
+          detected_at: string;
+        };
+      }) => {
+        const payload = data.payload || data;
+        if (__DEV__) {
+          console.log('[Dispatch] Backend event: Vendor inactive for 20 minutes:', payload);
+        }
+
+        dispatch(setVendorInactive20min({
+          inactiveDurationMinutes: (payload as any).inactive_duration_minutes || 20,
+          lastLocationAt: (payload as any).last_location_at || '',
+        }));
       })
     );
 
@@ -1106,6 +1323,15 @@ const dispatchSlice = createSlice({
       state.activeProposalId = null;
     },
 
+    // Current customer request tracking (for cancellation handling)
+    setCurrentCustomerRequest: (state, action: PayloadAction<number | null>) => {
+      state.currentCustomerRequestId = action.payload;
+    },
+
+    clearCurrentCustomerRequest: (state) => {
+      state.currentCustomerRequestId = null;
+    },
+
     // Vendor location
     setVendorLocation: (state, action: PayloadAction<Coordinates | null>) => {
       state.vendorLocation = action.payload;
@@ -1125,6 +1351,153 @@ const dispatchSlice = createSlice({
 
     clearCompletedService: (state) => {
       state.completedService = null;
+    },
+
+    // Service Cancellation
+    setServiceCancelled: (
+      state,
+      action: PayloadAction<{
+        requestId: number;
+        cancelledBy: 'customer' | 'vendor';
+        reason?: string;
+        reasonCode?: string;
+      } | null>
+    ) => {
+      state.cancelledService = action.payload;
+    },
+
+    clearServiceCancelled: (state) => {
+      state.cancelledService = null;
+    },
+
+    // Vendor Distance Tracking - updates cumulative distance and stationary status
+    updateVendorDistanceTracking: (
+      state,
+      action: PayloadAction<{ location: Coordinates; timestamp: number }>
+    ) => {
+      const { location, timestamp } = action.payload;
+      const tracking = state.vendorDistanceTracking;
+
+      // First location - just initialize
+      if (!tracking.previousLocation) {
+        state.vendorDistanceTracking = {
+          ...tracking,
+          previousLocation: location,
+          lastMovementAt: timestamp,
+        };
+        return;
+      }
+
+      // Calculate distance from previous location
+      const distanceDelta = calculateDistanceMeters(tracking.previousLocation, location);
+
+      // Check if this is significant movement (> 20m)
+      const isSignificantMovement = distanceDelta >= SIGNIFICANT_MOVEMENT_M;
+
+      if (isSignificantMovement) {
+        // Add to cumulative distance (legacy frontend tracking)
+        const newTotalDistance = tracking.totalDistanceCovered + distanceDelta;
+        // Note: hasReached1km is now primarily set by backend event 'vendor.distance.1km.reached'
+        // Frontend calculation kept as fallback only
+        const hasReached1kmFrontend = newTotalDistance >= VENDOR_DISTANCE_THRESHOLD_M;
+
+        state.vendorDistanceTracking = {
+          ...state.vendorDistanceTracking, // Preserve backend-driven fields
+          totalDistanceCovered: newTotalDistance,
+          // Only set hasReached1km if backend hasn't set it yet (fallback)
+          hasReached1km: state.vendorDistanceTracking.hasReached1km || hasReached1kmFrontend,
+          isVendorStationary: false, // Moving, so not stationary
+          lastMovementAt: timestamp,
+          previousLocation: location,
+        };
+
+        if (__DEV__ && hasReached1kmFrontend && !tracking.hasReached1km) {
+          console.log('[Dispatch] Vendor reached 1km threshold (frontend fallback) - customer cancel disabled');
+        }
+      } else {
+        // Not significant movement - check if stationary for 10 mins (only after 1km)
+        if (tracking.hasReached1km && tracking.lastMovementAt) {
+          const stationaryDuration = timestamp - tracking.lastMovementAt;
+          const isNowStationary = stationaryDuration >= VENDOR_STATIONARY_THRESHOLD_MS;
+
+          if (isNowStationary && !tracking.isVendorStationary) {
+            if (__DEV__) {
+              console.log('[Dispatch] Vendor stationary for 10 mins - customer cancel re-enabled');
+            }
+            state.vendorDistanceTracking.isVendorStationary = true;
+          }
+        }
+
+        // Update previous location even for small movements
+        state.vendorDistanceTracking.previousLocation = location;
+      }
+    },
+
+    // Reset vendor distance tracking (when job is cancelled/completed or new job starts)
+    resetVendorDistanceTracking: (state) => {
+      state.vendorDistanceTracking = {
+        // Backend-driven state
+        hasReached1km: false,
+        isVendorStationary: false,
+        distanceTowardsLocationKm: 0,
+        currentDistanceKm: 0,
+        initialDistanceKm: 0,
+        lastBackendEventAt: null,
+        // Legacy frontend tracking
+        totalDistanceCovered: 0,
+        lastMovementAt: null,
+        previousLocation: null,
+      };
+    },
+
+    // Manually set vendor as stationary (for timer-based detection)
+    // Used when no location updates received for 10+ minutes after 1km
+    setVendorStationary: (state) => {
+      if (state.vendorDistanceTracking.hasReached1km) {
+        state.vendorDistanceTracking.isVendorStationary = true;
+        if (__DEV__) {
+          console.log('[Dispatch] Vendor marked stationary by timer check');
+        }
+      }
+    },
+
+    // Backend event: Vendor reached 1km towards customer location
+    // Triggered by 'vendor.distance.1km.reached' WebSocket event
+    setVendorReached1km: (
+      state,
+      action: PayloadAction<{
+        distanceTowardsLocationKm: number;
+        currentDistanceKm: number;
+        initialDistanceKm: number;
+      }>
+    ) => {
+      state.vendorDistanceTracking.hasReached1km = true;
+      state.vendorDistanceTracking.isVendorStationary = false; // Moving towards customer
+      state.vendorDistanceTracking.distanceTowardsLocationKm = action.payload.distanceTowardsLocationKm;
+      state.vendorDistanceTracking.currentDistanceKm = action.payload.currentDistanceKm;
+      state.vendorDistanceTracking.initialDistanceKm = action.payload.initialDistanceKm;
+      state.vendorDistanceTracking.lastBackendEventAt = Date.now();
+
+      if (__DEV__) {
+        console.log('[Dispatch] Backend: Vendor reached 1km towards customer - cancel button hidden');
+      }
+    },
+
+    // Backend event: Vendor inactive for 20 minutes
+    // Triggered by 'vendor.inactive.20min' WebSocket event
+    setVendorInactive20min: (
+      state,
+      action: PayloadAction<{
+        inactiveDurationMinutes: number;
+        lastLocationAt: string;
+      }>
+    ) => {
+      state.vendorDistanceTracking.isVendorStationary = true;
+      state.vendorDistanceTracking.lastBackendEventAt = Date.now();
+
+      if (__DEV__) {
+        console.log(`[Dispatch] Backend: Vendor inactive for ${action.payload.inactiveDurationMinutes} min - cancel button shown`);
+      }
     },
 
     // UI State
@@ -1221,9 +1594,18 @@ export const {
   removeProposal,
   setActiveJob,
   clearActiveJob,
+  setCurrentCustomerRequest,
+  clearCurrentCustomerRequest,
   setVendorLocation,
   setServiceCompleted,
   clearCompletedService,
+  setServiceCancelled,
+  clearServiceCancelled,
+  updateVendorDistanceTracking,
+  resetVendorDistanceTracking,
+  setVendorStationary,
+  setVendorReached1km,
+  setVendorInactive20min,
   setPendingAction,
   setError,
   clearError,
@@ -1334,8 +1716,117 @@ export const selectActiveProposal = createSelector(
 // Vendor Location
 export const selectVendorLocation = (state: RootState) => state.dispatch.vendorLocation;
 
+// Current Customer Request (for tracking customer's active request)
+export const selectCurrentCustomerRequestId = (state: RootState) => state.dispatch.currentCustomerRequestId;
+
 // Service Completion (for customer review flow)
 export const selectCompletedService = (state: RootState) => state.dispatch.completedService;
+
+// Service Cancellation (for both customer and vendor notification)
+export const selectCancelledService = (state: RootState) => state.dispatch.cancelledService;
+
+// Vendor Distance Tracking (for customer cancel eligibility)
+export const selectVendorDistanceTracking = (state: RootState) => state.dispatch.vendorDistanceTracking;
+
+/**
+ * Selector to determine if customer can cancel the service request
+ * - Can cancel if vendor hasn't reached 1km yet
+ * - Can cancel if vendor is stationary for 10+ mins after 1km
+ */
+export const selectCanCustomerCancel = (state: RootState): boolean => {
+  const tracking = state.dispatch.vendorDistanceTracking;
+
+  // Can cancel if vendor hasn't reached 1km threshold
+  if (!tracking.hasReached1km) {
+    return true;
+  }
+
+  // Can cancel if vendor is stationary for 10+ mins after reaching 1km
+  if (tracking.isVendorStationary) {
+    return true;
+  }
+
+  // Cannot cancel - vendor has covered 1km and is still moving
+  return false;
+};
+
+/**
+ * Selector to check if vendor has an active job that prevents logout
+ * Active job = proposal sent/accepted OR service en_route/in_progress
+ *
+ * Returns:
+ * - hasActiveJob: boolean - whether vendor has active job
+ * - reason: string | null - human readable reason for restriction
+ * - requestStatus: string | null - current status for debugging
+ */
+export const selectVendorHasActiveJob = (state: RootState): {
+  hasActiveJob: boolean;
+  reason: string | null;
+  requestStatus: string | null;
+} => {
+  const { activeJobId, activeProposalId, serviceRequestsById } = state.dispatch;
+
+  // No active job or proposal
+  if (!activeJobId && !activeProposalId) {
+    return { hasActiveJob: false, reason: null, requestStatus: null };
+  }
+
+  // Check the service request status
+  const request = activeJobId ? serviceRequestsById[activeJobId] : null;
+
+  if (request) {
+    const status = request.status;
+    const vendorStatus = request.vendor_status;
+
+    // Case 1: Proposal sent, waiting for customer response
+    if (request.already_sent && vendorStatus === 'pending') {
+      return {
+        hasActiveJob: true,
+        reason: 'You have a pending proposal waiting for customer response',
+        requestStatus: 'proposal_pending'
+      };
+    }
+
+    // Case 2: Proposal accepted
+    if (vendorStatus === 'accepted' || status === 'accepted') {
+      return {
+        hasActiveJob: true,
+        reason: 'You have an accepted job. Please complete or cancel it first',
+        requestStatus: 'accepted'
+      };
+    }
+
+    // Case 3: En route to customer
+    if (status === 'en_route') {
+      return {
+        hasActiveJob: true,
+        reason: 'You are en route to customer. Please complete or cancel the job first',
+        requestStatus: 'en_route'
+      };
+    }
+
+    // Case 4: Service in progress
+    if (status === 'in_progress') {
+      return {
+        hasActiveJob: true,
+        reason: 'You have a service in progress. Please complete it first',
+        requestStatus: 'in_progress'
+      };
+    }
+  }
+
+  // Has activeProposalId but request not in Redux (edge case)
+  // This means proposal was sent but request details not loaded yet
+  if (activeProposalId && !request) {
+    return {
+      hasActiveJob: true,
+      reason: 'You have an active proposal. Please wait for it to expire or be processed',
+      requestStatus: 'unknown'
+    };
+  }
+
+  return { hasActiveJob: false, reason: null, requestStatus: null };
+};
 
 // UI State
 export const selectIsPending = (state: RootState, key: string) =>

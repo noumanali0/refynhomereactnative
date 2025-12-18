@@ -10,7 +10,7 @@ export default function CustomerFavoriteLayout() {
             }}
         >
             <Stack.Screen name="index" options={{ title: "Favorite" }} />
-            <Stack.Screen name="vendor-details" options={{ title: "Vendor Details" }} />
+            <Stack.Screen name="vendor-detail" options={{ title: "Vendor Details" }} />
 
         </Stack>
     );

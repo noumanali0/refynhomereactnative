@@ -62,7 +62,8 @@ export default function ProfileScreen() {
     // Get user display info
     const userName = user?.name || `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'User';
     const userPhone = user?.phone || user?.phoneNumber || '';
-    const userProfilePhoto = user?.profilePhoto || imageUri;
+    // Use profilePhoto (camelCase from authService) with snake_case fallback
+    const userProfilePhoto = user?.profilePhoto || (user as any)?.profile_photo_url || (user as any)?.profile_photo || imageUri;
 
     const handleLogout = () => {
         Alert.alert(

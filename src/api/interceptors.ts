@@ -254,7 +254,7 @@ export async function manualTokenRefresh(): Promise<boolean> {
     return true;
   } catch (error) {
     isRefreshing = false;
-    console.error('[Auth] Manual token refresh failed:', error);
+    if (__DEV__) console.error('[Auth] Manual token refresh failed:', error);
     return false;
   }
 }
@@ -263,9 +263,61 @@ export async function manualTokenRefresh(): Promise<boolean> {
 // EXPORTS
 // ============================================================================
 
+/**
+ * Get a valid access token, refreshing if needed
+ * Safe to call from background tasks (no Redux dependency)
+ */
+export async function getValidAccessToken(): Promise<string | null> {
+  try {
+    const isExpired = await isAccessTokenExpired();
+
+    if (isExpired) {
+      if (__DEV__) {
+        console.log('[Auth] Token expired, refreshing for background task');
+      }
+
+      // Prevent concurrent refresh
+      if (isRefreshing) {
+        // Wait for ongoing refresh
+        return new Promise((resolve) => {
+          const checkInterval = setInterval(async () => {
+            if (!isRefreshing) {
+              clearInterval(checkInterval);
+              const { getAccessToken } = await import('@services/tokenService');
+              resolve(await getAccessToken());
+            }
+          }, 100);
+
+          // Timeout after 10 seconds
+          setTimeout(() => {
+            clearInterval(checkInterval);
+            resolve(null);
+          }, 10000);
+        });
+      }
+
+      isRefreshing = true;
+      try {
+        await refreshAccessToken();
+      } finally {
+        isRefreshing = false;
+      }
+    }
+
+    const { getAccessToken } = await import('@services/tokenService');
+    return await getAccessToken();
+  } catch (error) {
+    if (__DEV__) {
+      console.error('[Auth] Failed to get valid token:', error);
+    }
+    return null;
+  }
+}
+
 export default {
   setupInterceptors,
   manualTokenRefresh,
   isTokenRefreshing,
   getQueuedRequestsCount,
+  getValidAccessToken,
 };

@@ -22,6 +22,7 @@ interface BackendVendorProfile {
   city: string | null;
   bio: string | null;
   profile_photo: string | null;
+  profile_photo_url: string | null; // Full URL for profile photo
   id_verification_photo: string | null;
   latitude: number | null;
   longitude: number | null;
@@ -130,7 +131,8 @@ function transformToVendorData(backendVendor: BackendFavoriteVendor): VendorData
     average_rating: profile?.average_rating ?? 0,
     total_reviews: profile?.total_reviews ?? 0,
     completed_jobs: profile?.completed_jobs ?? 0,
-    profile_photo_url: profile?.profile_photo ?? null,
+    // Use profile_photo_url (full URL) instead of profile_photo (relative path)
+    profile_photo_url: profile?.profile_photo_url ?? profile?.profile_photo ?? null,
     service_radius_km: profile?.service_radius_km ?? 10,
     city: profile?.city ?? backendVendor.city ?? null,
     bio: profile?.bio ?? null,

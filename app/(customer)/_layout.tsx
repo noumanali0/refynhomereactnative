@@ -2,11 +2,13 @@
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import GradientIcon from "@/components/common/GradientIcon";
+import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { moderateScale, verticalScale } from "react-native-size-matters";
 
 
 export default function CustomerTabsLayout() {
     return (
+        <ErrorBoundary>
         <Tabs
             screenOptions={{
                 headerShown: false,
@@ -83,5 +85,6 @@ export default function CustomerTabsLayout() {
                 }}
             />
         </Tabs>
+        </ErrorBoundary>
     );
 }

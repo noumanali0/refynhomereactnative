@@ -49,7 +49,7 @@ function convertAPIUserToFrontend(apiUser: UserAPI): Customer | Vendor {
     address: apiUser.address,
     city: apiUser.city,
     subscriptionTier: apiUser.subscription_tier,
-    favoriteVendors: apiUser.favorite_vendors.map(convertAPIUserToFrontend),
+    favoriteVendors: (apiUser.favorite_vendors || []).map(convertAPIUserToFrontend),
     vendorProfile: apiUser.vendor_profile
       ? {
           id: apiUser.vendor_profile.id,
@@ -57,7 +57,8 @@ function convertAPIUserToFrontend(apiUser: UserAPI): Customer | Vendor {
           cnic: apiUser.vendor_profile.cnic,
           city: apiUser.vendor_profile.city,
           bio: apiUser.vendor_profile.bio,
-          profilePhoto: apiUser.vendor_profile.profile_photo,
+          // Use profile_photo_url (full URL) instead of profile_photo (relative path)
+          profilePhoto: apiUser.vendor_profile.profile_photo_url || apiUser.vendor_profile.profile_photo,
           idVerificationPhoto: apiUser.vendor_profile.id_verification_photo,
           latitude: apiUser.vendor_profile.latitude,
           longitude: apiUser.vendor_profile.longitude,

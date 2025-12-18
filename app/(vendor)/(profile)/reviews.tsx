@@ -112,7 +112,7 @@ export default function ReviewsScreen() {
 
     // Map vendor reviews to the format expected by ReviewCard
     const processedReviews = useMemo(() => {
-        return vendorReviews.map(review => ({
+        return (vendorReviews ?? []).map(review => ({
             id: review.id,
             rating: review.rating,
             comment: review.comment,

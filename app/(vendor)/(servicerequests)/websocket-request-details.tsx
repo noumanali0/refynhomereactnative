@@ -21,6 +21,7 @@ import {
     Platform,
 } from 'react-native';
 import Text from '@/components/common/Text';
+import CancelJobModal from '@/components/vendor/CancelJobModal';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT, UrlTile } from 'react-native-maps';
 import * as Location from 'expo-location';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
@@ -38,9 +39,13 @@ import {
     completeService,
     updateLocation,
     cleanupCompletedService,
+    selectCancelledService,
+    clearServiceCancelled,
 } from '@/store/slices/dispatchSlice';
 import { COLORS } from '@/constants/colors';
 import type { Coordinates } from '@/types/socket';
+import { serviceRequestApi, type VendorCancelReasonCode } from '@/services/serviceRequestApi';
+import { useToast } from '@/contexts/ToastContext';
 import {
     startBackgroundLocationTracking,
     stopBackgroundLocationTracking,
@@ -49,6 +54,7 @@ import {
 } from '@/services/backgroundLocationService';
 import { getDistance } from '@/utils/distanceCache';
 import { simplifyRoute } from '@/utils/polylineSimplify';
+import { activeJobService } from '@/services/activeJobService';
 // Google Routes API service - ready for integration when client enables the API
 // import { googleDirectionsService, type RouteInfo } from '@/services/googleDirectionsService';
 
@@ -98,6 +104,7 @@ export default function WebSocketRequestDetailsScreen() {
     const dispatch = useDispatch<AppDispatch>();
     const router = useRouter();
     const navigation = useNavigation();
+    const { showToast } = useToast();
     const mapRef = useRef<MapView>(null);
     const bottomSheetRef = useRef<BottomSheet>(null);
     const progressAnim = useRef(new Animated.Value(1)).current;
@@ -110,6 +117,7 @@ export default function WebSocketRequestDetailsScreen() {
     const isPendingComplete = useSelector((s: RootState) =>
         selectIsPending(s, `route_complete_${requestId}`)
     );
+    const cancelledService = useSelector(selectCancelledService);
 
     // Get proposals for this request to check if vendor's proposal was accepted
     const proposals = useSelector((s: RootState) => selectProposalsByRequestId(s, requestId));
@@ -120,14 +128,18 @@ export default function WebSocketRequestDetailsScreen() {
     // Determine if service is accepted using multiple conditions
     // This handles real-time updates when backend doesn't send vendor_status
     const isAccepted = useMemo(() => {
+        // If request is undefined (removed from Redux after cancel/complete) or cancelled
+        // Allow navigation away - NOT considered accepted
+        if (!request || request.status === 'cancelled') return false;
+
         // 1. Check vendor_status directly (from initial sync)
-        if (request?.vendor_status === 'accepted') return true;
+        if (request.vendor_status === 'accepted') return true;
         // 2. Check if there's an accepted proposal (from proposal.updated event)
         if (acceptedProposal) return true;
         // 3. Check request status (from service_request.updated event)
-        if (request?.status === 'en_route' || request?.status === 'in_progress') return true;
+        if (request.status === 'en_route' || request.status === 'in_progress') return true;
         return false;
-    }, [request?.vendor_status, request?.status, acceptedProposal]);
+    }, [request, acceptedProposal]);
 
     // Debug: Log state changes in development
     useEffect(() => {
@@ -142,6 +154,38 @@ export default function WebSocketRequestDetailsScreen() {
         }
     }, [requestId, request?.vendor_status, request?.status, acceptedProposal, isAccepted]);
 
+    // Handle service cancellation by customer (via WebSocket)
+    // Uses Toast + auto-redirect for better UX (non-blocking)
+    useEffect(() => {
+        if (cancelledService && cancelledService.requestId === requestId && cancelledService.cancelledBy === 'customer') {
+            // Set flag to prevent stale UI
+            setServiceCancelledByCustomer(true);
+
+            // Stop location tracking immediately
+            stopLocationTracking();
+
+            // Clear Redux state
+            dispatch(clearServiceCancelled());
+
+            // Show toast notification (non-blocking)
+            showToast({
+                type: 'info',
+                title: 'Job Cancelled by Customer',
+                message: cancelledService.reason
+                    ? `Reason: ${cancelledService.reason}`
+                    : 'The customer has cancelled this request.',
+                duration: 4000,
+            });
+
+            // Auto-redirect to vendor home after 2 seconds
+            const redirectTimer = setTimeout(() => {
+                router.replace('/(vendor)/(servicerequests)');
+            }, 2000);
+
+            return () => clearTimeout(redirectTimer);
+        }
+    }, [cancelledService, requestId, dispatch, router, showToast]);
+
     // Local state
     const [vendorLocation, setVendorLocation] = useState<Coordinates | null>(null);
     const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
@@ -149,6 +193,15 @@ export default function WebSocketRequestDetailsScreen() {
     const [proposalMessage, setProposalMessage] = useState<string>('');
     const [isLoading, setIsLoading] = useState(true);
     const [timeLeft, setTimeLeft] = useState(0);
+
+    // Cancel job modal state
+    const [showCancelModal, setShowCancelModal] = useState(false);
+    const [isCancelling, setIsCancelling] = useState(false);
+    // Completion state with retry support
+    const [isCompleting, setIsCompleting] = useState(false);
+
+    // Track if service was cancelled by customer (prevents stale UI)
+    const [serviceCancelledByCustomer, setServiceCancelledByCustomer] = useState(false);
 
     // Refs
     const locationWatchRef = useRef<Location.LocationSubscription | null>(null);
@@ -412,7 +465,7 @@ export default function WebSocketRequestDetailsScreen() {
         initializeLocation();
     }, []);
 
-    // Start location tracking when proposal is accepted
+    // Start location tracking when proposal is accepted + track acceptance time
     useEffect(() => {
         if (isAccepted && !locationWatchRef.current) {
             if (__DEV__) {
@@ -471,14 +524,17 @@ export default function WebSocketRequestDetailsScreen() {
                     console.log('[VendorDetails] Background location tracking started');
                 }
 
-                // Also start foreground watcher for UI updates (local state)
-                // Background task handles socket updates, this is just for map UI
+                // Start foreground watcher for UI updates AND server updates
+                // IMPORTANT: Foreground watcher MUST also send to server because:
+                // 1. Mock location apps don't trigger background tasks (security restriction)
+                // 2. When app is in foreground, foreground watcher is more responsive
+                // 3. Background task is a fallback for when app is in background/killed
                 // Using Balanced accuracy and longer intervals to prevent crashes on low-end devices
                 locationWatchRef.current = await Location.watchPositionAsync(
                     {
                         accuracy: Location.Accuracy.Balanced, // Balanced saves battery
-                        timeInterval: 10000, // 10 seconds (was 5s - too frequent)
-                        distanceInterval: 20, // 20 meters (was 10m)
+                        timeInterval: 10000, // 10 seconds
+                        distanceInterval: 20, // 20 meters
                     },
                     (location) => {
                         const newCoords = {
@@ -486,8 +542,17 @@ export default function WebSocketRequestDetailsScreen() {
                             longitude: location.coords.longitude,
                         };
 
-                        // Only update local state for UI - background task sends to server
+                        if (__DEV__) {
+                            console.log('[VendorDetails] Location updated (foreground with bg backup):', newCoords);
+                        }
+
+                        // Update local state for UI
                         setVendorLocation(newCoords);
+
+                        // CRITICAL: Also dispatch to server via WebSocket
+                        // This ensures location updates work even with mock locations
+                        // Background task serves as backup when app is actually in background
+                        dispatch(updateLocation(newCoords));
                     }
                 );
             } else {
@@ -699,8 +764,38 @@ export default function WebSocketRequestDetailsScreen() {
         }
     }, [dispatch, requestId, proposalAmount, proposalMessage, routeInfo]);
 
-    // Handle complete
+    // Handle complete with retry mechanism
     const handleComplete = useCallback(async () => {
+        // Prevent double-click while completing
+        if (isCompleting) return;
+
+        const attemptComplete = async (retryCount: number = 0): Promise<boolean> => {
+            const MAX_RETRIES = 2;
+
+            try {
+                setIsCompleting(true);
+
+                // Complete the service via dispatch FIRST (before stopping tracking)
+                await dispatch(completeService(requestId)).unwrap();
+
+                // Only stop location tracking AFTER successful completion
+                await stopLocationTracking();
+
+                // Clean up Redux state for this completed service
+                dispatch(cleanupCompletedService(requestId));
+
+                return true;
+            } catch (error: any) {
+                if (retryCount < MAX_RETRIES) {
+                    // Auto-retry with delay
+                    if (__DEV__) console.log(`[Complete] Retry attempt ${retryCount + 1}/${MAX_RETRIES}`);
+                    await new Promise(resolve => setTimeout(resolve, 1000 * (retryCount + 1)));
+                    return attemptComplete(retryCount + 1);
+                }
+                throw error;
+            }
+        };
+
         Alert.alert(
             'Complete Service',
             'Mark this service as completed?',
@@ -710,45 +805,121 @@ export default function WebSocketRequestDetailsScreen() {
                     text: 'Complete',
                     onPress: async () => {
                         try {
-                            // Stop all location tracking first (background + foreground)
-                            await stopLocationTracking();
+                            const success = await attemptComplete();
 
-                            // Then complete the service via dispatch
-                            await dispatch(completeService(requestId)).unwrap();
-
-                            // Clean up Redux state for this completed service
-                            dispatch(cleanupCompletedService(requestId));
-
-                            Alert.alert('Success', 'Service completed!', [
-                                {
-                                    text: 'OK',
-                                    onPress: () => {
-                                        // Use InteractionManager to wait for alert to dismiss
-                                        InteractionManager.runAfterInteractions(() => {
-                                            if (isMountedRef.current) {
-                                                router.replace('/(vendor)/(servicerequests)/');
-                                            }
-                                        });
+                            if (success) {
+                                setIsCompleting(false);
+                                Alert.alert('Success', 'Service completed!', [
+                                    {
+                                        text: 'OK',
+                                        onPress: () => {
+                                            InteractionManager.runAfterInteractions(() => {
+                                                if (isMountedRef.current) {
+                                                    router.replace('/(vendor)/(servicerequests)/');
+                                                }
+                                            });
+                                        }
                                     }
-                                }
-                            ]);
+                                ]);
+                            }
                         } catch (error: any) {
-                            Alert.alert('Error', error.message || 'Failed to complete service.');
+                            setIsCompleting(false);
+                            // Show retry option on final failure
+                            Alert.alert(
+                                'Completion Failed',
+                                error.message || 'Failed to complete service. Please check your connection.',
+                                [
+                                    { text: 'Cancel', style: 'cancel' },
+                                    {
+                                        text: 'Try Again',
+                                        onPress: () => handleComplete(),
+                                    },
+                                ]
+                            );
                         }
                     },
                 },
             ]
         );
-    }, [dispatch, requestId, router, stopLocationTracking]);
+    }, [dispatch, requestId, router, stopLocationTracking, isCompleting]);
+
+    // Open cancel modal
+    const handleCancelJob = useCallback(() => {
+        setShowCancelModal(true);
+    }, []);
+
+    // Handle cancel confirmation from modal
+    // Vendor can cancel anytime - no grace period or offline penalty
+    const handleConfirmCancelJob = useCallback(async (
+        reasonCode: VendorCancelReasonCode,
+        customReason?: string
+    ) => {
+        try {
+            setIsCancelling(true);
+
+            // Stop all location tracking first
+            await stopLocationTracking();
+
+            // Cancel on backend with reason
+            await serviceRequestApi.cancel({
+                id: requestId,
+                cancelled_by: 'vendor',
+                reason_code: reasonCode,
+                reason: customReason,
+            });
+
+            if (__DEV__) {
+                console.log('[VendorDetails] Job cancelled:', requestId, reasonCode);
+            }
+
+            // Clean up Redux state
+            dispatch(cleanupCompletedService(requestId));
+
+            // Clear persisted active job from SecureStore
+            // This prevents "already active request" error on next app open
+            await activeJobService.clear();
+
+            // Close modal
+            setShowCancelModal(false);
+
+            // Navigate back to requests list
+            Alert.alert(
+                'Job Cancelled',
+                'The job has been cancelled. The customer has been notified.',
+                [{ text: 'OK', onPress: () => router.replace('/(vendor)/(servicerequests)/') }]
+            );
+        } catch (error) {
+            if (__DEV__) {
+                console.error('[VendorDetails] Cancel job failed:', error);
+            }
+            Alert.alert('Error', 'Failed to cancel job. Please try again.');
+        } finally {
+            setIsCancelling(false);
+        }
+    }, [requestId, dispatch, router, stopLocationTracking]);
+
+    // Handle "Go Home" button - clear persisted job data before navigating
+    const handleGoHome = useCallback(async () => {
+        try {
+            await activeJobService.clear();
+            await stopLocationTracking();
+        } catch (error) {
+            if (__DEV__) {
+                console.error('[VendorDetails] Failed to clear active job:', error);
+            }
+        }
+        router.replace('/(vendor)/(servicerequests)/');
+    }, [router, stopLocationTracking]);
 
     // Request not found - check early
+    // Use router.replace instead of back() for persisted screens with no history
     if (!request && !isLoading) {
         return (
             <View style={styles.errorContainer}>
                 <Ionicons name="alert-circle-outline" size={64} color={COLORS.error} />
                 <Text type="title" style={styles.errorText}>Request not found</Text>
-                <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-                    <Text type="bodySemiBold" style={styles.backButtonText}>Go Back</Text>
+                <TouchableOpacity style={styles.backButton} onPress={handleGoHome}>
+                    <Text type="bodySemiBold" style={styles.backButtonText}>Go Home</Text>
                 </TouchableOpacity>
             </View>
         );
@@ -764,14 +935,28 @@ export default function WebSocketRequestDetailsScreen() {
         );
     }
 
+    // Service cancelled by customer - show redirecting state
+    if (serviceCancelledByCustomer) {
+        return (
+            <View style={styles.loadingContainer}>
+                <Ionicons name="close-circle" size={64} color={COLORS.error} />
+                <Text type="title" style={[styles.errorText, { marginTop: verticalScale(16) }]}>
+                    Job Cancelled
+                </Text>
+                <Text type="body2" style={styles.loadingText}>Redirecting...</Text>
+            </View>
+        );
+    }
+
     // Request not found after loading
+    // Use router.replace instead of back() for persisted screens with no history
     if (!request) {
         return (
             <View style={styles.errorContainer}>
                 <Ionicons name="alert-circle-outline" size={64} color={COLORS.error} />
                 <Text type="title" style={styles.errorText}>Request not found</Text>
-                <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-                    <Text type="bodySemiBold" style={styles.backButtonText}>Go Back</Text>
+                <TouchableOpacity style={styles.backButton} onPress={handleGoHome}>
+                    <Text type="bodySemiBold" style={styles.backButtonText}>Go Home</Text>
                 </TouchableOpacity>
             </View>
         );
@@ -1080,10 +1265,32 @@ export default function WebSocketRequestDetailsScreen() {
                         </TouchableOpacity>
                     )}
 
+                    {/* Cancel Job Button - shows after proposal accepted, but not in_progress */}
+                    {isAccepted && request?.status !== 'completed' && request?.status !== 'in_progress' && (
+                        <TouchableOpacity
+                            style={styles.cancelJobButton}
+                            onPress={handleCancelJob}
+                            activeOpacity={0.7}
+                        >
+                            <Text type="bodySemiBold" style={styles.cancelJobButtonText}>
+                                Cancel Job
+                            </Text>
+                        </TouchableOpacity>
+                    )}
+
                     {/* Spacer */}
                     <View style={{ height: verticalScale(40) }} />
                 </BottomSheetScrollView>
             </BottomSheet>
+
+            {/* Cancel Job Modal */}
+            <CancelJobModal
+                visible={showCancelModal}
+                onClose={() => setShowCancelModal(false)}
+                onConfirm={handleConfirmCancelJob}
+                isLoading={isCancelling}
+                status={request?.status === 'en_route' ? 'en_route' : 'accepted'}
+            />
         </View>
     );
 }
@@ -1442,5 +1649,18 @@ const styles = StyleSheet.create({
     lockTimerText: {
         color: COLORS.white,
         fontSize: moderateScale(13),
+    },
+    cancelJobButton: {
+        marginTop: verticalScale(12),
+        paddingVertical: verticalScale(14),
+        borderRadius: moderateScale(12),
+        borderWidth: 1.5,
+        borderColor: COLORS.error,
+        backgroundColor: COLORS.white,
+        alignItems: 'center',
+    },
+    cancelJobButtonText: {
+        color: COLORS.error,
+        fontSize: moderateScale(15),
     },
 });

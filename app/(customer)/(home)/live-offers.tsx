@@ -38,8 +38,9 @@ import { Ionicons } from "@expo/vector-icons";
 import Text from "@/components/common/Text";
 import { SocketStatusIndicator } from "@/components/common/SocketStatusIndicator";
 import RatingModal from "@/components/common/RatingModal";
+import CancelRequestModal from "@/components/customer/CancelRequestModal";
 import { COLORS } from "@/constants/colors";
-import { serviceRequestApi, type CreateServiceRequestParams } from "@/services/serviceRequestApi";
+import { serviceRequestApi, type CreateServiceRequestParams, type CustomerCancelReasonCode } from "@/services/serviceRequestApi";
 import type { AppDispatch, RootState } from "@/store";
 import type { SocketProposal, Coordinates } from "@/types/socket";
 import {
@@ -53,6 +54,14 @@ import {
     connectSocket,
     selectCompletedService,
     clearCompletedService,
+    selectCancelledService,
+    clearServiceCancelled,
+    selectCanCustomerCancel,
+    selectVendorDistanceTracking,
+    resetVendorDistanceTracking,
+    setVendorStationary,
+    setCurrentCustomerRequest,
+    clearCurrentCustomerRequest,
 } from "@/store/slices/dispatchSlice";
 import { clearReviewState } from "@/store/slices/reviewSlice";
 import { useVendorProximity } from "@/hooks/useVendorProximity";
@@ -66,6 +75,7 @@ import {
     CANCEL_DISABLE_DURATION_MS,
     type ActiveServiceStatus,
 } from "@/services/customerActiveServiceService";
+import { useToast } from "@/contexts/ToastContext";
 
 // ============================================================================
 // Constants
@@ -103,6 +113,7 @@ interface ProposalCardProps {
     proposal: SocketProposal;
     onAccept: (id: number) => void;
     onDecline: (id: number) => void;
+    onVendorTap?: (vendorId: number) => void;
     isAccepting: boolean;
     isDeclining: boolean;
 }
@@ -111,6 +122,7 @@ const ProposalCard = React.memo(({
     proposal,
     onAccept,
     onDecline,
+    onVendorTap,
     isAccepting,
     isDeclining,
 }: ProposalCardProps) => {
@@ -224,6 +236,28 @@ const ProposalCard = React.memo(({
         );
     }, [onDecline, proposal.id]);
 
+    const handleVendorTap = useCallback(() => {
+        // Only allow vendor tap when proposal is accepted
+        if (proposal.status === 'accepted' && onVendorTap && proposal.vendor?.id) {
+            onVendorTap(proposal.vendor.id);
+        }
+    }, [onVendorTap, proposal.vendor?.id, proposal.status]);
+
+    const handleCall = useCallback(() => {
+        if (proposal.vendor?.phone) {
+            Linking.openURL(`tel:${proposal.vendor.phone}`);
+        }
+    }, [proposal.vendor?.phone]);
+
+    const handleWhatsApp = useCallback(() => {
+        if (proposal.vendor?.phone) {
+            const phone = proposal.vendor.phone.replace(/\D/g, '');
+            Linking.openURL(`https://wa.me/${phone}`);
+        }
+    }, [proposal.vendor?.phone]);
+
+    const isAcceptedProposal = proposal.status === 'accepted';
+
     const getStatusBadge = () => {
         switch (proposal.status) {
             case 'accepted':
@@ -265,48 +299,102 @@ const ProposalCard = React.memo(({
 
             {/* Header */}
             <View style={styles.proposalHeader}>
-                <View style={styles.vendorInfo}>
-                    <View style={styles.avatarContainer}>
-                        {proposal.vendor?.profile_photo_url ? (
-                            <View style={styles.avatar}>
-                                <Text style={styles.avatarText}>
-                                    {proposal.vendor.full_name?.charAt(0)?.toUpperCase() || 'V'}
-                                </Text>
-                            </View>
-                        ) : (
-                            <LinearGradient
-                                colors={[COLORS.primary, COLORS.accent]}
-                                start={{ x: 0, y: 0 }}
-                                end={{ x: 1, y: 1 }}
-                                style={styles.avatar}
-                            >
-                                <Text style={styles.avatarTextWhite}>
-                                    {proposal.vendor?.full_name?.charAt(0)?.toUpperCase() || 'V'}
-                                </Text>
-                            </LinearGradient>
-                        )}
-                        {proposal.vendor?.verified && (
-                            <View style={styles.verifiedBadge}>
-                                <Ionicons name="checkmark" size={10} color={COLORS.white} />
-                            </View>
-                        )}
-                    </View>
+                {isAcceptedProposal ? (
+                    <TouchableOpacity
+                        style={styles.vendorInfo}
+                        onPress={handleVendorTap}
+                        activeOpacity={0.7}
+                    >
+                        <View style={styles.avatarContainer}>
+                            {proposal.vendor?.profile_photo_url ? (
+                                <View style={styles.avatar}>
+                                    <Text style={styles.avatarText}>
+                                        {proposal.vendor.full_name?.charAt(0)?.toUpperCase() || 'V'}
+                                    </Text>
+                                </View>
+                            ) : (
+                                <LinearGradient
+                                    colors={[COLORS.primary, COLORS.accent]}
+                                    start={{ x: 0, y: 0 }}
+                                    end={{ x: 1, y: 1 }}
+                                    style={styles.avatar}
+                                >
+                                    <Text style={styles.avatarTextWhite}>
+                                        {proposal.vendor?.full_name?.charAt(0)?.toUpperCase() || 'V'}
+                                    </Text>
+                                </LinearGradient>
+                            )}
+                            {proposal.vendor?.verified && (
+                                <View style={styles.verifiedBadge}>
+                                    <Ionicons name="checkmark" size={10} color={COLORS.white} />
+                                </View>
+                            )}
+                        </View>
 
-                    <View style={styles.vendorDetails}>
-                        <Text type="subtitle" style={styles.vendorName}>
-                            {proposal.vendor?.full_name || 'Vendor'}
-                        </Text>
-                        <View style={styles.ratingRow}>
-                            <Ionicons name="star" size={14} color={COLORS.warning} />
-                            <Text style={styles.ratingText}>
-                                {proposal.vendor?.average_rating?.toFixed(1) || '0.0'}
-                            </Text>
-                            <Text style={styles.reviewsText}>
-                                ({proposal.vendor?.total_reviews || 0} reviews)
-                            </Text>
+                        <View style={styles.vendorDetails}>
+                            <View style={styles.vendorNameRow}>
+                                <Text type="subtitle" style={styles.vendorName}>
+                                    {proposal.vendor?.full_name || 'Vendor'}
+                                </Text>
+                                <Ionicons name="chevron-forward" size={14} color={COLORS.gray400} style={{ marginLeft: 4 }} />
+                            </View>
+                            <View style={styles.ratingRow}>
+                                <Ionicons name="star" size={14} color={COLORS.warning} />
+                                <Text style={styles.ratingText}>
+                                    {proposal.vendor?.average_rating?.toFixed(1) || '0.0'}
+                                </Text>
+                                <Text style={styles.reviewsText}>
+                                    ({proposal.vendor?.total_reviews || 0} reviews)
+                                </Text>
+                            </View>
+                        </View>
+                    </TouchableOpacity>
+                ) : (
+                    <View style={styles.vendorInfo}>
+                        <View style={styles.avatarContainer}>
+                            {proposal.vendor?.profile_photo_url ? (
+                                <View style={styles.avatar}>
+                                    <Text style={styles.avatarText}>
+                                        {proposal.vendor.full_name?.charAt(0)?.toUpperCase() || 'V'}
+                                    </Text>
+                                </View>
+                            ) : (
+                                <LinearGradient
+                                    colors={[COLORS.primary, COLORS.accent]}
+                                    start={{ x: 0, y: 0 }}
+                                    end={{ x: 1, y: 1 }}
+                                    style={styles.avatar}
+                                >
+                                    <Text style={styles.avatarTextWhite}>
+                                        {proposal.vendor?.full_name?.charAt(0)?.toUpperCase() || 'V'}
+                                    </Text>
+                                </LinearGradient>
+                            )}
+                            {proposal.vendor?.verified && (
+                                <View style={styles.verifiedBadge}>
+                                    <Ionicons name="checkmark" size={10} color={COLORS.white} />
+                                </View>
+                            )}
+                        </View>
+
+                        <View style={styles.vendorDetails}>
+                            <View style={styles.vendorNameRow}>
+                                <Text type="subtitle" style={styles.vendorName}>
+                                    {proposal.vendor?.full_name || 'Vendor'}
+                                </Text>
+                            </View>
+                            <View style={styles.ratingRow}>
+                                <Ionicons name="star" size={14} color={COLORS.warning} />
+                                <Text style={styles.ratingText}>
+                                    {proposal.vendor?.average_rating?.toFixed(1) || '0.0'}
+                                </Text>
+                                <Text style={styles.reviewsText}>
+                                    ({proposal.vendor?.total_reviews || 0} reviews)
+                                </Text>
+                            </View>
                         </View>
                     </View>
-                </View>
+                )}
 
                 {/* Timer or Status Badge */}
                 {isPending ? (
@@ -404,6 +492,38 @@ const ProposalCard = React.memo(({
                     </TouchableOpacity>
                 </View>
             )}
+
+            {/* Contact Buttons - Show only when proposal is accepted */}
+            {isAcceptedProposal && proposal.vendor?.phone && (
+                <View style={styles.contactButtonsContainer}>
+                    <TouchableOpacity
+                        style={styles.callButton}
+                        onPress={handleCall}
+                        activeOpacity={0.8}
+                    >
+                        <LinearGradient
+                            colors={[COLORS.primary, COLORS.accent]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={styles.contactButtonGradient}
+                        >
+                            <Ionicons name="call" size={18} color={COLORS.white} />
+                            <Text style={styles.contactButtonText}>Call</Text>
+                        </LinearGradient>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                        style={styles.whatsappButton}
+                        onPress={handleWhatsApp}
+                        activeOpacity={0.8}
+                    >
+                        <View style={styles.whatsappButtonInner}>
+                            <Ionicons name="logo-whatsapp" size={18} color="#25D366" />
+                            <Text style={styles.whatsappButtonText}>WhatsApp</Text>
+                        </View>
+                    </TouchableOpacity>
+                </View>
+            )}
         </Animated.View>
     );
 }, (prevProps, nextProps) => {
@@ -437,6 +557,7 @@ export default function LiveOffersScreen() {
         acceptedAtTimestamp?: string; // When proposal was accepted (for cancel window)
     }>();
     const dispatch = useDispatch<AppDispatch>();
+    const { showToast } = useToast();
     const mapRef = useRef<MapView | null>(null);
     const bottomSheetRef = useRef<BottomSheet | null>(null);
 
@@ -446,6 +567,9 @@ export default function LiveOffersScreen() {
     const customerRequests = useSelector(selectCustomerRequests);
     const vendorLocation = useSelector(selectVendorLocation);
     const completedService = useSelector(selectCompletedService);
+    const cancelledService = useSelector(selectCancelledService);
+    const canCustomerCancel = useSelector(selectCanCustomerCancel);
+    const vendorDistanceTracking = useSelector(selectVendorDistanceTracking);
 
     // Get current request and its proposals
     const requestId = params.requestId ? parseInt(params.requestId, 10) : null;
@@ -506,12 +630,43 @@ export default function LiveOffersScreen() {
     // Rating modal state
     const [showRatingModal, setShowRatingModal] = useState(false);
 
+    // Cancel request modal state
+    const [showCancelModal, setShowCancelModal] = useState(false);
+    const [isCancelling, setIsCancelling] = useState(false);
+
+    // Track if service was cancelled by vendor (to prevent expiry UI from showing)
+    const [serviceCancelledByVendor, setServiceCancelledByVendor] = useState(false);
+
     // Cancel disable state (1 minute after accepting proposal)
     const [cancelDisableTimeLeft, setCancelDisableTimeLeft] = useState<number>(0);
     const [acceptedAt, setAcceptedAt] = useState<number | null>(null);
     const cancelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const appStateRef = useRef<AppStateStatus>(AppState.currentState);
     const backgroundTimeRef = useRef<number | null>(null);
+
+    // =========================================================================
+    // Set currentCustomerRequestId in Redux for cancellation tracking
+    // This ensures the cancellation handler can detect this request even if
+    // it's not in customerRequestsById or activeJobId
+    // =========================================================================
+    useEffect(() => {
+        if (effectiveRequestId) {
+            dispatch(setCurrentCustomerRequest(effectiveRequestId));
+            if (__DEV__) {
+                console.log('[LiveOffers] Set currentCustomerRequestId:', effectiveRequestId);
+            }
+        }
+
+        // Cleanup: Clear when component unmounts or request changes
+        return () => {
+            if (effectiveRequestId) {
+                dispatch(clearCurrentCustomerRequest());
+                if (__DEV__) {
+                    console.log('[LiveOffers] Cleared currentCustomerRequestId');
+                }
+            }
+        };
+    }, [effectiveRequestId, dispatch]);
 
     // Service address coordinates (from params first, then currentRequest)
     const serviceLocation = useMemo<Coordinates | null>(() => {
@@ -555,12 +710,15 @@ export default function LiveOffersScreen() {
     // Memoize enabled flag to prevent unnecessary hook re-renders
     // This is critical for preventing crash on low-end devices
     // IMPORTANT: Only enable after staged initialization is complete
+    // Disable when vendor cancels to clear route from map
     const isRouteTrackingEnabled = useMemo(() => {
-        return initStage === 'ready' && !!acceptedProposal && !!vendorLocation && !!serviceLocation;
-    }, [initStage, acceptedProposal, vendorLocation, serviceLocation]);
+        return initStage === 'ready' && !!acceptedProposal && !!vendorLocation && !!serviceLocation && !serviceCancelledByVendor;
+    }, [initStage, acceptedProposal, vendorLocation, serviceLocation, serviceCancelledByVendor]);
 
     const {
         routeCoords,
+        roadDistanceFormatted,
+        etaFormatted,
         isLoading: isRouteLoading,
         refreshRoute,
     } = useRouteTracking({
@@ -796,7 +954,7 @@ export default function LiveOffersScreen() {
                         console.log('[LiveOffers] App came to foreground - syncing with backend');
                     }
 
-                    const response = await serviceRequestApi.getById(effectiveRequestId);
+                    const response = await serviceRequestApi.get(effectiveRequestId);
 
                     // Check if backend has different status
                     if (response.status === 'expired' || response.status === 'cancelled') {
@@ -834,6 +992,177 @@ export default function LiveOffersScreen() {
         }
     }, [completedService, effectiveRequestId]);
 
+    // Handle service cancellation by vendor (via WebSocket)
+    useEffect(() => {
+        // Guard: Only run once - check serviceCancelledByVendor flag to prevent infinite loop
+        if (serviceCancelledByVendor) return;
+
+        if (cancelledService && cancelledService.requestId === effectiveRequestId && cancelledService.cancelledBy === 'vendor') {
+            // Set flag IMMEDIATELY to prevent re-running this effect and expiry UI from showing
+            setServiceCancelledByVendor(true);
+
+            // Clear persisted service
+            clearCustomerActiveService().catch(() => { });
+
+            // Reset vendor distance tracking
+            dispatch(resetVendorDistanceTracking());
+
+            // Clear Redux cancelled service state (we're handling UI locally now)
+            dispatch(clearServiceCancelled());
+
+            // Show toast notification
+            showToast({
+                type: 'warning',
+                title: 'Job Cancelled by Vendor',
+                message: cancelledService.reason || 'The vendor has cancelled this job.',
+                duration: 4000,
+            });
+
+            // NOTE: No auto-redirect - user will see "Request Cancelled" UI with Search Again option
+        }
+    }, [cancelledService, effectiveRequestId, dispatch, showToast, serviceCancelledByVendor]);
+
+    // =========================================================================
+    // Periodic Stationary Check Timer
+    // Checks if vendor has been stationary for 10+ minutes (no location updates)
+    // This handles the case where vendor stops sending location updates entirely
+    // =========================================================================
+    useEffect(() => {
+        // Only run when proposal is accepted and vendor has reached 1km
+        if (!acceptedProposal) return;
+        if (!vendorDistanceTracking.hasReached1km) return;
+        if (vendorDistanceTracking.isVendorStationary) return; // Already marked stationary
+
+        const STATIONARY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+        const CHECK_INTERVAL_MS = 30 * 1000; // Check every 30 seconds
+
+        const checkStationaryInterval = setInterval(() => {
+            const { lastMovementAt, hasReached1km, isVendorStationary } = vendorDistanceTracking;
+
+            // Skip if conditions no longer met
+            if (!hasReached1km || isVendorStationary || !lastMovementAt) return;
+
+            const now = Date.now();
+            const stationaryDuration = now - lastMovementAt;
+
+            if (stationaryDuration >= STATIONARY_THRESHOLD_MS) {
+                if (__DEV__) {
+                    console.log('[LiveOffers] Vendor stationary for 10+ mins - enabling cancel button');
+                }
+                dispatch(setVendorStationary());
+            }
+        }, CHECK_INTERVAL_MS);
+
+        return () => clearInterval(checkStationaryInterval);
+    }, [acceptedProposal, vendorDistanceTracking.hasReached1km, vendorDistanceTracking.isVendorStationary, vendorDistanceTracking.lastMovementAt, dispatch]);
+
+    // =========================================================================
+    // Polling Fallback for Request Status (Production Safety Net)
+    // Polls backend every 30 seconds to check if request was cancelled
+    // This handles cases where WebSocket event is missed
+    // =========================================================================
+    useEffect(() => {
+        // Only run when there's an accepted proposal and not already cancelled
+        if (!acceptedProposal || !effectiveRequestId || serviceCancelledByVendor) return;
+
+        const POLL_INTERVAL_MS = 30 * 1000; // 30 seconds
+
+        const checkRequestStatus = async () => {
+            try {
+                const response = await serviceRequestApi.get(effectiveRequestId);
+
+                // Check if request was cancelled
+                if (response.status === 'cancelled' && response.cancelled_by === 'vendor') {
+                    if (__DEV__) {
+                        console.log('[LiveOffers] Polling detected vendor cancellation:', response);
+                    }
+
+                    // Trigger the same flow as WebSocket cancellation
+                    setServiceCancelledByVendor(true);
+                    clearCustomerActiveService().catch(() => { });
+                    dispatch(resetVendorDistanceTracking());
+                    dispatch(clearCurrentCustomerRequest());
+
+                    showToast({
+                        type: 'warning',
+                        title: 'Job Cancelled by Vendor',
+                        message: response.cancellation_reason || 'The vendor has cancelled this job.',
+                        duration: 4000,
+                    });
+                }
+            } catch (error) {
+                // Silently fail - WebSocket should handle most cases
+                if (__DEV__) {
+                    console.log('[LiveOffers] Polling check failed (non-critical):', error);
+                }
+            }
+        };
+
+        // Initial check after a short delay
+        const initialCheck = setTimeout(checkRequestStatus, 5000);
+
+        // Periodic polling
+        const pollInterval = setInterval(checkRequestStatus, POLL_INTERVAL_MS);
+
+        return () => {
+            clearTimeout(initialCheck);
+            clearInterval(pollInterval);
+        };
+    }, [acceptedProposal, effectiveRequestId, serviceCancelledByVendor, dispatch, showToast]);
+
+    // =========================================================================
+    // Server-Side Stationary Check on App Resume
+    // Polls backend for vendor status when app comes to foreground
+    // This handles cases where vendor's app was killed/backgrounded and no WebSocket updates
+    // =========================================================================
+    useEffect(() => {
+        const checkVendorStatusOnForeground = async (nextAppState: AppStateStatus) => {
+            // Only check when coming to foreground with accepted proposal and vendor has reached 1km
+            if (
+                appStateRef.current.match(/inactive|background/) &&
+                nextAppState === 'active' &&
+                acceptedProposal &&
+                effectiveRequestId &&
+                vendorDistanceTracking.hasReached1km &&
+                !vendorDistanceTracking.isVendorStationary
+            ) {
+                try {
+                    if (__DEV__) {
+                        console.log('[LiveOffers] App foreground - checking vendor status from server');
+                    }
+
+                    const vendorStatus = await serviceRequestApi.getVendorStatus(effectiveRequestId);
+
+                    if (__DEV__) {
+                        console.log('[LiveOffers] Vendor status from server:', vendorStatus);
+                    }
+
+                    // If server says vendor is stationary and has reached 1km, enable cancel button
+                    if (vendorStatus.can_cancel) {
+                        if (__DEV__) {
+                            console.log('[LiveOffers] Server confirms vendor stationary - enabling cancel');
+                        }
+                        dispatch(setVendorStationary());
+                    }
+                } catch (error) {
+                    if (__DEV__) {
+                        console.error('[LiveOffers] Vendor status check failed:', error);
+                    }
+                    // Silently fail - client-side timer is still running as fallback
+                }
+            }
+        };
+
+        const subscription = AppState.addEventListener('change', checkVendorStatusOnForeground);
+        return () => subscription?.remove();
+    }, [
+        acceptedProposal,
+        effectiveRequestId,
+        vendorDistanceTracking.hasReached1km,
+        vendorDistanceTracking.isVendorStationary,
+        dispatch,
+    ]);
+
     // Request expiry timer - uses restored expiresAt OR backend expires_at OR local countdown fallback
     // Priority: 1) URL params expiresAt (restored from SecureStore), 2) currentRequest.expires_at (from backend), 3) local fallback
     const requestStartTimeRef = useRef<number>(Date.now());
@@ -846,8 +1175,8 @@ export default function LiveOffersScreen() {
     }, [params.restoredStatus]);
 
     useEffect(() => {
-        // Skip if proposal already accepted or request already expired
-        if (acceptedProposal || requestExpired) return;
+        // Skip if proposal already accepted, request already expired, or vendor cancelled
+        if (acceptedProposal || requestExpired || serviceCancelledByVendor) return;
 
         const calculateTimeLeft = () => {
             // Priority 1: URL params expiresAt (restored from SecureStore - most reliable)
@@ -908,7 +1237,7 @@ export default function LiveOffersScreen() {
                 clearTimeout(timeoutId);
             }
         };
-    }, [params.expiresAt, currentRequest?.expires_at, acceptedProposal, requestExpired]);
+    }, [params.expiresAt, currentRequest?.expires_at, acceptedProposal, requestExpired, serviceCancelledByVendor]);
 
     // =========================================================================
     // STAGED INITIALIZATION EFFECT
@@ -1064,46 +1393,65 @@ export default function LiveOffersScreen() {
         }
     }, [dispatch]);
 
+    // Navigate to vendor profile
+    const handleVendorProfileTap = useCallback((vendorId: number) => {
+        router.push({
+            pathname: '/(customer)/(favorites)/vendor-detail',
+            params: { vendorId: vendorId.toString() }
+        });
+    }, [router]);
+
+    // Open cancel modal
     const handleCancelRequest = useCallback(() => {
-        Alert.alert(
-            'Cancel Request',
-            'Are you sure you want to cancel this request?',
-            [
-                { text: 'No', style: 'cancel' },
-                {
-                    text: 'Yes, Cancel',
-                    style: 'destructive',
-                    onPress: async () => {
-                        // 1. Cancel on backend (notify vendors via WebSocket, update status)
-                        if (effectiveRequestId) {
-                            try {
-                                await serviceRequestApi.cancel(effectiveRequestId);
-                                if (__DEV__) {
-                                    console.log('[LiveOffers] Request cancelled on backend:', effectiveRequestId);
-                                }
-                            } catch (error) {
-                                // Log but don't block - user wants to leave
-                                if (__DEV__) {
-                                    console.error('[LiveOffers] Cancel API failed:', error);
-                                }
-                            }
-                        }
+        setShowCancelModal(true);
+    }, []);
 
-                        // 2. Clear persisted active service
-                        await clearCustomerActiveService().catch(() => { });
+    // Handle cancel confirmation from modal
+    const handleConfirmCancel = useCallback(async (
+        reasonCode?: CustomerCancelReasonCode,
+        customReason?: string
+    ) => {
+        if (!effectiveRequestId) return;
 
-                        // 3. Safe navigation - check if back is possible
-                        if (router.canGoBack()) {
-                            router.back();
-                        } else {
-                            // Fallback to home when no back history
-                            router.replace('/(customer)/(home)/');
-                        }
-                    },
-                },
-            ]
-        );
-    }, [router, effectiveRequestId]);
+        try {
+            setIsCancelling(true);
+
+            // Cancel on backend with reason
+            await serviceRequestApi.cancel({
+                id: effectiveRequestId,
+                cancelled_by: 'customer',
+                reason_code: reasonCode,
+                reason: customReason,
+            });
+
+            if (__DEV__) {
+                console.log('[LiveOffers] Request cancelled on backend:', effectiveRequestId, reasonCode);
+            }
+
+            // Clear persisted active service
+            await clearCustomerActiveService().catch(() => { });
+
+            // Reset vendor distance tracking for next request
+            dispatch(resetVendorDistanceTracking());
+
+            // Close modal
+            setShowCancelModal(false);
+
+            // Navigate away
+            if (router.canGoBack()) {
+                router.back();
+            } else {
+                router.replace('/(customer)/(home)/');
+            }
+        } catch (error) {
+            if (__DEV__) {
+                console.error('[LiveOffers] Cancel API failed:', error);
+            }
+            Alert.alert('Error', 'Failed to cancel request. Please try again.');
+        } finally {
+            setIsCancelling(false);
+        }
+    }, [effectiveRequestId, router, dispatch]);
 
     // Handle retry request - create new request with same parameters
     const handleRetryRequest = useCallback(async () => {
@@ -1167,7 +1515,8 @@ export default function LiveOffersScreen() {
                 </Marker>
 
                 {/* Vendor live location marker (only after acceptance and when vendor shares location) */}
-                {acceptedProposal && vendorLocation && (
+                {/* Hide marker when vendor cancels */}
+                {acceptedProposal && vendorLocation && !serviceCancelledByVendor && (
                     <Marker
                         key={`vendor-${acceptedProposal.id}`}
                         coordinate={vendorLocation}
@@ -1194,10 +1543,11 @@ export default function LiveOffersScreen() {
             proposal={item}
             onAccept={handleAcceptProposal}
             onDecline={handleDeclineProposal}
+            onVendorTap={handleVendorProfileTap}
             isAccepting={acceptingId === item.id}
             isDeclining={decliningId === item.id}
         />
-    ), [handleAcceptProposal, handleDeclineProposal, acceptingId, decliningId]);
+    ), [handleAcceptProposal, handleDeclineProposal, handleVendorProfileTap, acceptingId, decliningId]);
 
     const keyExtractor = useCallback((item: SocketProposal) => item.id.toString(), []);
 
@@ -1305,7 +1655,8 @@ export default function LiveOffersScreen() {
                         shouldReplaceMapContent={true}
                     />
                 )} */}
-                {routeCoords.length > 0 && (
+                {/* Hide route when vendor cancels */}
+                {routeCoords.length > 0 && !serviceCancelledByVendor && (
                     <Polyline
                         coordinates={routeCoords}
                         strokeColor={COLORS.primary}
@@ -1316,8 +1667,8 @@ export default function LiveOffersScreen() {
                 {renderMarkers()}
             </MapView>
 
-            {/* Vendor Tracking Info (when route is being tracked) */}
-            {acceptedProposal && vendorLocation && (
+            {/* Vendor Tracking Info (when route is being tracked) - hide when vendor cancels */}
+            {acceptedProposal && vendorLocation && !serviceCancelledByVendor && (
                 <View style={styles.trackingInfoCard}>
                     <View style={styles.trackingInfoRow}>
                         <View style={styles.trackingInfoItem}>
@@ -1337,8 +1688,12 @@ export default function LiveOffersScreen() {
                 </View>
             )}
 
-            {/* Floating Cancel Button - Only show during 60s cancel window after acceptance */}
-            {acceptedProposal && cancelDisableTimeLeft > 0 && (
+            {/* Floating Cancel Button - Show when customer can cancel based on vendor distance
+                - Before 1km: Always visible
+                - After 1km: Hidden
+                - After 1km + 10 mins stationary: Visible again
+                - Hidden if vendor already cancelled */}
+            {acceptedProposal && canCustomerCancel && !serviceCancelledByVendor && (
                 <TouchableOpacity
                     style={styles.cancelButton}
                     onPress={handleCancelRequest}
@@ -1352,7 +1707,9 @@ export default function LiveOffersScreen() {
                     >
                         <X size={20} color={COLORS.white} />
                         <Text style={styles.cancelButtonText}>
-                            Cancel ({cancelDisableTimeLeft}s left)
+                            {vendorDistanceTracking.isVendorStationary
+                                ? 'Cancel (Vendor Stationary)'
+                                : 'Cancel Request'}
                         </Text>
                     </LinearGradient>
                 </TouchableOpacity>
@@ -1371,36 +1728,41 @@ export default function LiveOffersScreen() {
                     {/* Title */}
                     <View style={styles.sheetTitleContainer}>
                         <LinearGradient
-                            colors={requestExpired && !acceptedProposal
-                                ? [COLORS.warning, '#f59e0b']
-                                : [COLORS.primary, COLORS.accent]}
+                            colors={serviceCancelledByVendor
+                                ? [COLORS.error, '#dc2626']
+                                : requestExpired && !acceptedProposal
+                                    ? [COLORS.warning, '#f59e0b']
+                                    : [COLORS.primary, COLORS.accent]}
                             start={{ x: 0, y: 0 }}
                             end={{ x: 1, y: 0 }}
                             style={styles.sheetTitleGradient}
                         >
                             <Text type="subtitle" style={styles.sheetTitle}>
-                                {acceptedProposal
-                                    ? vendorHasArrived
-                                        ? 'Vendor Arrived!'
-                                        : 'Vendor on the way'
-                                    : requestExpired
-                                        ? 'Request Expired'
-                                        : activeProposals.length === 0
-                                            ? 'Waiting for proposals...'
-                                            : `${activeProposals.length} Proposal${activeProposals.length > 1 ? 's' : ''} Received`
+                                {serviceCancelledByVendor
+                                    ? 'Request Cancelled'
+                                    : acceptedProposal
+                                        ? vendorHasArrived
+                                            ? 'Vendor Arrived!'
+                                            : 'Vendor on the way'
+                                        : requestExpired
+                                            ? 'Request Expired'
+                                            : activeProposals.length === 0
+                                                ? 'Waiting for proposals...'
+                                                : `${activeProposals.length} Proposal${activeProposals.length > 1 ? 's' : ''} Received`
                                 }
                             </Text>
                         </LinearGradient>
                     </View>
 
                     {/* Content */}
-                    {acceptedProposal ? (
-                        // Accepted state
+                    {acceptedProposal && !serviceCancelledByVendor ? (
+                        // Accepted state - hide when vendor cancels
                         <View style={styles.acceptedContainer}>
                             <ProposalCard
                                 proposal={acceptedProposal}
                                 onAccept={() => { }}
                                 onDecline={() => { }}
+                                onVendorTap={handleVendorProfileTap}
                                 isAccepting={false}
                                 isDeclining={false}
                             />
@@ -1433,7 +1795,7 @@ export default function LiveOffersScreen() {
                                 </View>
                             )}
 
-                            {/* Live Tracking Status */}
+                            {/* Live Tracking Status - Shows real-time road distance and ETA from Google Routes */}
                             {vendorLocation ? (
                                 <View style={styles.trackingInfo}>
                                     <LinearGradient
@@ -1445,9 +1807,9 @@ export default function LiveOffersScreen() {
                                         <View style={styles.trackingRow}>
                                             <View style={styles.trackingItem}>
                                                 <Ionicons name="navigate" size={20} color={COLORS.primary} />
-                                                <Text style={styles.trackingLabel}>Distance</Text>
+                                                <Text style={styles.trackingLabel}>Road Distance</Text>
                                                 <Text type="subtitle" style={styles.trackingValue}>
-                                                    {formattedDistance || `${acceptedProposal.vendor?.distance_km?.toFixed(1) || '0.0'} km`}
+                                                    {roadDistanceFormatted || formattedDistance || `${acceptedProposal.vendor?.distance_km?.toFixed(1) || '0.0'} km`}
                                                 </Text>
                                             </View>
                                             <View style={styles.trackingDivider} />
@@ -1455,10 +1817,16 @@ export default function LiveOffersScreen() {
                                                 <Ionicons name="time" size={20} color={COLORS.accent} />
                                                 <Text style={styles.trackingLabel}>ETA</Text>
                                                 <Text type="subtitle" style={styles.trackingValue}>
-                                                    {acceptedProposal.eta_minutes || '~'} min
+                                                    {etaFormatted || `~${acceptedProposal.eta_minutes || '?'} min`}
                                                 </Text>
                                             </View>
                                         </View>
+                                        {isRouteLoading && (
+                                            <View style={styles.routeLoadingIndicator}>
+                                                <ActivityIndicator size="small" color={COLORS.primary} />
+                                                <Text style={styles.routeLoadingText}>Updating route...</Text>
+                                            </View>
+                                        )}
                                     </LinearGradient>
                                 </View>
                             ) : (
@@ -1470,8 +1838,8 @@ export default function LiveOffersScreen() {
                                 </View>
                             )}
                         </View>
-                    ) : requestExpired ? (
-                        // Request expired - show search again + cancel buttons
+                    ) : requestExpired && !serviceCancelledByVendor ? (
+                        // Request expired - show search again + cancel buttons (skip if vendor cancelled)
                         <View style={styles.emptyState}>
                             <View style={styles.expiredIconContainer}>
                                 <Ionicons name="time-outline" size={64} color={COLORS.warning} />
@@ -1514,6 +1882,52 @@ export default function LiveOffersScreen() {
                                 activeOpacity={0.7}
                             >
                                 <Text style={styles.cancelButtonSecondaryText}>Cancel Request</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : serviceCancelledByVendor ? (
+                        // Vendor cancelled - show search again UI
+                        <View style={styles.emptyState}>
+                            <View style={styles.expiredIconContainer}>
+                                <Ionicons name="close-circle-outline" size={64} color={COLORS.error} />
+                            </View>
+                            <Text type="body" style={styles.emptyTitle}>
+                                Request Cancelled
+                            </Text>
+                            <Text style={styles.emptyText}>
+                                The vendor has cancelled this job. Would you like to search for another vendor?
+                            </Text>
+
+                            {/* Search Again Button (Primary) */}
+                            <TouchableOpacity
+                                style={styles.searchAgainButton}
+                                onPress={handleRetryRequest}
+                                disabled={isRetrying}
+                                activeOpacity={0.8}
+                            >
+                                <LinearGradient
+                                    colors={[COLORS.primary, COLORS.accent]}
+                                    start={{ x: 0, y: 0 }}
+                                    end={{ x: 1, y: 0 }}
+                                    style={styles.searchAgainButtonInner}
+                                >
+                                    {isRetrying ? (
+                                        <ActivityIndicator color={COLORS.white} size="small" />
+                                    ) : (
+                                        <>
+                                            <Ionicons name="search" size={20} color={COLORS.white} />
+                                            <Text style={styles.searchAgainText}>Search Again</Text>
+                                        </>
+                                    )}
+                                </LinearGradient>
+                            </TouchableOpacity>
+
+                            {/* Go Home Button (Secondary) */}
+                            <TouchableOpacity
+                                style={styles.cancelButtonSecondary}
+                                onPress={() => router.replace('/(customer)/(home)')}
+                                activeOpacity={0.7}
+                            >
+                                <Text style={styles.cancelButtonSecondaryText}>Go Home</Text>
                             </TouchableOpacity>
                         </View>
                     ) : activeProposals.length === 0 ? (
@@ -1603,6 +2017,16 @@ export default function LiveOffersScreen() {
                     vendorName={completedService.vendorName}
                 />
             )}
+
+            {/* Cancel Request Modal */}
+            <CancelRequestModal
+                visible={showCancelModal}
+                onClose={() => setShowCancelModal(false)}
+                onConfirm={handleConfirmCancel}
+                isLoading={isCancelling}
+                proposalCount={activeProposals.length}
+                status={acceptedProposal ? 'accepted' : 'pending'}
+            />
         </GestureHandlerRootView>
     );
 }
@@ -2083,6 +2507,10 @@ const styles = StyleSheet.create({
         marginLeft: scale(12),
         flex: 1,
     },
+    vendorNameRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
     vendorName: {
         fontSize: moderateScale(16),
         fontWeight: '700',
@@ -2231,6 +2659,54 @@ const styles = StyleSheet.create({
         color: COLORS.white,
     },
 
+    // Contact Buttons (Call/WhatsApp) - Show when proposal is accepted
+    contactButtonsContainer: {
+        flexDirection: 'row',
+        gap: scale(10),
+        marginTop: verticalScale(12),
+    },
+    callButton: {
+        flex: 1,
+        borderRadius: moderateScale(10),
+        overflow: 'hidden',
+        shadowColor: COLORS.primary,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    contactButtonGradient: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: verticalScale(12),
+        gap: scale(6),
+    },
+    contactButtonText: {
+        fontSize: moderateScale(14),
+        fontWeight: '600',
+        color: COLORS.white,
+    },
+    whatsappButton: {
+        flex: 1,
+        borderRadius: moderateScale(10),
+        borderWidth: 1.5,
+        borderColor: '#25D366',
+        overflow: 'hidden',
+    },
+    whatsappButtonInner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: verticalScale(10),
+        gap: scale(6),
+    },
+    whatsappButtonText: {
+        fontSize: moderateScale(14),
+        fontWeight: '600',
+        color: '#25D366',
+    },
+
     // Accepted state
     acceptedContainer: {
         flex: 1,
@@ -2268,6 +2744,19 @@ const styles = StyleSheet.create({
         fontWeight: '700',
         color: COLORS.gray900,
         marginTop: verticalScale(2),
+    },
+
+    // Route loading indicator (shows when Google Routes API is updating)
+    routeLoadingIndicator: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: verticalScale(8),
+        gap: scale(6),
+    },
+    routeLoadingText: {
+        fontSize: moderateScale(11),
+        color: COLORS.gray500,
     },
 
     // Vendor arrival badge

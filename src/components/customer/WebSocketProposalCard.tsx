@@ -72,10 +72,12 @@ const WebSocketProposalCardInner = ({ proposal, isNew = false }: Props) => {
         return `${hours}h ${mins}m`;
     }, [proposal.eta_minutes]);
 
-    // Pulse animation for urgent proposals
+    // Pulse animation for urgent proposals - with proper cleanup to prevent memory leak
     useEffect(() => {
+        let animationRef: Animated.CompositeAnimation | null = null;
+
         if (isUrgent) {
-            Animated.loop(
+            animationRef = Animated.loop(
                 Animated.sequence([
                     Animated.timing(pulseAnim, {
                         toValue: 1.02,
@@ -88,10 +90,19 @@ const WebSocketProposalCardInner = ({ proposal, isNew = false }: Props) => {
                         useNativeDriver: true,
                     }),
                 ])
-            ).start();
+            );
+            animationRef.start();
         } else {
             pulseAnim.setValue(1);
         }
+
+        // CRITICAL: Stop animation on cleanup to prevent CPU spike on low-end devices
+        return () => {
+            if (animationRef) {
+                animationRef.stop();
+            }
+            pulseAnim.setValue(1);
+        };
     }, [isUrgent, pulseAnim]);
 
     // Progress bar animation

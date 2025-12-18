@@ -63,6 +63,11 @@ export interface ServiceHistoryRequest {
     feedback: string;
     created_at: string;
   } | null;
+  // Cancellation fields
+  cancelled_by?: 'customer' | 'vendor';
+  cancellation_reason_code?: string;
+  cancellation_reason?: string;
+  cancelled_at?: string;
 }
 
 export interface ServiceHistoryResponse {

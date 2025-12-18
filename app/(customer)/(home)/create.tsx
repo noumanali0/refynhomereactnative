@@ -57,8 +57,10 @@ class FormErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState
     }
 
     componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-        console.error('Form Error Boundary caught an error:', error);
-        console.error('Component stack:', errorInfo.componentStack);
+        if (__DEV__) {
+            console.error('Form Error Boundary caught an error:', error);
+            console.error('Component stack:', errorInfo.componentStack);
+        }
     }
 
     render(): ReactNode {
@@ -275,17 +277,18 @@ function useServiceCategories() {
 
         const fetchCategories = async () => {
             try {
-                const data = await getServiceCategories();
+                // Pass signal to enable proper cancellation on unmount (fixes memory leak)
+                const data = await getServiceCategories(signal);
                 // Check if aborted before updating state
                 if (!signal.aborted) {
                     setCategories(data);
                 }
             } catch (error: unknown) {
-                // Handle abort gracefully
+                // Handle abort gracefully - don't update state if cancelled
                 if (error instanceof Error && error.name === 'AbortError') {
                     return;
                 }
-                console.error('Failed to fetch categories:', error);
+                if (__DEV__) console.error('Failed to fetch categories:', error);
                 if (!signal.aborted) {
                     setCategories(FALLBACK_CATEGORIES);
                 }
@@ -306,7 +309,7 @@ function useServiceCategories() {
 
     // Memoized category items for dropdown
     const categoryItems = useMemo(() =>
-        categories.map(c => ({
+        (categories ?? []).map(c => ({
             label: c.name,
             value: c.id.toString(),
         })),
@@ -337,7 +340,7 @@ function useImagePicker() {
                 setFieldValue("photo", result.assets[0].uri);
             }
         } catch (error) {
-            console.error('Image picker error:', error);
+            if (__DEV__) console.error('Image picker error:', error);
             Alert.alert('Error', 'Failed to pick image. Please try again.');
         } finally {
             setImageLoading(false);
@@ -827,6 +830,8 @@ const RequestServiceScreen = () => {
 
     // AbortController for submission
     const submitAbortControllerRef = useRef<AbortController | null>(null);
+    // Ref for double-click protection (synchronous check before async Formik state)
+    const isSubmittingRef = useRef(false);
 
     // Input refs for focus management
     const problemTitleRef = useRef<TextInput>(null);
@@ -964,6 +969,13 @@ const RequestServiceScreen = () => {
         values: FormValues,
         formikHelpers: FormikHelpers<FormValues>
     ) => {
+        // Double-click protection: synchronous check before async operations
+        if (isSubmittingRef.current) {
+            if (__DEV__) console.log('[CreateRequest] Ignoring duplicate submission');
+            return;
+        }
+        isSubmittingRef.current = true;
+
         // Create abort controller for this submission
         submitAbortControllerRef.current = new AbortController();
         const signal = submitAbortControllerRef.current.signal;
@@ -993,7 +1005,7 @@ const RequestServiceScreen = () => {
                 return;
             }
 
-            console.log('Service request created:', response);
+            if (__DEV__) console.log('Service request created:', response);
 
             // Persist active service for app kill recovery
             // This ensures customer returns to live-offers screen after app restart
@@ -1028,16 +1040,18 @@ const RequestServiceScreen = () => {
         } catch (error: unknown) {
             // Handle abort gracefully
             if (error instanceof Error && error.name === 'AbortError') {
-                console.log('Submission was cancelled');
+                if (__DEV__) console.log('Submission was cancelled');
                 return;
             }
 
-            console.error('Failed to create service request:', error);
+            if (__DEV__) console.error('Failed to create service request:', error);
             const errorMessage = error instanceof Error
                 ? error.message
                 : 'Failed to create service request. Please try again.';
             Alert.alert('Error', errorMessage);
         } finally {
+            // Reset double-click protection
+            isSubmittingRef.current = false;
             // Formik handles setSubmitting(false) automatically when promise resolves
         }
     }, [categories, findCategory, navigateToLiveOffers]);

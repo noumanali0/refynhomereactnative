@@ -4,13 +4,18 @@
  * Environment-based settings for socket connection
  */
 
-// WebSocket base URL from environment or default to localhost
-// Uses EXPO_PUBLIC_SOCKET_URL from .env file
-export const WS_BASE_URL = process.env.EXPO_PUBLIC_SOCKET_URL || 'ws://192.168.100.8:8000';
+// WebSocket base URL from environment variable (set in .env file)
+// Falls back to localhost for development if not set
+export const WS_BASE_URL = process.env.EXPO_PUBLIC_SOCKET_URL || 'ws://localhost:8000';
 
 // Ping interval in milliseconds (keep alive)
 // Backend expects ping every ~30s, we use 25s for safety margin
 export const PING_INTERVAL = 25000;
+
+// Pong timeout in milliseconds
+// If no pong received within this time, consider connection stale and reconnect
+// Should be longer than PING_INTERVAL to allow for network latency
+export const PONG_TIMEOUT = 35000;
 
 // Reconnection settings
 export const RECONNECT_MAX_ATTEMPTS = 10;

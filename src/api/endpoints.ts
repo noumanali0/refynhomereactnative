@@ -343,6 +343,13 @@ export const VENDOR_ENDPOINTS = {
    * Response: Review[] - List of reviews for vendor
    */
   REVIEWS: (id: number) => `/vendors/${id}/reviews/`,
+
+  /**
+   * GET /api/vendors/{id}/profile/
+   * Response: VendorPublicProfile - Full vendor profile for customers
+   * Includes: basic info, stats, services, recent reviews, is_favorite
+   */
+  PROFILE: (id: number) => `/vendors/${id}/profile/`,
 } as const;
 
 // ============================================================================

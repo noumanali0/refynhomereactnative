@@ -9,18 +9,37 @@
  * - Message queue for offline messages
  * - Event subscription system
  * - Connection state management
+ *
+ * SECURITY NOTE:
+ * Currently uses token in URL query param for authentication.
+ * This is secure over WSS (TLS encrypted) but token appears in server logs.
+ *
+ * TODO: Implement message-based authentication when backend supports it:
+ * 1. Connect without token in URL
+ * 2. Send 'authenticate' action with token in message body
+ * 3. Backend validates and sets user on WebSocket scope
+ *
+ * Backend needs to implement:
+ * - Accept anonymous connection initially
+ * - Handle 'authenticate' action to validate token
+ * - Close connection if auth fails
  */
 
 import {
   WS_BASE_URL,
   PING_INTERVAL,
+  PONG_TIMEOUT,
   RECONNECT_MAX_ATTEMPTS,
   RECONNECT_INITIAL_DELAY,
   RECONNECT_MAX_DELAY,
   WS_CLOSE_CODES,
 } from '@/config/socket';
 import { getAccessToken, shouldRefreshToken } from '@/services/tokenService';
-import type { ConnectionStatus, SocketAction, SocketEvent } from '@/types/socket';
+import type { ConnectionStatus, SocketAction } from '@/types/socket';
+
+// Authentication mode - change to 'message' when backend supports it
+type AuthMode = 'url' | 'message';
+const AUTH_MODE: AuthMode = 'url'; // TODO: Switch to 'message' when backend ready
 
 // Queued message structure
 interface QueuedMessage {
@@ -60,6 +79,9 @@ class SocketService {
   // Last pong timestamp for connection health
   private lastPongTime: number = 0;
 
+  // Pending token for message-based authentication
+  private pendingAuthToken: string | null = null;
+
   /**
    * Connect to WebSocket server
    * Authenticates using JWT token from SecureStore
@@ -67,19 +89,19 @@ class SocketService {
   async connect(): Promise<void> {
     // Already connected or connecting
     if (this.ws?.readyState === WebSocket.OPEN) {
-      console.log('[Socket] Already connected');
+      if (__DEV__) console.log('[Socket] Already connected');
       return;
     }
 
     if (this.ws?.readyState === WebSocket.CONNECTING) {
-      console.log('[Socket] Connection in progress');
+      if (__DEV__) console.log('[Socket] Connection in progress');
       return;
     }
 
     // Get access token
     const token = await getAccessToken();
     if (!token) {
-      console.error('[Socket] No access token available');
+      if (__DEV__) console.error('[Socket] No access token available');
       this.setStatus('error');
       throw new Error('No access token');
     }
@@ -87,7 +109,7 @@ class SocketService {
     // Check if token needs refresh
     const needsRefresh = await shouldRefreshToken();
     if (needsRefresh) {
-      console.warn('[Socket] Token needs refresh before connecting');
+      if (__DEV__) console.warn('[Socket] Token needs refresh before connecting');
       this.setStatus('error');
       throw new Error('Token needs refresh');
     }
@@ -101,9 +123,21 @@ class SocketService {
     this.setStatus('connecting');
     this.isManualDisconnect = false;
 
-    // Build WebSocket URL with token
-    const wsUrl = `${WS_BASE_URL}/ws/dispatch/?token=${token}`;
-    console.log('[Socket] Connecting to:', WS_BASE_URL);
+    // Build WebSocket URL based on auth mode
+    let wsUrl: string;
+    if (AUTH_MODE === 'message') {
+      // Message-based auth: Connect without token, authenticate after connection
+      // More secure - token not exposed in server logs
+      wsUrl = `${WS_BASE_URL}/ws/dispatch/`;
+      this.pendingAuthToken = token;
+    } else {
+      // URL-based auth: Token in query param (current mode)
+      // Note: Secure over WSS but token appears in server logs
+      wsUrl = `${WS_BASE_URL}/ws/dispatch/?token=${token}`;
+      this.pendingAuthToken = null;
+    }
+
+    if (__DEV__) console.log('[Socket] Connecting to:', WS_BASE_URL, `(auth: ${AUTH_MODE})`);
 
     try {
       this.ws = new WebSocket(wsUrl);
@@ -113,7 +147,7 @@ class SocketService {
       this.ws.onclose = this.handleClose.bind(this);
       this.ws.onerror = this.handleError.bind(this);
     } catch (error) {
-      console.error('[Socket] Failed to create WebSocket:', error);
+      if (__DEV__) console.error('[Socket] Failed to create WebSocket:', error);
       this.setStatus('error');
       throw error;
     }
@@ -123,10 +157,25 @@ class SocketService {
    * Handle successful connection
    */
   private handleOpen(): void {
-    console.log('[Socket] Connected successfully');
-    this.setStatus('connected');
+    if (__DEV__) console.log('[Socket] Connected successfully');
     this.reconnectAttempts = 0;
     this.lastPongTime = Date.now();
+
+    // If using message-based auth, send authenticate action first
+    if (AUTH_MODE === 'message' && this.pendingAuthToken) {
+      if (__DEV__) console.log('[Socket] Sending authentication...');
+      // Send auth immediately (bypass queue since we're authenticating)
+      const authMessage = JSON.stringify({
+        action: 'authenticate',
+        payload: { token: this.pendingAuthToken },
+      });
+      this.ws?.send(authMessage);
+      this.pendingAuthToken = null;
+      // Note: Status will be set to 'connected' when we receive auth.success event
+      // For now, set connected immediately (backend will close if auth fails)
+    }
+
+    this.setStatus('connected');
 
     // Start heartbeat
     this.startPing();
@@ -160,7 +209,7 @@ class SocketService {
           try {
             callback(data);
           } catch (error) {
-            console.error(`[Socket] Error in listener for ${eventType}:`, error);
+            if (__DEV__) console.error(`[Socket] Error in listener for ${eventType}:`, error);
           }
         });
       }
@@ -172,12 +221,12 @@ class SocketService {
           try {
             callback(data);
           } catch (error) {
-            console.error('[Socket] Error in wildcard listener:', error);
+            if (__DEV__) console.error('[Socket] Error in wildcard listener:', error);
           }
         });
       }
     } catch (error) {
-      console.error('[Socket] Failed to parse message:', error);
+      if (__DEV__) console.error('[Socket] Failed to parse message:', error);
     }
   }
 
@@ -185,14 +234,14 @@ class SocketService {
    * Handle connection close
    */
   private handleClose(event: CloseEvent): void {
-    console.log(`[Socket] Closed with code ${event.code}:`, event.reason);
+    if (__DEV__) console.log(`[Socket] Closed with code ${event.code}:`, event.reason);
 
     // Stop heartbeat
     this.stopPing();
 
     // Handle authentication failure
     if (event.code === WS_CLOSE_CODES.AUTH_FAILED) {
-      console.error('[Socket] Authentication failed - need new token');
+      if (__DEV__) console.error('[Socket] Authentication failed - need new token');
       this.setStatus('error');
       // Notify listeners about auth failure
       this.notifyListeners('auth.failed', { code: event.code, reason: event.reason });
@@ -215,7 +264,7 @@ class SocketService {
    * Handle connection errors
    */
   private handleError(error: Event): void {
-    console.error('[Socket] Connection error:', error);
+    if (__DEV__) console.error('[Socket] Connection error:', error);
     // Note: onclose will be called after onerror
   }
 
@@ -228,7 +277,7 @@ class SocketService {
     }
 
     if (this.reconnectAttempts >= RECONNECT_MAX_ATTEMPTS) {
-      console.error('[Socket] Max reconnection attempts reached');
+      if (__DEV__) console.error('[Socket] Max reconnection attempts reached');
       this.setStatus('error');
       return;
     }
@@ -240,11 +289,11 @@ class SocketService {
     );
 
     this.reconnectAttempts++;
-    console.log(`[Socket] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${RECONNECT_MAX_ATTEMPTS})`);
+    if (__DEV__) console.log(`[Socket] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}/${RECONNECT_MAX_ATTEMPTS})`);
 
     this.reconnectTimer = setTimeout(() => {
       this.connect().catch((error) => {
-        console.error('[Socket] Reconnection failed:', error);
+        if (__DEV__) console.error('[Socket] Reconnection failed:', error);
       });
     }, delay);
   }
@@ -270,7 +319,7 @@ class SocketService {
           console.warn('[Socket] Queue full, dropping oldest message:', dropped?.action);
         }
       }
-      console.log('[Socket] Queuing message:', action);
+      if (__DEV__) console.log('[Socket] Queuing message:', action);
       this.messageQueue.push({ action, payload });
     }
   }
@@ -333,7 +382,7 @@ class SocketService {
    * Disconnect from server
    */
   disconnect(): void {
-    console.log('[Socket] Disconnecting...');
+    if (__DEV__) console.log('[Socket] Disconnecting...');
     this.isManualDisconnect = true;
 
     // Stop heartbeat
@@ -364,7 +413,7 @@ class SocketService {
    * Force reconnect (useful after token refresh)
    */
   async reconnect(): Promise<void> {
-    console.log('[Socket] Force reconnecting...');
+    if (__DEV__) console.log('[Socket] Force reconnecting...');
     this.isManualDisconnect = false;
     this.reconnectAttempts = 0;
 
@@ -413,13 +462,25 @@ class SocketService {
   }
 
   /**
-   * Start heartbeat ping
+   * Start heartbeat ping with pong timeout detection
+   * If no pong received within PONG_TIMEOUT, connection is considered stale
    */
   private startPing(): void {
     this.stopPing(); // Clear existing interval
 
     this.pingInterval = setInterval(() => {
       if (this.ws?.readyState === WebSocket.OPEN) {
+        // Check if pong is overdue - connection may be stale
+        const timeSinceLastPong = Date.now() - this.lastPongTime;
+        if (this.lastPongTime > 0 && timeSinceLastPong > PONG_TIMEOUT) {
+          if (__DEV__) {
+            console.warn(`[Socket] Pong timeout (${Math.round(timeSinceLastPong / 1000)}s) - connection stale, reconnecting...`);
+          }
+          // Close stale connection and trigger reconnect
+          this.ws?.close(WS_CLOSE_CODES.GOING_AWAY, 'Pong timeout');
+          return;
+        }
+
         this.send('ping', { ts: Date.now() });
       }
     }, PING_INTERVAL);
@@ -441,7 +502,7 @@ class SocketService {
   private flushMessageQueue(): void {
     if (this.messageQueue.length === 0) return;
 
-    console.log(`[Socket] Flushing ${this.messageQueue.length} queued messages`);
+    if (__DEV__) console.log(`[Socket] Flushing ${this.messageQueue.length} queued messages`);
 
     while (this.messageQueue.length > 0) {
       const msg = this.messageQueue.shift()!;
@@ -458,14 +519,14 @@ class SocketService {
     const previousStatus = this.status;
     this.status = status;
 
-    console.log(`[Socket] Status: ${previousStatus} -> ${status}`);
+    if (__DEV__) console.log(`[Socket] Status: ${previousStatus} -> ${status}`);
 
     // Notify all status listeners
     this.statusListeners.forEach((callback) => {
       try {
         callback(status);
       } catch (error) {
-        console.error('[Socket] Error in status listener:', error);
+        if (__DEV__) console.error('[Socket] Error in status listener:', error);
       }
     });
   }
@@ -480,7 +541,7 @@ class SocketService {
         try {
           callback(data);
         } catch (error) {
-          console.error(`[Socket] Error in listener for ${event}:`, error);
+          if (__DEV__) console.error(`[Socket] Error in listener for ${event}:`, error);
         }
       });
     }

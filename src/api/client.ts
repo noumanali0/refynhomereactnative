@@ -11,12 +11,15 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { getAccessToken } from '@services/tokenService';
 import { setupInterceptors } from './interceptors';
+import { isRetryableError, calculateDelay } from '@/utils/apiRetry';
 
 // ============================================================================
 // CONFIGURATION
 // ============================================================================
 
-const API_BASE_URL = 'http://192.168.100.8:8000/api';
+// API Base URL from environment variable (set in .env file)
+// Falls back to localhost for development if not set
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:8000/api';
 
 // Log API base URL in development
 if (__DEV__) {
@@ -82,8 +85,16 @@ apiClient.interceptors.request.use(
 // RESPONSE INTERCEPTOR
 // ============================================================================
 
+// Retry configuration
+const RETRY_CONFIG = {
+  maxRetries: 2,
+  initialDelay: 1000,
+  maxDelay: 10000,
+  backoffFactor: 2,
+};
+
 /**
- * Response interceptor for logging and basic error handling
+ * Response interceptor for logging, retry logic, and basic error handling
  * Advanced error handling (401, token refresh) is in interceptors.ts
  */
 apiClient.interceptors.response.use(
@@ -94,15 +105,45 @@ apiClient.interceptors.response.use(
     }
     return response;
   },
-  (error: AxiosError) => {
+  async (error: AxiosError) => {
+    const config = error.config as InternalAxiosRequestConfig & {
+      _retryCount?: number;
+    };
+
     // Log error in development
     if (__DEV__) {
       console.error('[API] Response error:', {
-        url: error.config?.url,
+        url: config?.url,
         status: error.response?.status,
         data: error.response?.data,
       });
     }
+
+    // Skip retry for auth-related errors (handled by interceptors.ts)
+    if (error.response?.status === 401) {
+      return Promise.reject(error);
+    }
+
+    // Initialize retry count
+    if (config._retryCount === undefined) {
+      config._retryCount = 0;
+    }
+
+    // Check if should retry
+    if (isRetryableError(error) && config._retryCount < RETRY_CONFIG.maxRetries) {
+      config._retryCount++;
+
+      const delay = calculateDelay(config._retryCount - 1, RETRY_CONFIG);
+
+      if (__DEV__) {
+        console.log(`[API] Retrying request (${config._retryCount}/${RETRY_CONFIG.maxRetries}) in ${delay}ms:`, config.url);
+      }
+
+      // Wait and retry
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return apiClient(config);
+    }
+
     return Promise.reject(error);
   }
 );

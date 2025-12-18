@@ -7,11 +7,11 @@
  * and mounted state checks for safe state updates.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InteractionManager } from 'react-native';
 import type { Coordinates } from '@/types/socket';
 import { simplifyRoute } from '@/utils/polylineSimplify';
-import { googleDirectionsService } from '@/services/googleDirectionsService';
+import { googleDirectionsService, RouteInfo } from '@/services/googleDirectionsService';
 
 // ============================================================================
 // Constants
@@ -69,6 +69,14 @@ interface UseRouteTrackingParams {
 interface UseRouteTrackingResult {
   /** Array of coordinates representing the route */
   routeCoords: Coordinates[];
+  /** Road distance in meters (from Google Routes API) */
+  roadDistanceMeters: number | null;
+  /** Road distance formatted as string (e.g., "2.5 km") */
+  roadDistanceFormatted: string | null;
+  /** ETA in minutes (from Google Routes API, traffic-aware) */
+  etaMinutes: number | null;
+  /** ETA formatted as string (e.g., "~8 min") */
+  etaFormatted: string | null;
   /** Whether a route fetch is in progress */
   isLoading: boolean;
   /** Last error message, if any */
@@ -93,8 +101,35 @@ export function useRouteTracking({
 }: UseRouteTrackingParams): UseRouteTrackingResult {
   // State
   const [routeCoords, setRouteCoords] = useState<Coordinates[]>([]);
+  const [roadDistanceMeters, setRoadDistanceMeters] = useState<number | null>(null);
+  const [etaSeconds, setEtaSeconds] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Derived formatted values (memoized to prevent unnecessary re-renders)
+  const roadDistanceFormatted = useMemo(() => {
+    if (roadDistanceMeters === null) return null;
+    const km = roadDistanceMeters / 1000;
+    if (km < 1) {
+      return `${Math.round(roadDistanceMeters)} m`;
+    }
+    return `${km.toFixed(1)} km`;
+  }, [roadDistanceMeters]);
+
+  const etaMinutes = useMemo(() => {
+    if (etaSeconds === null) return null;
+    return Math.ceil(etaSeconds / 60);
+  }, [etaSeconds]);
+
+  const etaFormatted = useMemo(() => {
+    if (etaMinutes === null) return null;
+    if (etaMinutes < 60) {
+      return `~${etaMinutes} min`;
+    }
+    const hours = Math.floor(etaMinutes / 60);
+    const mins = etaMinutes % 60;
+    return `~${hours}h ${mins}m`;
+  }, [etaMinutes]);
 
   // Refs for throttling and cleanup
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -145,14 +180,14 @@ export function useRouteTracking({
   }, [enabled]); // Only run when enabled changes - handles initial mount and acceptance
 
   /**
-   * Fetches route coordinates from Google Directions API.
-   * Uses googleDirectionsService for route calculation.
+   * Fetches route from Google Directions API.
+   * Returns full RouteInfo including distance, duration, and coordinates.
    */
   const fetchRoute = useCallback(async (
     start: Coordinates,
     end: Coordinates,
     _signal?: AbortSignal // Signal not used by Google service (has internal timeout)
-  ): Promise<Coordinates[]> => {
+  ): Promise<{ routeInfo: RouteInfo | null; simplifiedCoords: Coordinates[] }> => {
     try {
       const routeInfo = await googleDirectionsService.getRoute(start, end);
 
@@ -160,27 +195,29 @@ export function useRouteTracking({
         if (__DEV__) {
           console.warn('[useRouteTracking] Google Directions returned no route, using fallback');
         }
-        return [start, end]; // Fallback to direct line
+        return { routeInfo: null, simplifiedCoords: [start, end] }; // Fallback to direct line
       }
 
       // Simplify route to max ~80 points to prevent Polyline crash on low-end devices
-      return simplifyRoute(routeInfo.coordinates);
+      const simplifiedCoords = simplifyRoute(routeInfo.coordinates);
+      return { routeInfo, simplifiedCoords };
     } catch (err) {
       // Don't log abort errors - they're expected during cleanup
       if (err instanceof Error && err.name === 'AbortError') {
-        return [];
+        return { routeInfo: null, simplifiedCoords: [] };
       }
 
       if (__DEV__) {
         console.warn('[useRouteTracking] fetchRoute error:', err);
       }
 
-      return [start, end]; // Fallback to direct line
+      return { routeInfo: null, simplifiedCoords: [start, end] }; // Fallback to direct line
     }
   }, []);
 
   /**
    * Performs the route fetch with proper abort handling and state updates.
+   * Updates coordinates, road distance, and ETA from Google Routes API.
    */
   const doFetchRoute = useCallback(async () => {
     if (!vendorLocation || !serviceLocation || !isMountedRef.current) {
@@ -201,16 +238,22 @@ export function useRouteTracking({
 
     try {
       lastRouteFetchRef.current = Date.now();
-      const route = await fetchRoute(vendorLocation, serviceLocation, signal);
+      const { routeInfo, simplifiedCoords } = await fetchRoute(vendorLocation, serviceLocation, signal);
 
       // Only update state if request wasn't aborted and component is mounted
-      if (!signal.aborted && isMountedRef.current && route.length > 0) {
-        setRouteCoords(route);
+      if (!signal.aborted && isMountedRef.current && simplifiedCoords.length > 0) {
+        setRouteCoords(simplifiedCoords);
+
+        // Update road distance and ETA from Google Routes API
+        if (routeInfo) {
+          setRoadDistanceMeters(routeInfo.distance);
+          setEtaSeconds(routeInfo.duration);
+        }
 
         // Call onFirstRouteFetch callback once
-        if (!hasCalledFirstRouteRef.current && route.length > 2 && onFirstRouteFetch) {
+        if (!hasCalledFirstRouteRef.current && simplifiedCoords.length > 2 && onFirstRouteFetch) {
           hasCalledFirstRouteRef.current = true;
-          onFirstRouteFetch(route);
+          onFirstRouteFetch(simplifiedCoords);
         }
       }
     } catch (err) {
@@ -236,9 +279,11 @@ export function useRouteTracking({
 
   // Main effect for route tracking
   useEffect(() => {
-    // Clear route if tracking is disabled or locations unavailable
+    // Clear route and tracking data if tracking is disabled or locations unavailable
     if (!enabled || !serviceLocation) {
       setRouteCoords([]);
+      setRoadDistanceMeters(null);
+      setEtaSeconds(null);
       hasCalledFirstRouteRef.current = false;
       prevVendorLocationRef.current = null;
       return;
@@ -246,6 +291,8 @@ export function useRouteTracking({
 
     if (!vendorLocation) {
       setRouteCoords([]);
+      setRoadDistanceMeters(null);
+      setEtaSeconds(null);
       return;
     }
 
@@ -320,6 +367,10 @@ export function useRouteTracking({
 
   return {
     routeCoords,
+    roadDistanceMeters,
+    roadDistanceFormatted,
+    etaMinutes,
+    etaFormatted,
     isLoading,
     error,
     refreshRoute,

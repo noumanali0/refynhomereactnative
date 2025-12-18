@@ -58,6 +58,11 @@ export interface SocketServiceRequest {
   expires_at: string;
   remaining_expiry_time: number;
   created_at: string;
+  // Cancellation fields (optional - only present when status is 'cancelled')
+  cancelled_by?: 'customer' | 'vendor';
+  cancellation_reason_code?: string;
+  cancellation_reason?: string;
+  cancelled_at?: string;
 }
 
 export interface SocketProposal {

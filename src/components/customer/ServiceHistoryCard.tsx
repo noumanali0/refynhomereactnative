@@ -11,6 +11,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -199,6 +200,33 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
         </Text>
       </View>
 
+      {/* Cancellation Info Section - Show for cancelled requests */}
+      {request.status === 'cancelled' && (
+        <View style={styles.cancellationSection}>
+          <View style={styles.cancellationHeader}>
+            <Ionicons name="close-circle" size={20} color={COLORS.error} />
+            <Text style={styles.cancelledByText}>
+              {request.cancelled_by === 'vendor'
+                ? 'Cancelled by Vendor'
+                : 'Cancelled by You'}
+            </Text>
+          </View>
+          {request.cancellation_reason && (
+            <View style={styles.cancellationReasonContainer}>
+              <Text style={styles.cancellationReasonLabel}>Reason:</Text>
+              <Text style={styles.cancellationReasonText}>
+                {request.cancellation_reason}
+              </Text>
+            </View>
+          )}
+          {request.cancelled_at && (
+            <Text style={styles.cancelledAtText}>
+              {formatDate(request.cancelled_at)} at {formatTime(request.cancelled_at)}
+            </Text>
+          )}
+        </View>
+      )}
+
       {/* Vendor Section - Only show for completed services */}
       {showVendorSection && (
         <View style={styles.vendorSection}>
@@ -210,50 +238,68 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
           >
             {/* Vendor Info Row */}
             <View style={styles.vendorInfoRow}>
-              {/* Vendor Avatar */}
-              <View style={styles.vendorAvatar}>
-                {vendor.profile_photo_url ? (
-                  <View style={styles.avatarPlaceholder}>
-                    <Ionicons name="person" size={24} color={COLORS.primary} />
-                  </View>
-                ) : (
-                  <LinearGradient
-                    colors={[COLORS.primary, COLORS.accent]}
-                    style={styles.avatarGradient}
-                  >
-                    <Text style={styles.avatarText}>
-                      {vendor.full_name?.charAt(0)?.toUpperCase() || 'V'}
-                    </Text>
-                  </LinearGradient>
-                )}
-              </View>
-
-              {/* Vendor Details */}
-              <View style={styles.vendorDetails}>
-                <Text type="bodySemiBold" style={styles.vendorName}>
-                  {vendor.full_name}
-                </Text>
-                <View style={styles.vendorMeta}>
-                  {vendor.verified && (
-                    <View style={styles.verifiedBadge}>
-                      <Ionicons name="checkmark-circle" size={12} color={COLORS.success} />
-                      <Text style={styles.verifiedText}>Verified</Text>
-                    </View>
+              {/* Vendor Info - Clickable to view vendor profile */}
+              <TouchableOpacity
+                style={styles.vendorClickableArea}
+                onPress={() => {
+                  if (vendorId) {
+                    router.push({
+                      pathname: '/(customer)/(favorites)/vendor-detail',
+                      params: { vendorId: vendorId.toString() }
+                    });
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                {/* Vendor Avatar */}
+                <View style={styles.vendorAvatar}>
+                  {vendor.profile_photo_url ? (
+                    <Image
+                      source={{ uri: vendor.profile_photo_url }}
+                      style={styles.avatarImage}
+                    />
+                  ) : (
+                    <LinearGradient
+                      colors={[COLORS.primary, COLORS.accent]}
+                      style={styles.avatarGradient}
+                    >
+                      <Text style={styles.avatarText}>
+                        {vendor.full_name?.charAt(0)?.toUpperCase() || 'V'}
+                      </Text>
+                    </LinearGradient>
                   )}
-                  <View style={styles.ratingContainer}>
-                    <Ionicons name="star" size={12} color={COLORS.warning} />
-                    <Text style={styles.ratingText}>
-                      {vendor?.average_rating?.toFixed(1) || '0.0'}
-                    </Text>
-                    <Text style={styles.reviewCount}>
-                      ({vendor.total_reviews || 0})
-                    </Text>
-                  </View>
                 </View>
-                <Text style={styles.completedJobs}>
-                  {vendor.completed_jobs || 0} jobs completed
-                </Text>
-              </View>
+
+                {/* Vendor Details */}
+                <View style={styles.vendorDetails}>
+                  <View style={styles.vendorNameRow}>
+                    <Text type="bodySemiBold" style={styles.vendorName}>
+                      {vendor.full_name}
+                    </Text>
+                    <Ionicons name="chevron-forward" size={14} color={COLORS.gray400} style={{ marginLeft: 4 }} />
+                  </View>
+                  <View style={styles.vendorMeta}>
+                    {vendor.verified && (
+                      <View style={styles.verifiedBadge}>
+                        <Ionicons name="checkmark-circle" size={12} color={COLORS.success} />
+                        <Text style={styles.verifiedText}>Verified</Text>
+                      </View>
+                    )}
+                    <View style={styles.ratingContainer}>
+                      <Ionicons name="star" size={12} color={COLORS.warning} />
+                      <Text style={styles.ratingText}>
+                        {vendor?.average_rating?.toFixed(1) || '0.0'}
+                      </Text>
+                      <Text style={styles.reviewCount}>
+                        ({vendor.total_reviews || 0})
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.completedJobs}>
+                    {vendor.completed_jobs || 0} jobs completed
+                  </Text>
+                </View>
+              </TouchableOpacity>
 
               {/* Toggle Favorites Button */}
               <TouchableOpacity
@@ -296,32 +342,6 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
                 </Text>
               </View>
             )}
-
-            {/* Review Status - Temporarily disabled */}
-            {/* {request.review ? (
-              <View style={styles.reviewSection}>
-                <View style={styles.reviewStars}>
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <Ionicons
-                      key={star}
-                      name={star <= request.review!.stars ? 'star' : 'star-outline'}
-                      size={16}
-                      color={COLORS.warning}
-                    />
-                  ))}
-                </View>
-                {request.review.feedback && (
-                  <Text style={styles.reviewFeedback} numberOfLines={2}>
-                    "{request.review.feedback}"
-                  </Text>
-                )}
-              </View>
-            ) : request.status === 'completed' && (
-              <TouchableOpacity style={styles.addReviewButton}>
-                <Ionicons name="create-outline" size={16} color={COLORS.primary} />
-                <Text style={styles.addReviewText}>Add Review</Text>
-              </TouchableOpacity>
-            )} */}
           </LinearGradient>
         </View>
       )}
@@ -423,6 +443,45 @@ const styles = StyleSheet.create({
     color: COLORS.gray600,
     flex: 1,
   },
+  cancellationSection: {
+    marginTop: verticalScale(12),
+    padding: scale(12),
+    backgroundColor: COLORS.error + '08',
+    borderRadius: moderateScale(10),
+    borderWidth: 1,
+    borderColor: COLORS.error + '20',
+  },
+  cancellationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(8),
+    marginBottom: verticalScale(6),
+  },
+  cancelledByText: {
+    fontSize: moderateScale(14),
+    fontWeight: '600',
+    color: COLORS.error,
+  },
+  cancellationReasonContainer: {
+    marginTop: verticalScale(4),
+    paddingLeft: scale(28),
+  },
+  cancellationReasonLabel: {
+    fontSize: moderateScale(12),
+    color: COLORS.gray500,
+    marginBottom: verticalScale(2),
+  },
+  cancellationReasonText: {
+    fontSize: moderateScale(13),
+    color: COLORS.gray700,
+    lineHeight: moderateScale(18),
+  },
+  cancelledAtText: {
+    fontSize: moderateScale(11),
+    color: COLORS.gray500,
+    marginTop: verticalScale(6),
+    paddingLeft: scale(28),
+  },
   vendorSection: {
     marginTop: verticalScale(12),
     borderRadius: moderateScale(12),
@@ -438,8 +497,18 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  vendorClickableArea: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
   vendorAvatar: {
     marginRight: scale(12),
+  },
+  avatarImage: {
+    width: moderateScale(48),
+    height: moderateScale(48),
+    borderRadius: moderateScale(24),
   },
   avatarPlaceholder: {
     width: moderateScale(48),
@@ -463,6 +532,10 @@ const styles = StyleSheet.create({
   },
   vendorDetails: {
     flex: 1,
+  },
+  vendorNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   vendorName: {
     fontSize: moderateScale(14),
