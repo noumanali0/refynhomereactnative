@@ -49,6 +49,13 @@ export interface ServiceRequestResponse {
     latitude: number;
     longitude: number;
   };
+  // Cancellation fields
+  cancelled_by?: 'customer' | 'vendor' | null;
+  cancellation_reason_code?: string | null;
+  cancellation_reason?: string | null;
+  cancelled_at?: string | null;
+  // Accepted proposal (from backend Issue 3 fix)
+  accepted_proposal?: any; // Will be properly typed when needed
 }
 
 export interface CreateServiceRequestResponse {
@@ -123,6 +130,20 @@ export interface VendorStatusResponse {
   vendor_name: string;
   vendor_lat: number | null;
   vendor_lng: number | null;
+}
+
+export interface VendorLocationResponse {
+  vendor_location: {
+    latitude: number;
+    longitude: number;
+    updated_at: string;
+  } | null;
+  vendor: {
+    id: number;
+    full_name: string;
+    phone: string;
+  };
+  is_online: boolean;
 }
 
 // Human-readable labels for cancel reasons
@@ -301,6 +322,30 @@ export async function getVendorStatus(serviceRequestId: number): Promise<VendorS
   }
 }
 
+/**
+ * Get vendor's last known location for active service
+ * Used as fallback when WebSocket location unavailable (vendor offline/app killed)
+ *
+ * Use cases:
+ * - App kill recovery - restore vendor location from backend
+ * - Offline vendor - show last known location
+ * - Manual refresh - get latest location on demand
+ *
+ * @param serviceRequestId - The service request ID
+ * @returns Vendor location, vendor info, and online status
+ */
+export async function getVendorLocation(serviceRequestId: number): Promise<VendorLocationResponse> {
+  try {
+    const response = await apiClient.get<VendorLocationResponse>(
+      `/service-requests/${serviceRequestId}/vendor-location/`
+    );
+    return response.data;
+  } catch (error) {
+    const message = getErrorMessage(error);
+    throw new Error(message);
+  }
+}
+
 // ============================================================================
 // Export
 // ============================================================================
@@ -313,6 +358,7 @@ export const serviceRequestApi = {
   cancel: cancelServiceRequest,
   getCancelStatus: getCancelStatus,
   getVendorStatus: getVendorStatus,
+  getVendorLocation: getVendorLocation,
 };
 
 export default serviceRequestApi;

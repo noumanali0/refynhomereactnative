@@ -59,6 +59,22 @@ export interface CustomerActiveServiceData {
     /** Service address text */
     serviceAddress?: string;
 
+    /** Vendor location cache - for app kill recovery */
+    vendorLocation?: {
+        latitude: number;
+        longitude: number;
+        timestamp: number; // When last updated
+    };
+
+    /** Accepted vendor metadata - for offline display */
+    acceptedVendor?: {
+        id: number;
+        full_name: string;
+        phone: string;
+        average_rating: number;
+        total_reviews: number;
+    };
+
     /** Category ID - for Search Again functionality */
     categoryId?: number;
 
@@ -321,6 +337,63 @@ export async function getCancelDisableRemaining(): Promise<number> {
     } catch (error) {
         console.error('[CustomerActiveService] Failed to get cancel remaining time:', error);
         return 0;
+    }
+}
+
+/**
+ * Update vendor location in persisted storage
+ * Called on every vendor.location.updated event
+ * Prevents vendor marker from disappearing after app kill
+ */
+export async function updateVendorLocation(
+    latitude: number,
+    longitude: number
+): Promise<void> {
+    try {
+        const existing = await getCustomerActiveService();
+        if (!existing) return;
+
+        const updated: CustomerActiveServiceData = {
+            ...existing,
+            vendorLocation: {
+                latitude,
+                longitude,
+                timestamp: Date.now(),
+            },
+            updatedAt: new Date().toISOString(),
+        };
+
+        await SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(updated));
+    } catch (error) {
+        console.error('[CustomerActiveService] Failed to update vendor location:', error);
+    }
+}
+
+/**
+ * Update accepted vendor info
+ * Called when proposal is accepted
+ * Stores vendor metadata for offline display
+ */
+export async function updateAcceptedVendorInfo(vendorInfo: {
+    id: number;
+    full_name: string;
+    phone: string;
+    average_rating: number;
+    total_reviews: number;
+}): Promise<void> {
+    try {
+        const existing = await getCustomerActiveService();
+        if (!existing) return;
+
+        const updated: CustomerActiveServiceData = {
+            ...existing,
+            acceptedVendor: vendorInfo,
+            updatedAt: new Date().toISOString(),
+        };
+
+        await SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(updated));
+    } catch (error) {
+        console.error('[CustomerActiveService] Failed to update vendor info:', error);
     }
 }
 

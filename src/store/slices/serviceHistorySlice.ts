@@ -4,7 +4,7 @@
  * Manages customer's service request history state with API integration.
  */
 
-import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
+import { createSlice, createAsyncThunk, PayloadAction, createSelector } from '@reduxjs/toolkit';
 import {
   serviceHistoryService,
   ServiceHistoryRequest,
@@ -213,60 +213,67 @@ const serviceHistorySlice = createSlice({
 // SELECTORS
 // ============================================================================
 
+// Base selectors
 export const selectServiceHistory = (state: { serviceHistory: ServiceHistoryState }) =>
   state.serviceHistory.requests;
 
-export const selectFilteredHistory = (state: { serviceHistory: ServiceHistoryState }) => {
-  const { requests, filter } = state.serviceHistory;
+export const selectCurrentFilter = (state: { serviceHistory: ServiceHistoryState }) =>
+  state.serviceHistory.filter;
 
-  if (filter === 'all') return requests;
+// Memoized selector for filtered history - prevents unnecessary recalculations
+export const selectFilteredHistory = createSelector(
+  [selectServiceHistory, selectCurrentFilter],
+  (requests, filter) => {
+    if (filter === 'all') return requests;
 
-  if (filter === 'active') {
-    return requests.filter(r =>
+    if (filter === 'active') {
+      return requests.filter(r =>
+        ['pending', 'accepted', 'en_route', 'in_progress'].includes(r.status)
+      );
+    }
+
+    if (filter === 'completed') {
+      return requests.filter(r => r.status === 'completed');
+    }
+
+    if (filter === 'cancelled') {
+      return requests.filter(r => ['cancelled', 'expired'].includes(r.status));
+    }
+
+    return requests;
+  }
+);
+
+export const selectHistoryStats = createSelector(
+  [selectServiceHistory],
+  (requests) => {
+    // Calculate this month's completed services
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const thisMonthCompleted = requests.filter(r => {
+      if (r.status !== 'completed') return false;
+      const completedDate = r.completed_at ? new Date(r.completed_at) : new Date(r.updated_at);
+      return completedDate >= startOfMonth;
+    }).length;
+
+    const activeCount = requests.filter(r =>
       ['pending', 'accepted', 'en_route', 'in_progress'].includes(r.status)
-    );
+    ).length;
+    const completedCount = requests.filter(r => r.status === 'completed').length;
+
+    return {
+      total: requests.length,
+      // New field names expected by UI
+      totalActive: activeCount,
+      totalCompleted: completedCount,
+      thisMonth: thisMonthCompleted,
+      // Keep old field names for backward compatibility
+      active: activeCount,
+      completed: completedCount,
+      cancelled: requests.filter(r => ['cancelled', 'expired'].includes(r.status)).length,
+    };
   }
-
-  if (filter === 'completed') {
-    return requests.filter(r => r.status === 'completed');
-  }
-
-  if (filter === 'cancelled') {
-    return requests.filter(r => ['cancelled', 'expired'].includes(r.status));
-  }
-
-  return requests;
-};
-
-export const selectHistoryStats = (state: { serviceHistory: ServiceHistoryState }) => {
-  const { requests } = state.serviceHistory;
-
-  // Calculate this month's completed services
-  const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const thisMonthCompleted = requests.filter(r => {
-    if (r.status !== 'completed') return false;
-    const completedDate = r.completed_at ? new Date(r.completed_at) : new Date(r.updated_at);
-    return completedDate >= startOfMonth;
-  }).length;
-
-  const activeCount = requests.filter(r =>
-    ['pending', 'accepted', 'en_route', 'in_progress'].includes(r.status)
-  ).length;
-  const completedCount = requests.filter(r => r.status === 'completed').length;
-
-  return {
-    total: requests.length,
-    // New field names expected by UI
-    totalActive: activeCount,
-    totalCompleted: completedCount,
-    thisMonth: thisMonthCompleted,
-    // Keep old field names for backward compatibility
-    active: activeCount,
-    completed: completedCount,
-    cancelled: requests.filter(r => ['cancelled', 'expired'].includes(r.status)).length,
-  };
-};
+);
 
 export const selectSelectedRequest = (state: { serviceHistory: ServiceHistoryState }) =>
   state.serviceHistory.selectedRequest;
@@ -279,9 +286,6 @@ export const selectIsRefreshing = (state: { serviceHistory: ServiceHistoryState 
 
 export const selectHistoryError = (state: { serviceHistory: ServiceHistoryState }) =>
   state.serviceHistory.error;
-
-export const selectCurrentFilter = (state: { serviceHistory: ServiceHistoryState }) =>
-  state.serviceHistory.filter;
 
 export const selectHasMore = (state: { serviceHistory: ServiceHistoryState }) =>
   state.serviceHistory.hasMore;

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { View, Text, SafeAreaView, ScrollView, TouchableOpacity, FlatList } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAppSelector, useAppDispatch } from '../src/hooks/useAppDispatch';
-import { setFilters } from '../src/store/slices/vendorSlice';
+import { setFilters, selectFilteredVendors } from '../src/store/slices/vendorSlice';
 import { logout } from '../src/store/slices/authSlice';
 import { SearchBar } from '../src/components/common/SearchBar';
 import { VendorCard } from '../src/components/common/VendorCard';
@@ -14,7 +14,7 @@ export default function CustomerHome() {
   const router = useRouter();
   const dispatch = useAppDispatch();
   const { user } = useAppSelector((state) => state.auth);
-  const { filteredVendors } = useAppSelector((state) => state.vendor);
+  const filteredVendors = useAppSelector(selectFilteredVendors);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<ServiceCategory | undefined>();
 

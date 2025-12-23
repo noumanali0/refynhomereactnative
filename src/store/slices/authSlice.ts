@@ -331,7 +331,7 @@ export const logoutUser = createAsyncThunk(
         console.log('[Auth] Background location stop skipped:', locationError);
       }
 
-      // Clear persisted active job from SecureStore
+      // Clear persisted active job from SecureStore (vendor)
       try {
         const { clearActiveJob } = await import('@/services/activeJobService');
         await clearActiveJob();
@@ -339,6 +339,16 @@ export const logoutUser = createAsyncThunk(
       } catch (jobError) {
         // No active job to clear, ignore
         console.log('[Auth] Clear active job skipped:', jobError);
+      }
+
+      // Clear persisted active service from SecureStore (customer)
+      try {
+        const { clearCustomerActiveService } = await import('@/services/customerActiveServiceService');
+        await clearCustomerActiveService();
+        if (__DEV__) console.log('[Auth] Persisted customer active service cleared');
+      } catch (serviceError) {
+        // No active service to clear, ignore
+        console.log('[Auth] Clear customer active service skipped:', serviceError);
       }
 
       // Call logout API to blacklist refresh token

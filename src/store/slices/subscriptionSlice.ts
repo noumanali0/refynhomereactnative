@@ -23,6 +23,7 @@ import type {
 } from '@/types/subscription';
 import type { ISubscriptionApiService } from '@/services/subscriptionApiService';
 import { mockSubscriptionApi } from '@/services/mockSubscriptionApiService';
+import ApiServiceManager from '@/services/apiServiceManager';
 
 // ============================================================================
 // State Interface
@@ -47,9 +48,6 @@ export interface SubscriptionState {
 
     // Feature access cache (for performance)
     featureAccessCache: Record<string, boolean>;
-
-    // API service instance
-    _apiService: ISubscriptionApiService | null;
 }
 
 // ============================================================================
@@ -66,7 +64,6 @@ const initialState: SubscriptionState = {
     paymentError: null,
     selectedPlanId: null,
     featureAccessCache: {},
-    _apiService: null,
 };
 
 // ============================================================================
@@ -371,10 +368,10 @@ const subscriptionSlice = createSlice({
         },
 
         /**
-         * Set API service instance
+         * Set API service instance (stored in ApiServiceManager, not in state)
          */
         setApiService(state, action: PayloadAction<ISubscriptionApiService | null>) {
-            state._apiService = action.payload;
+            ApiServiceManager.setSubscriptionApi(action.payload);
         },
 
         /**

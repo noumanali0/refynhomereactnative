@@ -37,6 +37,21 @@ import useImagePicker from '@/hooks/useImagePicker';
 import { useToast } from '@/contexts/ToastContext';
 
 // ============================================================================
+// Helper Functions
+// ============================================================================
+
+const formatMemberSince = (dateString: string): string => {
+    try {
+        const date = new Date(dateString);
+        const month = date.toLocaleDateString('en-US', { month: 'short' });
+        const year = date.getFullYear();
+        return `${month} ${year}`;
+    } catch (error) {
+        return 'N/A';
+    }
+};
+
+// ============================================================================
 // Component
 // ============================================================================
 
@@ -83,7 +98,8 @@ export default function VendorProfileScreen() {
             isOnline: true,
             subscriptionTier: (user as any).subscription_tier || (user as any).subscriptionTier || 'basic',
             serviceRadius: profile?.serviceRadiusKm || profile?.service_radius_km || 10,
-            memberSince: profile?.memberSince || profile?.member_since || null,
+            memberSince: profile?.member_since || null,
+            ratingDistribution: profile?.rating_distribution || null,
             activeRequests: profile?.activeRequests || profile?.active_requests || 0,
         };
     }, [user]);
@@ -97,6 +113,18 @@ export default function VendorProfileScreen() {
 
     // Calculate rating distribution
     const ratingDistribution = useMemo(() => {
+        // PRIMARY: Use distribution from API if available
+        if (vendorProfile?.ratingDistribution) {
+            return {
+                5: vendorProfile.ratingDistribution["5"] || 0,
+                4: vendorProfile.ratingDistribution["4"] || 0,
+                3: vendorProfile.ratingDistribution["3"] || 0,
+                2: vendorProfile.ratingDistribution["2"] || 0,
+                1: vendorProfile.ratingDistribution["1"] || 0,
+            };
+        }
+
+        // FALLBACK: Calculate from reviews (if reviews were fetched)
         const dist = { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 };
         vendorReviews.forEach(review => {
             const rating = Math.floor(review.rating) as 1 | 2 | 3 | 4 | 5;
@@ -105,7 +133,7 @@ export default function VendorProfileScreen() {
             }
         });
         return dist;
-    }, [vendorReviews]);
+    }, [vendorProfile?.ratingDistribution, vendorReviews]);
 
     // Get recent reviews (latest 3)
     const recentReviews = useMemo(() => {
@@ -124,7 +152,9 @@ export default function VendorProfileScreen() {
     const stats = useMemo(() => ({
         jobsCompleted: vendorProfile?.completedJobs || 0,
         // responseRate: 95, // Commented out - not yet implemented in backend
-        memberSince: vendorProfile?.memberSince || 'N/A',
+        memberSince: vendorProfile?.memberSince
+            ? formatMemberSince(vendorProfile.memberSince)
+            : 'N/A',
         activeRequests: vendorProfile?.activeRequests || 0,
     }), [vendorProfile]);
 
@@ -286,7 +316,7 @@ export default function VendorProfileScreen() {
                     ) : (
                         <View style={styles.profilePhotoPlaceholder}>
                             <Text type="title" style={styles.profilePhotoText}>
-                                {vendorProfile.name.substring(0, 2).toUpperCase()}
+                                {vendorProfile?.name?.substring(0, 2)?.toUpperCase() || 'VE'}
                             </Text>
                         </View>
                     )}

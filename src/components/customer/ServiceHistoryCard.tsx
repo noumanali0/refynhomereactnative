@@ -95,13 +95,15 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
 
   const statusConfig = useMemo(() => getStatusConfig(request.status), [request.status]);
 
-  // Check if vendor is already in favorites
-  // Backend returns assigned_vendor_detail (not assigned_vendor)
-  const vendorId = request.assigned_vendor_detail?.id || request.accepted_proposal?.vendor?.id;
-  const isFavorite = vendorId ? favoriteVendorIds.includes(vendorId) : false;
-
   // Get vendor info from either assigned_vendor_detail or accepted_proposal
-  const vendor = request.assigned_vendor_detail || request.accepted_proposal?.vendor;
+  const vendor = request?.assigned_vendor_detail || request?.accepted_proposal?.vendor;
+  const vendorId = vendor?.id;
+
+  // PRIMARY: Use is_favorite from API response (most accurate)
+  // FALLBACK: Use Redux for optimistic updates (when toggling favorite)
+  const isFavorite = vendor?.is_favorite ?? (
+    vendorId ? favoriteVendorIds.includes(vendorId) : false
+  );
 
   // Handle toggle favorites (add/remove)
   const handleToggleFavorite = useCallback(async () => {
@@ -166,7 +168,7 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
           </View>
           <View style={styles.categoryInfo}>
             <Text type="bodySemiBold" style={styles.categoryName}>
-              {request.category?.name || 'Service'}
+              {request?.category?.name || 'Service'}
             </Text>
             <Text style={styles.dateText}>
               {formatDate(request.created_at)} at {formatTime(request.created_at)}
@@ -264,7 +266,7 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
                       style={styles.avatarGradient}
                     >
                       <Text style={styles.avatarText}>
-                        {vendor.full_name?.charAt(0)?.toUpperCase() || 'V'}
+                        {vendor?.full_name?.charAt(0)?.toUpperCase() || 'V'}
                       </Text>
                     </LinearGradient>
                   )}
@@ -291,12 +293,12 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
                         {vendor?.average_rating?.toFixed(1) || '0.0'}
                       </Text>
                       <Text style={styles.reviewCount}>
-                        ({vendor.total_reviews || 0})
+                        ({vendor?.total_reviews || 0})
                       </Text>
                     </View>
                   </View>
                   <Text style={styles.completedJobs}>
-                    {vendor.completed_jobs || 0} jobs completed
+                    {vendor?.completed_jobs || 0} jobs completed
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -338,7 +340,7 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
               <View style={styles.priceRow}>
                 <Text style={styles.priceLabel}>Service Price</Text>
                 <Text type="subtitle" style={styles.priceValue}>
-                  Rs. {request.accepted_proposal.price_quote.toLocaleString()}
+                  Rs. {request?.accepted_proposal?.price_quote?.toLocaleString() || '0'}
                 </Text>
               </View>
             )}

@@ -49,6 +49,13 @@ export interface VendorPublicProfile {
   services: ServiceCategory[];
   is_favorite: boolean;
   recent_reviews: VendorReview[];
+  rating_distribution?: {
+    "1": number;
+    "2": number;
+    "3": number;
+    "4": number;
+    "5": number;
+  };
 }
 
 export interface VendorReviewsResponse {

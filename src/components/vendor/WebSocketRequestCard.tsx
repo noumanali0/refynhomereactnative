@@ -65,16 +65,22 @@ const WebSocketRequestCardInner = ({ request, onPress, isNew = false }: Props) =
 
     const progress = timeLeft / totalDuration;
 
-    // Format distance
+    // Format distance with null guards
     const distanceText = useMemo(() => {
+        if (!request.distance_km && request.distance_km !== 0) {
+            return 'N/A';
+        }
         if (request.distance_km < 1) {
             return `${Math.round(request.distance_km * 1000)}m`;
         }
-        return `${request?.distance_km?.toFixed(1)} km`;
+        return `${request.distance_km.toFixed(1)} km`;
     }, [request.distance_km]);
 
-    // Format ETA
+    // Format ETA with null guards
     const etaText = useMemo(() => {
+        if (!request.eta_minutes && request.eta_minutes !== 0) {
+            return 'N/A';
+        }
         if (request.eta_minutes < 60) {
             return `${request.eta_minutes} min`;
         }
@@ -190,7 +196,7 @@ const WebSocketRequestCardInner = ({ request, onPress, isNew = false }: Props) =
                                 <Ionicons name="construct" size={16} color={COLORS.primary} />
                             </View>
                             <View style={styles.serviceText}>
-                                <Text style={styles.serviceType}>{request?.category_detail?.name}</Text>
+                                <Text style={styles.serviceType}>{request?.category?.name || 'Service'}</Text>
                                 <Text style={styles.issue} numberOfLines={1}>
                                     {request?.problem_title}
                                 </Text>

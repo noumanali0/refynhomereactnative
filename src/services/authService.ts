@@ -67,6 +67,10 @@ function convertAPIUserToFrontend(apiUser: UserAPI): Customer | Vendor {
           averageRating: apiUser.vendor_profile.average_rating,
           totalReviews: apiUser.vendor_profile.total_reviews,
           completedJobs: apiUser.vendor_profile.completed_jobs,
+          // Rating distribution for profile screen
+          rating_distribution: apiUser.vendor_profile.rating_distribution,
+          // Service categories for edit profile
+          categories: apiUser.vendor_profile.categories || [],
         }
       : null,
 

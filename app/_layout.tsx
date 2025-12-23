@@ -18,7 +18,7 @@ import { restoreSession, logoutUser } from '@/store/slices/authSlice';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { initializeApiClient } from '@/api/client';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
-import { connectSocket, disconnectSocket, resetDispatchState, restoreActiveJob } from '@/store/slices/dispatchSlice';
+import { connectSocket, disconnectSocket, resetDispatchState, restoreActiveJob, restoreCustomerActiveService } from '@/store/slices/dispatchSlice';
 import { defineBackgroundLocationTask } from '@/services/backgroundLocationService';
 
 // Onboarding storage key
@@ -100,6 +100,25 @@ function RootLayoutNav() {
           const restoredJob = await dispatch(restoreActiveJob()).unwrap();
           if (__DEV__) {
             console.log('[_layout] Restored active job:', restoredJob);
+          }
+        }
+
+        // If customer, restore any active service from storage
+        if (session?.user?.role === 'customer') {
+          if (__DEV__) {
+            console.log('[_layout] Checking for customer active service');
+          }
+
+          try {
+            const restoredService = await dispatch(restoreCustomerActiveService()).unwrap();
+
+            if (restoredService && __DEV__) {
+              console.log('[_layout] Restored customer active service:', restoredService);
+            }
+          } catch (error) {
+            if (__DEV__) {
+              console.error('[_layout] Failed to restore customer active service:', error);
+            }
           }
         }
       } catch (error) {

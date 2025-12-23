@@ -36,10 +36,13 @@ const WebSocketProposalCardInner = ({ proposal, isNew = false }: Props) => {
     // Calculate time remaining for acceptance
     const [timeLeft, setTimeLeft] = React.useState(proposal.remaining_expiry_time);
 
-    // Timer effect
+    // Sync timeLeft with remaining_expiry_time when it changes
     useEffect(() => {
         setTimeLeft(proposal.remaining_expiry_time);
+    }, [proposal.remaining_expiry_time]);
 
+    // Timer effect - only runs when status changes
+    useEffect(() => {
         if (proposal.status !== 'pending') return;
 
         const interval = setInterval(() => {
@@ -47,7 +50,7 @@ const WebSocketProposalCardInner = ({ proposal, isNew = false }: Props) => {
         }, 1000);
 
         return () => clearInterval(interval);
-    }, [proposal.remaining_expiry_time, proposal.status]);
+    }, [proposal.status]);
 
     // Animation refs
     const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -198,19 +201,19 @@ const WebSocketProposalCardInner = ({ proposal, isNew = false }: Props) => {
                     <View style={styles.vendorInfo}>
                         {/* Vendor Avatar */}
                         <View style={styles.avatarContainer}>
-                            {proposal.vendor.profile_photo_url ? (
+                            {proposal?.vendor?.profile_photo_url ? (
                                 <Image
-                                    source={{ uri: proposal.vendor.profile_photo_url }}
+                                    source={{ uri: proposal?.vendor?.profile_photo_url }}
                                     style={styles.avatar}
                                 />
                             ) : (
                                 <View style={styles.avatarPlaceholder}>
                                     <Text style={styles.avatarText}>
-                                        {proposal.vendor.full_name.charAt(0).toUpperCase()}
+                                        {proposal?.vendor?.full_name?.charAt(0)?.toUpperCase() || 'V'}
                                     </Text>
                                 </View>
                             )}
-                            {proposal.vendor.verified && (
+                            {proposal?.vendor?.verified && (
                                 <View style={styles.verifiedBadge}>
                                     <Ionicons name="checkmark" size={10} color={COLORS.white} />
                                 </View>
@@ -219,18 +222,18 @@ const WebSocketProposalCardInner = ({ proposal, isNew = false }: Props) => {
 
                         {/* Vendor Details */}
                         <View style={styles.vendorDetails}>
-                            <Text style={styles.vendorName}>{proposal.vendor.full_name}</Text>
+                            <Text style={styles.vendorName}>{proposal?.vendor?.full_name || 'Vendor'}</Text>
                             <View style={styles.ratingRow}>
                                 <Ionicons name="star" size={14} color={COLORS.warning} />
                                 <Text style={styles.ratingText}>
-                                    {proposal.vendor.average_rating.toFixed(1)}
+                                    {proposal?.vendor?.average_rating?.toFixed(1) || '0.0'}
                                 </Text>
                                 <Text style={styles.reviewsText}>
-                                    ({proposal.vendor.total_reviews} reviews)
+                                    ({proposal?.vendor?.total_reviews || 0} reviews)
                                 </Text>
                             </View>
                             <Text style={styles.jobsText}>
-                                {proposal.vendor.completed_jobs} jobs completed
+                                {proposal?.vendor?.completed_jobs || 0} jobs completed
                             </Text>
                         </View>
                     </View>
@@ -296,7 +299,7 @@ const WebSocketProposalCardInner = ({ proposal, isNew = false }: Props) => {
                         <Ionicons name="navigate-outline" size={18} color={COLORS.accent} />
                         <View style={styles.metricContent}>
                             <Text style={styles.metricLabel}>Distance</Text>
-                            <Text style={styles.metricValue}>{proposal.vendor.distance_km.toFixed(1)} km</Text>
+                            <Text style={styles.metricValue}>{proposal?.vendor?.distance_km?.toFixed(1) || '0.0'} km</Text>
                         </View>
                     </View>
                 </View>
@@ -540,7 +543,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         padding: scale(16),
         paddingTop: verticalScale(12),
-        gap: scale(12),
+        gap: scale(16),
     },
     declineButton: {
         flex: 1,
@@ -548,10 +551,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         paddingVertical: verticalScale(12),
+        paddingHorizontal: scale(16),
         borderRadius: moderateScale(10),
         borderWidth: 1.5,
         borderColor: COLORS.error,
-        gap: scale(6),
+        gap: scale(8),
     },
     declineText: {
         fontSize: moderateScale(14),
@@ -576,7 +580,8 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         paddingVertical: verticalScale(12),
-        gap: scale(6),
+        paddingHorizontal: scale(16),
+        gap: scale(8),
     },
     acceptText: {
         fontSize: moderateScale(14),

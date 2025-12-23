@@ -4,7 +4,7 @@
  * Manages vendor's job history state with API integration.
  */
 
-import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
+import { createSlice, createAsyncThunk, PayloadAction, createSelector } from '@reduxjs/toolkit';
 import {
   vendorHistoryService,
   VendorHistoryJob,
@@ -253,19 +253,25 @@ const vendorHistorySlice = createSlice({
 // SELECTORS
 // ============================================================================
 
+// Base selectors
 export const selectVendorHistory = (state: { vendorHistory: VendorHistoryState }) =>
   state.vendorHistory.jobs;
 
-export const selectFilteredVendorHistory = (state: { vendorHistory: VendorHistoryState }) => {
-  const { jobs, filter } = state.vendorHistory;
+export const selectVendorHistoryFilter = (state: { vendorHistory: VendorHistoryState }) =>
+  state.vendorHistory.filter;
 
-  if (filter === 'all') return jobs;
-  if (filter === 'completed') {
-    // Include both 'completed' and 'done' statuses
-    return jobs.filter(j => j.status === 'completed' || j.status === 'done');
+// Memoized selector for filtered history - prevents unnecessary recalculations
+export const selectFilteredVendorHistory = createSelector(
+  [selectVendorHistory, selectVendorHistoryFilter],
+  (jobs, filter) => {
+    if (filter === 'all') return jobs;
+    if (filter === 'completed') {
+      // Include both 'completed' and 'done' statuses
+      return jobs.filter(j => j.status === 'completed' || j.status === 'done');
+    }
+    return jobs.filter(j => j.status === filter);
   }
-  return jobs.filter(j => j.status === filter);
-};
+);
 
 export const selectVendorHistoryStats = (state: { vendorHistory: VendorHistoryState }) =>
   state.vendorHistory.stats;
@@ -281,9 +287,6 @@ export const selectVendorHistoryRefreshing = (state: { vendorHistory: VendorHist
 
 export const selectVendorHistoryError = (state: { vendorHistory: VendorHistoryState }) =>
   state.vendorHistory.error;
-
-export const selectVendorHistoryFilter = (state: { vendorHistory: VendorHistoryState }) =>
-  state.vendorHistory.filter;
 
 export const selectVendorHistoryHasMore = (state: { vendorHistory: VendorHistoryState }) =>
   state.vendorHistory.hasMore;

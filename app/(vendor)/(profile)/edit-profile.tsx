@@ -10,7 +10,7 @@
  * Integrates with PATCH /api/auth/update-profile/
  */
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -34,8 +34,9 @@ import Text from '@/components/common/Text';
 import { useAppSelector } from '@/hooks/useAppDispatch';
 import { updateUserProfile } from '@/store/slices/authSlice';
 import { useToast } from '@/contexts/ToastContext';
+import { serviceRequestApi } from '@/services/serviceRequestApi';
 import type { AppDispatch } from '@/store';
-import type { UpdateProfileRequest } from '@/types/api';
+import type { UpdateProfileRequest, ServiceCategory } from '@/types/api';
 
 export default function VendorEditProfileScreen() {
   const router = useRouter();
@@ -69,12 +70,66 @@ export default function VendorEditProfileScreen() {
   const [newPhotoUri, setNewPhotoUri] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Category management state
+  const [categories, setCategories] = useState<ServiceCategory[]>([]);
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<number[]>([]);
+  const [isLoadingCategories, setIsLoadingCategories] = useState(true);
+  const [originalCategoryIds, setOriginalCategoryIds] = useState<number[]>([]);
+  
   // Original values for change detection
   const originalFirstName = (user as any)?.firstName || (user as any)?.first_name || '';
   const originalLastName = (user as any)?.lastName || (user as any)?.last_name || '';
   const originalCity = vendorProfile?.city || '';
   const originalBio = vendorProfile?.bio || '';
   const originalRadius = vendorProfile?.service_radius_km?.toString() || vendorProfile?.serviceRadiusKm?.toString() || '10';
+
+  // Fetch all service categories on mount
+  useEffect(() => {
+    const fetchCategories = async () => {
+      try {
+        setIsLoadingCategories(true);
+        const cats = await serviceRequestApi.getCategories();
+        setCategories(cats); // Don't filter - API returns only active categories
+      } catch (error) {
+        console.error('[VendorEditProfile] Failed to load categories:', error);
+        showToast({ type: "error", message: 'Failed to load service categories' });
+      } finally {
+        setIsLoadingCategories(false);
+      }
+    };
+    fetchCategories();
+  }, [showToast]);
+
+  // Initialize selected categories from vendor profile
+  useEffect(() => {
+    if (vendorProfile?.categories) {
+      const ids = vendorProfile.categories.map((c: any) => c.id);
+      setSelectedCategoryIds(ids);
+      setOriginalCategoryIds(ids);
+    }
+  }, [vendorProfile]);
+
+  // Toggle category selection - prevent removing last category
+  const toggleCategory = useCallback((categoryId: number) => {
+    setSelectedCategoryIds((prev) => {
+      if (prev.includes(categoryId)) {
+        // Don't allow removing if it's the last selected category
+        if (prev.length === 1) {
+          return prev; // Keep it selected
+        }
+        return prev.filter((id) => id !== categoryId);
+      }
+      return [...prev, categoryId];
+    });
+  }, []);
+
+  // Check if categories have changed
+  const categoriesChanged = useMemo(() => {
+    if (selectedCategoryIds.length !== originalCategoryIds.length) return true;
+    const sortedSelected = [...selectedCategoryIds].sort();
+    const sortedOriginal = [...originalCategoryIds].sort();
+    return JSON.stringify(sortedSelected) !== JSON.stringify(sortedOriginal);
+  }, [selectedCategoryIds, originalCategoryIds]);
 
   // Track if form has changes
   const hasChanges = useCallback(() => {
@@ -84,8 +139,9 @@ export default function VendorEditProfileScreen() {
     if (city !== originalCity) return true;
     if (bio !== originalBio) return true;
     if (serviceRadius !== originalRadius) return true;
+    if (categoriesChanged) return true;
     return false;
-  }, [firstName, lastName, city, bio, serviceRadius, newPhotoUri, originalFirstName, originalLastName, originalCity, originalBio, originalRadius]);
+  }, [firstName, lastName, city, bio, serviceRadius, newPhotoUri, originalFirstName, originalLastName, originalCity, originalBio, originalRadius, categoriesChanged]);
 
   // Pick image from gallery
   const pickImage = useCallback(async () => {
@@ -133,8 +189,11 @@ export default function VendorEditProfileScreen() {
     if (isNaN(radiusNum) || radiusNum < 1 || radiusNum > 15) {
       return 'Service radius must be between 1 and 15 km';
     }
+    if (selectedCategoryIds.length === 0) {
+      return 'Please select at least one service category';
+    }
     return null;
-  }, [firstName, serviceRadius]);
+  }, [firstName, serviceRadius, selectedCategoryIds]);
 
   // Handle save
   const handleSave = useCallback(async () => {
@@ -183,6 +242,9 @@ export default function VendorEditProfileScreen() {
       if (newPhotoUri) {
         payload.profile_photo = newPhotoUri;
       }
+      if (categoriesChanged) {
+        payload.service_categories = selectedCategoryIds;
+      }
 
       // Dispatch update action
       await dispatch(updateUserProfile(payload)).unwrap();
@@ -217,6 +279,8 @@ export default function VendorEditProfileScreen() {
     originalCity,
     originalBio,
     originalRadius,
+    categoriesChanged,
+    selectedCategoryIds,
     validateForm,
     hasChanges,
     dispatch,
@@ -466,6 +530,67 @@ export default function VendorEditProfileScreen() {
               </Text>
             </View>
 
+            {/* Service Categories */}
+            <View style={styles.inputGroup}>
+              <Text type="body2" style={styles.inputLabel}>
+                Services Offered <Text style={styles.required}>*</Text>
+              </Text>
+              {isLoadingCategories ? (
+                <View style={styles.categoriesLoading}>
+                  <ActivityIndicator size="small" color={COLORS.primary} />
+                  <Text type="caption" style={styles.loadingText}>Loading categories...</Text>
+                </View>
+              ) : (
+                <View style={styles.categoriesGrid}>
+                  {categories.map((category) => {
+                    const isSelected = selectedCategoryIds.includes(category.id);
+                    return (
+                      <TouchableOpacity
+                        key={category.id}
+                        onPress={() => toggleCategory(category.id)}
+                        activeOpacity={0.7}
+                        style={[
+                          styles.categoryCard,
+                          isSelected && styles.categoryCardSelected,
+                        ]}
+                      >
+                        <View style={styles.categoryContent}>
+                          <View
+                            style={[
+                              styles.checkbox,
+                              isSelected && styles.checkboxSelected,
+                            ]}
+                          >
+                            {isSelected && (
+                              <Ionicons name="checkmark" size={14} color={COLORS.white} />
+                            )}
+                          </View>
+                          <Text
+                            type="body2"
+                            style={[
+                              styles.categoryLabel,
+                              isSelected && styles.categoryLabelSelected,
+                            ]}
+                            numberOfLines={2}
+                          >
+                            {category.name}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              )}
+              {!isLoadingCategories && selectedCategoryIds.length === 0 && (
+                <Text type="caption" style={styles.categoryError}>
+                  Please select at least one service
+                </Text>
+              )}
+              <Text type="caption" style={styles.inputHint}>
+                Choose the services you provide to customers
+              </Text>
+            </View>
+
             {/* Service Radius */}
             <View style={styles.inputGroup}>
               <Text type="body2" style={styles.inputLabel}>
@@ -706,6 +831,68 @@ const styles = StyleSheet.create({
   inputSuffix: {
     color: COLORS.gray500,
     marginLeft: scale(8),
+  },
+
+  // Category selection
+  categoriesLoading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: verticalScale(20),
+    gap: scale(8),
+  },
+  loadingText: {
+    color: COLORS.gray500,
+  },
+  categoriesGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: scale(8),
+  },
+  categoryCard: {
+    width: '48%',
+    backgroundColor: COLORS.white,
+    borderRadius: moderateScale(10),
+    paddingVertical: verticalScale(12),
+    paddingHorizontal: scale(10),
+    borderWidth: 1.5,
+    borderColor: COLORS.gray200,
+  },
+  categoryCardSelected: {
+    backgroundColor: `${COLORS.primary}10`,
+    borderColor: COLORS.primary,
+  },
+  categoryContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: scale(8),
+  },
+  checkbox: {
+    width: moderateScale(20),
+    height: moderateScale(20),
+    borderRadius: moderateScale(4),
+    borderWidth: 1.5,
+    borderColor: COLORS.gray300,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxSelected: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
+  categoryLabel: {
+    flex: 1,
+    fontSize: moderateScale(13),
+    color: COLORS.gray700,
+  },
+  categoryLabelSelected: {
+    color: COLORS.primary,
+    fontWeight: '600',
+  },
+  categoryError: {
+    marginTop: verticalScale(4),
+    color: COLORS.error,
+    fontSize: moderateScale(11),
   },
 
   // Buttons

@@ -23,6 +23,7 @@ export interface VendorProfileAPI {
   city: string;
   bio: string;
   profile_photo: string | null;
+  profile_photo_url: string | null;
   id_verification_photo: string | null;
   latitude: string | null;
   longitude: string | null;
@@ -31,6 +32,16 @@ export interface VendorProfileAPI {
   average_rating: number;
   total_reviews: number;
   completed_jobs: number;
+  member_since: string | null;
+  active_requests: number;
+  categories: Array<{ id: number; name: string; slug: string }>;
+  rating_distribution: {
+    "1": number;
+    "2": number;
+    "3": number;
+    "4": number;
+    "5": number;
+  } | null;
 }
 
 /**

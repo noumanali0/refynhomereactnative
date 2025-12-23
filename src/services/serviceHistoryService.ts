@@ -21,6 +21,7 @@ export interface ServiceHistoryVendor {
   completed_jobs: number;
   profile_photo_url: string | null;
   service_radius_km: number;
+  is_favorite?: boolean;
 }
 
 export interface ServiceHistoryCategory {

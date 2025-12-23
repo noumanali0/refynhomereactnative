@@ -6,7 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": false,
+    "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
@@ -14,6 +14,10 @@
     },
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.masood979899.RefynHome",
+      "config": {
+        "googleMapsApiKey": "AIzaSyDKE8TyUf0gDUZFK0S-Cc1HgYms-VAdoAE"
+      },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "RefynHome needs your location to show nearby service vendors and provide accurate arrival times.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location to provide real-time service tracking even when the app is in the background.",

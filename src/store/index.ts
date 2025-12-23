@@ -45,9 +45,9 @@ export const store = configureStore({
     vendorHistory: vendorHistoryReducer,
   },
 
-  // (optional but recommended for production quality)
-  middleware: (getDefaultMiddleware) =>
-    getDefaultMiddleware({
+  // Environment-specific middleware configuration
+  middleware: (getDefaultMiddleware) => {
+    const baseConfig = {
       serializableCheck: {
         ignoredActions: [
           // ignore non-serializable actions coming from live mock generator
@@ -57,12 +57,27 @@ export const store = configureStore({
         ignoredPaths: [
           // Ignore Set object in state (used for O(1) service category lookups)
           'requests.vendorServiceCategories',
-          // Ignore API service instance (contains functions/callbacks)
-          'requests._apiService',
-          'subscription._apiService',
         ],
+        // Development: Warn after 128ms, Production: Warn after 512ms
+        warnAfter: __DEV__ ? 128 : 512,
       },
-    }),
+      // Development: Enable immutability checks, Production: Disable for performance
+      immutabilityCheck: __DEV__
+        ? { warnAfter: 128 }
+        : false,
+    };
+
+    return getDefaultMiddleware(baseConfig);
+  },
+
+  // Redux DevTools configuration
+  devTools: __DEV__
+    ? {
+        name: 'RefynHome',
+        trace: true,
+        traceLimit: 25,
+      }
+    : false,
 });
 
 // ---------------- TYPES ----------------

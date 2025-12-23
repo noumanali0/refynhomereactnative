@@ -21,6 +21,7 @@ import type { LiveRequest, Coordinates, ActiveRequestDetail } from '@/services/t
 import { ConnectionStatus, type IRequestApiService } from '@/services/requestApiService';
 import { mockRequestApi } from '@/services/mockRequestApiService';
 import { getDistance } from '@/utils/distanceCache';
+import ApiServiceManager from '@/services/apiServiceManager';
 
 // ============================================================================
 // State Interface
@@ -45,9 +46,6 @@ export interface RequestsState {
 
     // Active request details (proposals, acceptances, etc.)
     activeRequestDetails: Record<string, ActiveRequestDetail>;
-
-    // API service instance (stored for cleanup)
-    _apiService: IRequestApiService | null;
 }
 
 // ============================================================================
@@ -64,7 +62,6 @@ const initialState: RequestsState = {
     connectionStatus: ConnectionStatus.DISCONNECTED,
     isReceiving: false,
     activeRequestDetails: {},
-    _apiService: null,
 };
 
 // ============================================================================
@@ -120,10 +117,9 @@ export const startReceivingRequests = createAsyncThunk(
 export const stopReceivingRequests = createAsyncThunk(
     'requests/stopReceiving',
     async (_, { getState, dispatch }) => {
-        const state = (getState() as any).requests as RequestsState;
-
-        if (state._apiService) {
-            state._apiService.disconnect();
+        const apiService = ApiServiceManager.getRequestApi();
+        if (apiService) {
+            apiService.disconnect();
         }
 
         dispatch(setReceiving(false));
@@ -293,10 +289,8 @@ const requestsSlice = createSlice({
                 });
             }
 
-            // Update API service config
-            if (state._apiService) {
-                state._apiService.updateConfig({ location: action.payload || undefined });
-            }
+            // API service config update moved to middleware
+            // (Reducer must remain pure - no side effects)
         },
 
         /**
@@ -307,12 +301,8 @@ const requestsSlice = createSlice({
                 action.payload.map(s => s.toLowerCase())
             );
 
-            // Update API service config
-            if (state._apiService) {
-                state._apiService.updateConfig({
-                    serviceCategories: Array.from(state.vendorServiceCategories),
-                });
-            }
+            // API service config update moved to middleware
+            // (Reducer must remain pure - no side effects)
         },
 
         /**
@@ -345,16 +335,8 @@ const requestsSlice = createSlice({
                 );
             }
 
-            // Update API service config
-            if (state._apiService) {
-                state._apiService.updateConfig({
-                    location: state.vendorLocation || undefined,
-                    serviceCategories:
-                        state.vendorServiceCategories.size > 0
-                            ? Array.from(state.vendorServiceCategories)
-                            : undefined,
-                });
-            }
+            // API service config update moved to middleware
+            // (Reducer must remain pure - no side effects)
         },
 
         /**
@@ -363,10 +345,8 @@ const requestsSlice = createSlice({
         setMaxRadius(state, action: PayloadAction<number>) {
             state.maxRadiusKm = action.payload;
 
-            // Update API service config
-            if (state._apiService) {
-                state._apiService.updateConfig({ maxRadiusKm: action.payload });
-            }
+            // API service config update moved to middleware
+            // (Reducer must remain pure - no side effects)
         },
 
         /**
@@ -384,10 +364,10 @@ const requestsSlice = createSlice({
         },
 
         /**
-         * Set API service instance
+         * Set API service instance (stored in ApiServiceManager, not in state)
          */
         setApiService(state, action: PayloadAction<IRequestApiService | null>) {
-            state._apiService = action.payload;
+            ApiServiceManager.setRequestApi(action.payload);
         },
 
         // ====================================================================

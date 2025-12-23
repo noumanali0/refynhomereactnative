@@ -161,6 +161,9 @@ interface FormContentProps {
     onGoBack: () => void;
     problemTitleRef: React.RefObject<TextInput | null>;
     descriptionRef: React.RefObject<TextInput | null>;
+    // Debounce refs - defined in main component to allow clearing from address handlers
+    problemTitleDebounceRef: React.MutableRefObject<NodeJS.Timeout | null>;
+    descriptionDebounceRef: React.MutableRefObject<NodeJS.Timeout | null>;
 }
 
 // ============================================================================
@@ -378,6 +381,9 @@ const FormContent = memo(function FormContent({
     onGoBack,
     problemTitleRef,
     descriptionRef,
+    // Debounce refs from main component
+    problemTitleDebounceRef,
+    descriptionDebounceRef,
 }: FormContentProps) {
     const {
         handleSubmit,
@@ -409,18 +415,31 @@ const FormContent = memo(function FormContent({
         };
     }, [coordinates?.latitude, coordinates?.longitude]);
 
-    // Debounce refs for cleanup
-    const problemTitleDebounceRef = useRef<NodeJS.Timeout | null>(null);
-    const descriptionDebounceRef = useRef<NodeJS.Timeout | null>(null);
+    // Note: Debounce refs are now passed from main component (not defined here)
+    // This allows handleAddressSelect/handleUseCurrentLocation to clear pending debounces
 
-    // Cleanup debounce timers on unmount
+    // Sync local state when form values change from external source (e.g., address selection)
+    // This prevents stale local state causing crashes
+    useEffect(() => {
+        // Only sync if values differ AND no debounce is pending (prevents loop)
+        if (values.problemTitle !== localProblemTitle && !problemTitleDebounceRef.current) {
+            setLocalProblemTitle(values.problemTitle);
+        }
+        if (values.description !== localDescription && !descriptionDebounceRef.current) {
+            setLocalDescription(values.description);
+        }
+    }, [values.problemTitle, values.description]);
+
+    // Cleanup debounce timers on unmount - nullify refs to prevent race conditions
     useEffect(() => {
         return () => {
             if (problemTitleDebounceRef.current) {
                 clearTimeout(problemTitleDebounceRef.current);
+                problemTitleDebounceRef.current = null;
             }
             if (descriptionDebounceRef.current) {
                 clearTimeout(descriptionDebounceRef.current);
+                descriptionDebounceRef.current = null;
             }
         };
     }, []);
@@ -651,15 +670,16 @@ const FormContent = memo(function FormContent({
                     <Text type="body" style={styles.errorText}>{errors.serviceAddress}</Text>
                 )}
 
-                {/* Address Search Bottom Sheet - Always mounted, visibility controlled by isVisible */}
-                {/* This prevents unmount/remount race conditions that cause crashes */}
-                <AddressSearchBottomSheet
-                    isVisible={showAddressSearch}
-                    onClose={onCloseAddressSearch}
-                    onSelectAddress={handleAddressSelectInternal}
-                    proximity={memoizedProximity}
-                    initialValue={values.serviceAddress}
-                />
+                {/* Address Search Bottom Sheet - Conditionally rendered to prevent stack overflow on unmount */}
+                {showAddressSearch && (
+                    <AddressSearchBottomSheet
+                        isVisible={showAddressSearch}
+                        onClose={onCloseAddressSearch}
+                        onSelectAddress={handleAddressSelectInternal}
+                        proximity={memoizedProximity}
+                        initialValue={values.serviceAddress}
+                    />
+                )}
 
                 {/* Description - Uses local state + debounced Formik sync for performance */}
                 <SectionTitle title="Problem Description *" />
@@ -786,36 +806,10 @@ const FormContent = memo(function FormContent({
             </ScrollView>
         </View>
     );
-}, (prevProps, nextProps) => {
-    // Custom comparison - only re-render when these specific values change
-    // This prevents re-renders from formikProps.values changes during typing
-    return (
-        prevProps.categoryItems === nextProps.categoryItems &&
-        prevProps.loadingCategories === nextProps.loadingCategories &&
-        prevProps.showAddressSearch === nextProps.showAddressSearch &&
-        prevProps.imageLoading === nextProps.imageLoading &&
-        prevProps.coordinates === nextProps.coordinates &&
-        prevProps.currentLocationAddress === nextProps.currentLocationAddress &&
-        prevProps.isLoadingCurrentLocation === nextProps.isLoadingCurrentLocation &&
-        // Only compare specific formik values that affect the UI
-        prevProps.formikProps.values.selectedService === nextProps.formikProps.values.selectedService &&
-        prevProps.formikProps.values.serviceAddress === nextProps.formikProps.values.serviceAddress &&
-        prevProps.formikProps.values.photo === nextProps.formikProps.values.photo &&
-        prevProps.formikProps.values.isAgreed === nextProps.formikProps.values.isAgreed &&
-        prevProps.formikProps.isSubmitting === nextProps.formikProps.isSubmitting &&
-        // Compare touched/errors for validation display
-        prevProps.formikProps.touched.problemTitle === nextProps.formikProps.touched.problemTitle &&
-        prevProps.formikProps.touched.description === nextProps.formikProps.touched.description &&
-        prevProps.formikProps.touched.serviceAddress === nextProps.formikProps.touched.serviceAddress &&
-        prevProps.formikProps.touched.selectedService === nextProps.formikProps.touched.selectedService &&
-        prevProps.formikProps.touched.isAgreed === nextProps.formikProps.touched.isAgreed &&
-        prevProps.formikProps.errors.problemTitle === nextProps.formikProps.errors.problemTitle &&
-        prevProps.formikProps.errors.description === nextProps.formikProps.errors.description &&
-        prevProps.formikProps.errors.serviceAddress === nextProps.formikProps.errors.serviceAddress &&
-        prevProps.formikProps.errors.selectedService === nextProps.formikProps.errors.selectedService &&
-        prevProps.formikProps.errors.isAgreed === nextProps.formikProps.errors.isAgreed
-    );
 });
+// Note: Removed custom memo comparator - React's default shallow comparison
+// is safer and prevents stale handler issues. The local state + debounce pattern
+// already prevents unnecessary re-renders during typing.
 
 // ============================================================================
 // Main Component
@@ -837,13 +831,39 @@ const RequestServiceScreen = () => {
     const problemTitleRef = useRef<TextInput>(null);
     const descriptionRef = useRef<TextInput>(null);
 
+    // Debounce refs - defined HERE so handleAddressSelect can clear pending debounces
+    // This fixes the crash when typing description after selecting address
+    const problemTitleDebounceRef = useRef<NodeJS.Timeout | null>(null);
+    const descriptionDebounceRef = useRef<NodeJS.Timeout | null>(null);
+
+    // Mount check ref - prevents state updates after unmount
+    const isMountedRef = useRef(true);
+
+    // Ref to track if we should auto-fill after location fetch (with cancellation support)
+    const pendingLocationFillRef = useRef<{
+        setFieldValue: FormikProps<FormValues>['setFieldValue'] | null;
+        cancelled: boolean;
+    }>({ setFieldValue: null, cancelled: false });
+
     // Get current location for proximity bias in search AND for "Use Current Location" feature
     const { coordinates, location: currentLocationAddress, loading: isLoadingCurrentLocation, refetch: fetchCurrentLocation } = useCurrentLocation({ autoFetch: true });
 
-    // Cleanup submission on unmount
+    // Cleanup on unmount
     useEffect(() => {
         return () => {
+            isMountedRef.current = false;  // Mark as unmounted first
             submitAbortControllerRef.current?.abort();
+            // Also cleanup debounce timers to prevent memory leaks - nullify to prevent race conditions
+            if (problemTitleDebounceRef.current) {
+                clearTimeout(problemTitleDebounceRef.current);
+                problemTitleDebounceRef.current = null;
+            }
+            if (descriptionDebounceRef.current) {
+                clearTimeout(descriptionDebounceRef.current);
+                descriptionDebounceRef.current = null;
+            }
+            // Cancel pending location fills to prevent state updates after unmount
+            pendingLocationFillRef.current.cancelled = true;
         };
     }, []);
 
@@ -864,9 +884,21 @@ const RequestServiceScreen = () => {
         // Close modal first to prevent re-render during value updates
         setShowAddressSearch(false);
 
+        // Clear any pending debounced text updates to prevent race condition
+        // This ensures no stale text updates fire while address is being set
+        if (problemTitleDebounceRef.current) {
+            clearTimeout(problemTitleDebounceRef.current);
+            problemTitleDebounceRef.current = null;
+        }
+        if (descriptionDebounceRef.current) {
+            clearTimeout(descriptionDebounceRef.current);
+            descriptionDebounceRef.current = null;
+        }
+
         // Batch all Formik updates in next frame to avoid race conditions
         // This prevents crash when user types in description field immediately after
         requestAnimationFrame(() => {
+            if (!isMountedRef.current) return;  // Mount check
             setFieldValue("serviceAddress", address.formatted, false);
             setFieldValue("latitude", address.coordinates.latitude.toString(), false);
             setFieldValue("longitude", address.coordinates.longitude.toString(), false);
@@ -877,9 +909,20 @@ const RequestServiceScreen = () => {
     const handleUseCurrentLocation = useCallback(async (
         setFieldValue: FormikProps<FormValues>['setFieldValue']
     ) => {
+        // Clear any pending debounced text updates to prevent race condition
+        if (problemTitleDebounceRef.current) {
+            clearTimeout(problemTitleDebounceRef.current);
+            problemTitleDebounceRef.current = null;
+        }
+        if (descriptionDebounceRef.current) {
+            clearTimeout(descriptionDebounceRef.current);
+            descriptionDebounceRef.current = null;
+        }
+
         // If we already have current location address, use it directly
         if (currentLocationAddress && coordinates) {
             requestAnimationFrame(() => {
+                if (!isMountedRef.current) return;  // Mount check
                 setFieldValue("serviceAddress", currentLocationAddress.formatted, false);
                 setFieldValue("latitude", coordinates.latitude.toString(), false);
                 setFieldValue("longitude", coordinates.longitude.toString(), false);
@@ -894,19 +937,20 @@ const RequestServiceScreen = () => {
         // Note: This is handled by the useEffect below for post-fetch updates
     }, [currentLocationAddress, coordinates, fetchCurrentLocation]);
 
-    // Ref to track if we should auto-fill after location fetch
-    const pendingLocationFillRef = useRef<FormikProps<FormValues>['setFieldValue'] | null>(null);
-
     // Effect to handle location updates when user clicks "Use Current Location"
     useEffect(() => {
-        if (pendingLocationFillRef.current && currentLocationAddress && coordinates && !isLoadingCurrentLocation) {
-            const setFieldValue = pendingLocationFillRef.current;
+        const pending = pendingLocationFillRef.current;
+        if (pending.setFieldValue && !pending.cancelled && isMountedRef.current && currentLocationAddress && coordinates && !isLoadingCurrentLocation) {
+            const setFieldValue = pending.setFieldValue;
             requestAnimationFrame(() => {
-                setFieldValue("serviceAddress", currentLocationAddress.formatted, false);
-                setFieldValue("latitude", coordinates.latitude.toString(), false);
-                setFieldValue("longitude", coordinates.longitude.toString(), false);
+                // Double-check not cancelled and still mounted before updating
+                if (!pendingLocationFillRef.current.cancelled && isMountedRef.current) {
+                    setFieldValue("serviceAddress", currentLocationAddress.formatted, false);
+                    setFieldValue("latitude", coordinates.latitude.toString(), false);
+                    setFieldValue("longitude", coordinates.longitude.toString(), false);
+                }
             });
-            pendingLocationFillRef.current = null;
+            pendingLocationFillRef.current = { setFieldValue: null, cancelled: false };
         }
     }, [currentLocationAddress, coordinates, isLoadingCurrentLocation]);
 
@@ -917,6 +961,7 @@ const RequestServiceScreen = () => {
         // If we already have current location address, use it directly
         if (currentLocationAddress && coordinates) {
             requestAnimationFrame(() => {
+                if (!isMountedRef.current) return;  // Mount check
                 setFieldValue("serviceAddress", currentLocationAddress.formatted, false);
                 setFieldValue("latitude", coordinates.latitude.toString(), false);
                 setFieldValue("longitude", coordinates.longitude.toString(), false);
@@ -925,7 +970,7 @@ const RequestServiceScreen = () => {
         }
 
         // Set pending ref so useEffect can fill values after fetch completes
-        pendingLocationFillRef.current = setFieldValue;
+        pendingLocationFillRef.current = { setFieldValue, cancelled: false };
         // Trigger location fetch
         await fetchCurrentLocation();
     }, [currentLocationAddress, coordinates, fetchCurrentLocation]);
@@ -989,13 +1034,22 @@ const RequestServiceScreen = () => {
                 return;
             }
 
+            // Validate coordinates before parsing
+            const lat = values.latitude ? parseFloat(values.latitude) : null;
+            const lng = values.longitude ? parseFloat(values.longitude) : null;
+
+            if (lat === null || lng === null || isNaN(lat) || isNaN(lng)) {
+                showToast({ type: 'error', title: 'Invalid Location', message: 'Please select a valid address' });
+                return;
+            }
+
             const response = await createServiceRequest({
                 category: selectedCategory.id,
                 problem_title: values.problemTitle,
                 description: values.description,
                 address_line: values.serviceAddress,
-                latitude: parseFloat(values.latitude),
-                longitude: parseFloat(values.longitude),
+                latitude: lat,
+                longitude: lng,
                 location_source: 'map',
                 radius_km: 10,
             });
@@ -1015,8 +1069,8 @@ const RequestServiceScreen = () => {
                 requestId: response.request.id,
                 expiresAt: response.request.expires_at,
                 serviceLocation: {
-                    latitude: parseFloat(values.latitude),
-                    longitude: parseFloat(values.longitude),
+                    latitude: lat,
+                    longitude: lng,
                 },
                 serviceAddress: values.serviceAddress,
                 // Retry params
@@ -1067,6 +1121,7 @@ const RequestServiceScreen = () => {
             <KeyboardAvoidingView
                 style={styles.container}
                 behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+                enabled={!showAddressSearch}
             >
                 <Formik<FormValues>
                     initialValues={INITIAL_VALUES}
@@ -1096,6 +1151,8 @@ const RequestServiceScreen = () => {
                             onGoBack={goBack}
                             problemTitleRef={problemTitleRef}
                             descriptionRef={descriptionRef}
+                            problemTitleDebounceRef={problemTitleDebounceRef}
+                            descriptionDebounceRef={descriptionDebounceRef}
                         />
                     )}
                 </Formik>

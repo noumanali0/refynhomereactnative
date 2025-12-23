@@ -144,3 +144,10 @@ vite.config.ts.timestamp-*
 
 expo-env.d.ts
 # @end expo-cli
+
+# Debug files
+crash_logs/
+debug_crash.bat
+
+# Claude local settings
+.claude/

@@ -29,7 +29,7 @@ import { useSelector, useDispatch } from 'react-redux';
 import { LinearGradient } from 'expo-linear-gradient';
 import { moderateScale, scale, verticalScale } from 'react-native-size-matters';
 import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, FontAwesome5 } from '@expo/vector-icons';
 import type { AppDispatch, RootState } from '@/store';
 import {
     selectServiceRequestById,
@@ -55,6 +55,7 @@ import {
 import { getDistance } from '@/utils/distanceCache';
 import { simplifyRoute } from '@/utils/polylineSimplify';
 import { activeJobService } from '@/services/activeJobService';
+import { haversineDistanceKm } from '@/utils/geo';
 // Google Routes API service - ready for integration when client enables the API
 // import { googleDirectionsService, type RouteInfo } from '@/services/googleDirectionsService';
 
@@ -83,19 +84,12 @@ function getDistanceInMeters(
     coord1: Coordinates,
     coord2: Coordinates
 ): number {
-    const R = 6371000; // Earth radius in meters
-    const dLat = (coord2.latitude - coord1.latitude) * Math.PI / 180;
-    const dLon = (coord2.longitude - coord1.longitude) * Math.PI / 180;
-    const lat1Rad = coord1.latitude * Math.PI / 180;
-    const lat2Rad = coord2.latitude * Math.PI / 180;
-
-    const a =
-        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1Rad) * Math.cos(lat2Rad) *
-        Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    return R * c;
+    return haversineDistanceKm(
+        coord1.latitude,
+        coord1.longitude,
+        coord2.latitude,
+        coord2.longitude
+    ) * 1000; // Convert km to meters
 }
 
 export default function WebSocketRequestDetailsScreen() {
@@ -160,6 +154,7 @@ export default function WebSocketRequestDetailsScreen() {
         if (cancelledService && cancelledService.requestId === requestId && cancelledService.cancelledBy === 'customer') {
             // Set flag to prevent stale UI
             setServiceCancelledByCustomer(true);
+            setCancelRedirectCountdown(5);
 
             // Stop location tracking immediately
             stopLocationTracking();
@@ -167,22 +162,39 @@ export default function WebSocketRequestDetailsScreen() {
             // Clear Redux state
             dispatch(clearServiceCancelled());
 
-            // Show toast notification (non-blocking)
+            // Show toast notification
             showToast({
                 type: 'info',
                 title: 'Job Cancelled by Customer',
                 message: cancelledService.reason
                     ? `Reason: ${cancelledService.reason}`
                     : 'The customer has cancelled this request.',
-                duration: 4000,
+                duration: 5000,
             });
 
-            // Auto-redirect to vendor home after 2 seconds
-            const redirectTimer = setTimeout(() => {
-                router.replace('/(vendor)/(servicerequests)');
-            }, 2000);
+            // Start countdown timer
+            let currentCount = 5;
+            const countdownInterval = setInterval(() => {
+                currentCount -= 1;
 
-            return () => clearTimeout(redirectTimer);
+                // Safety check: component still mounted
+                if (!isMountedRef.current) {
+                    clearInterval(countdownInterval);
+                    return;
+                }
+
+                if (currentCount > 0) {
+                    setCancelRedirectCountdown(currentCount);
+                } else {
+                    clearInterval(countdownInterval);
+                    // Double-check component still mounted before redirect
+                    if (isMountedRef.current) {
+                        router.replace('/(vendor)/(servicerequests)');
+                    }
+                }
+            }, 1000);
+
+            return () => clearInterval(countdownInterval);
         }
     }, [cancelledService, requestId, dispatch, router, showToast]);
 
@@ -202,6 +214,7 @@ export default function WebSocketRequestDetailsScreen() {
 
     // Track if service was cancelled by customer (prevents stale UI)
     const [serviceCancelledByCustomer, setServiceCancelledByCustomer] = useState(false);
+    const [cancelRedirectCountdown, setCancelRedirectCountdown] = useState<number>(5);
 
     // Refs
     const locationWatchRef = useRef<Location.LocationSubscription | null>(null);
@@ -911,6 +924,13 @@ export default function WebSocketRequestDetailsScreen() {
         router.replace('/(vendor)/(servicerequests)/');
     }, [router, stopLocationTracking]);
 
+    // Handle skip countdown - allow vendor to skip waiting
+    const handleSkipCancelCountdown = useCallback(() => {
+        if (isMountedRef.current) {
+            router.replace('/(vendor)/(servicerequests)');
+        }
+    }, [router]);
+
     // Request not found - check early
     // Use router.replace instead of back() for persisted screens with no history
     if (!request && !isLoading) {
@@ -935,15 +955,38 @@ export default function WebSocketRequestDetailsScreen() {
         );
     }
 
-    // Service cancelled by customer - show redirecting state
+    // Service cancelled by customer - show countdown and redirect
     if (serviceCancelledByCustomer) {
         return (
-            <View style={styles.loadingContainer}>
-                <Ionicons name="close-circle" size={64} color={COLORS.error} />
-                <Text type="title" style={[styles.errorText, { marginTop: verticalScale(16) }]}>
-                    Job Cancelled
-                </Text>
-                <Text type="body2" style={styles.loadingText}>Redirecting...</Text>
+            <View style={styles.cancelledContainer}>
+                <View style={styles.cancelledContent}>
+                    <Ionicons name="close-circle" size={64} color={COLORS.error} />
+                    <Text type="title" style={[styles.errorText, { marginTop: verticalScale(16) }]}>
+                        Job Cancelled
+                    </Text>
+                    <Text type="body2" style={[styles.loadingText, { marginTop: verticalScale(8) }]}>
+                        The customer has cancelled this request.
+                    </Text>
+
+                    <View style={styles.countdownContainer}>
+                        <Text type="body" style={styles.countdownText}>
+                            Redirecting in <Text type="bodySemiBold" style={styles.countdownNumber}>
+                                {cancelRedirectCountdown}
+                            </Text>...
+                        </Text>
+                    </View>
+
+                    <TouchableOpacity
+                        style={styles.skipButton}
+                        onPress={handleSkipCancelCountdown}
+                        activeOpacity={0.7}
+                    >
+                        <Text type="bodySemiBold" style={styles.skipButtonText}>
+                            Go Back Now
+                        </Text>
+                        <Ionicons name="arrow-forward" size={18} color={COLORS.white} />
+                    </TouchableOpacity>
+                </View>
             </View>
         );
     }
@@ -999,16 +1042,22 @@ export default function WebSocketRequestDetailsScreen() {
                         shouldReplaceMapContent={true}
                     />
                 )} */}
-                <Marker coordinate={vendorLocation} title="Your Location" pinColor={COLORS.primary}>
-                    <View style={styles.vendorMarker}>
-                        <Ionicons name="car" size={24} color={COLORS.white} />
-                    </View>
+                {/* Vendor Car Marker - Clean Icon */}
+                <Marker
+                    coordinate={vendorLocation}
+                    title="Your Location"
+                    anchor={{ x: 0.5, y: 0.5 }}
+                >
+                    <FontAwesome5 name="car" size={32} color={COLORS.primary} />
                 </Marker>
 
-                <Marker coordinate={customerLocation} title="Customer Location" description={request?.customer?.name}>
-                    <View style={styles.customerMarker}>
-                        <Ionicons name="location" size={32} color={COLORS.accent} />
-                    </View>
+                {/* Customer Location Marker - Clean Icon */}
+                <Marker
+                    coordinate={customerLocation}
+                    title="Customer Location"
+                    description={request?.customer?.name}
+                >
+                    <Ionicons name="location" size={36} color={COLORS.accent} />
                 </Marker>
 
                 {routeInfo && routeInfo.coordinates.length > 0 && (
@@ -1334,21 +1383,6 @@ const styles = StyleSheet.create({
     map: {
         flex: 1,
     },
-    vendorMarker: {
-        backgroundColor: COLORS.primary,
-        padding: scale(8),
-        borderRadius: moderateScale(20),
-        borderWidth: 3,
-        borderColor: COLORS.white,
-        shadowColor: COLORS.black,
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 4,
-        elevation: 5,
-    },
-    customerMarker: {
-        alignItems: 'center',
-    },
     etaCard: {
         position: 'absolute',
         top: verticalScale(16),
@@ -1661,6 +1695,54 @@ const styles = StyleSheet.create({
     },
     cancelJobButtonText: {
         color: COLORS.error,
+        fontSize: moderateScale(15),
+    },
+    cancelledContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: COLORS.gray50,
+        padding: scale(24),
+    },
+    cancelledContent: {
+        alignItems: 'center',
+        maxWidth: scale(300),
+    },
+    countdownContainer: {
+        marginTop: verticalScale(24),
+        paddingHorizontal: scale(20),
+        paddingVertical: verticalScale(12),
+        backgroundColor: COLORS.warning + '15',
+        borderRadius: moderateScale(12),
+        borderWidth: 1,
+        borderColor: COLORS.warning + '40',
+    },
+    countdownText: {
+        color: COLORS.gray700,
+        textAlign: 'center',
+    },
+    countdownNumber: {
+        color: COLORS.warning,
+        fontSize: moderateScale(18),
+    },
+    skipButton: {
+        marginTop: verticalScale(20),
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: scale(8),
+        backgroundColor: COLORS.primary,
+        paddingHorizontal: scale(24),
+        paddingVertical: verticalScale(12),
+        borderRadius: moderateScale(8),
+        shadowColor: COLORS.black,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    skipButtonText: {
+        color: COLORS.white,
         fontSize: moderateScale(15),
     },
 });

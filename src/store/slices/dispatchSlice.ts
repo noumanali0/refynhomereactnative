@@ -19,6 +19,7 @@ import {
 } from '@/utils/notifications';
 import { flushLocationQueue, getCurrentLocation } from '@/services/backgroundLocationService';
 import { saveActiveJob, updateActiveJobStatus, clearActiveJob as clearActiveJobStorage } from '@/services/activeJobService';
+import { haversineDistanceKm } from '@/utils/geo';
 import type { RootState } from '@/store';
 import type {
   ConnectionStatus,
@@ -62,19 +63,12 @@ function calculateDistanceMeters(
   coord1: Coordinates,
   coord2: Coordinates
 ): number {
-  const R = 6371000; // Earth radius in meters
-  const dLat = (coord2.latitude - coord1.latitude) * Math.PI / 180;
-  const dLon = (coord2.longitude - coord1.longitude) * Math.PI / 180;
-  const lat1Rad = coord1.latitude * Math.PI / 180;
-  const lat2Rad = coord2.latitude * Math.PI / 180;
-
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(lat1Rad) * Math.cos(lat2Rad) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return R * c;
+  return haversineDistanceKm(
+    coord1.latitude,
+    coord1.longitude,
+    coord2.latitude,
+    coord2.longitude
+  ) * 1000; // Convert km to meters
 }
 
 // ============================================================================
@@ -179,6 +173,9 @@ interface DispatchState {
     reasonCode?: string;
   } | null;
 
+  // Vendor cancelled and reset to pending (for customer UI toast)
+  vendorCancelledRequest: number | null;
+
   // Vendor Distance Tracking (for customer cancel eligibility)
   // Now primarily driven by backend WebSocket events:
   // - 'vendor.distance.1km.reached' when vendor covers 1km towards customer
@@ -201,6 +198,13 @@ interface DispatchState {
   // UI State
   pendingActions: Record<string, boolean>;
   errors: Record<string, string>;
+
+  // Internal State (previously module-level globals - moved to Redux for proper cleanup)
+  _internal: {
+    lastVendorLocationUpdateTime: number;
+    expiredRequestBatchQueue: number[];
+    expiredRequestBatchTimeout: number | null; // Store timeout ID as number
+  };
 }
 
 // ============================================================================
@@ -239,6 +243,9 @@ const initialState: DispatchState = {
   // Service Cancellation
   cancelledService: null,
 
+  // Vendor cancelled and reset to pending
+  vendorCancelledRequest: null,
+
   // Vendor Distance Tracking
   vendorDistanceTracking: {
     // Backend-driven state
@@ -257,6 +264,13 @@ const initialState: DispatchState = {
   // UI State
   pendingActions: {},
   errors: {},
+
+  // Internal State
+  _internal: {
+    lastVendorLocationUpdateTime: 0,
+    expiredRequestBatchQueue: [],
+    expiredRequestBatchTimeout: null,
+  },
 };
 
 // ============================================================================
@@ -289,6 +303,60 @@ export const restoreActiveJob = createAsyncThunk(
     }
 
     return null;
+  }
+);
+
+/**
+ * Restore customer's active service from storage (on app startup)
+ * Mirrors the vendor restoreActiveJob pattern for consistency
+ */
+export const restoreCustomerActiveService = createAsyncThunk<
+  { requestId: number; status: string } | null,
+  void,
+  { state: RootState }
+>(
+  'customer/restoreActiveService',
+  async (_, { rejectWithValue }) => {
+    try {
+      const { getCustomerActiveService, isActiveServiceExpired, clearCustomerActiveService } =
+        require('@/services/customerActiveServiceService');
+
+      const activeService = await getCustomerActiveService();
+
+      if (!activeService) {
+        if (__DEV__) console.log('[Customer] No active service to restore');
+        return null;
+      }
+
+      // Check if expired
+      const isExpired = await isActiveServiceExpired();
+
+      if (isExpired && activeService.status !== 'accepted') {
+        if (__DEV__) console.log('[Customer] Active service expired, clearing');
+        await clearCustomerActiveService();
+        return null;
+      }
+
+      if (__DEV__) {
+        console.log('[Customer] Restored active service:', {
+          requestId: activeService.requestId,
+          status: activeService.status
+        });
+      }
+
+      return {
+        requestId: activeService.requestId,
+        status: activeService.status,
+      };
+    } catch (error) {
+      console.error('[Customer] Error restoring:', error);
+
+      // Clear corrupted storage
+      const { clearCustomerActiveService } = require('@/services/customerActiveServiceService');
+      await clearCustomerActiveService().catch(() => {});
+
+      return rejectWithValue('Failed to restore active service');
+    }
   }
 );
 
@@ -572,6 +640,33 @@ export const connectSocket = createAsyncThunk(
       })
     );
 
+    // Service cancelled by vendor - request reset to pending
+    // This event is sent when vendor cancels an accepted job
+    // Backend resets request to PENDING and re-broadcasts to other vendors
+    activeUnsubscribers.push(
+      socketService.on('service.cancelled', (data: { service_request_id: number; status: string }) => {
+        if (__DEV__) console.log('[Dispatch] service.cancelled:', data);
+
+        const requestId = data.service_request_id;
+
+        // Only handle when status is 'pending' (vendor cancelled, request reset)
+        if (data.status === 'pending') {
+          // Set vendor cancelled flag for UI toast
+          dispatch(setVendorCancelledAndReset(requestId));
+
+          // Clear vendor location since vendor is no longer assigned
+          dispatch(clearVendorLocation());
+
+          // Clear all proposals for this request (they're now invalid)
+          dispatch(clearProposalsForRequest(requestId));
+
+          if (__DEV__) {
+            console.log('[Dispatch] Vendor cancelled, request reset to pending:', requestId);
+          }
+        }
+      })
+    );
+
     // Proposal created - when vendor sends a new proposal to customer
     activeUnsubscribers.push(
       socketService.on('proposal.created', (data: { proposal?: SocketProposal; payload?: SocketProposal }) => {
@@ -727,6 +822,13 @@ export const connectSocket = createAsyncThunk(
 
           // Update distance tracking for customer cancel eligibility
           dispatch(updateVendorDistanceTracking({ location: newLocation, timestamp: now }));
+
+          // Persist vendor location to SecureStore for app kill recovery
+          const { updateVendorLocation } = require('@/services/customerActiveServiceService');
+          updateVendorLocation(newLocation.latitude, newLocation.longitude)
+            .catch((error: any) => {
+              if (__DEV__) console.error('[Dispatch] Failed to persist vendor location:', error);
+            });
         }
       })
     );
@@ -1370,6 +1472,30 @@ const dispatchSlice = createSlice({
       state.cancelledService = null;
     },
 
+    // Vendor cancelled and request reset to pending (for customer UI)
+    setVendorCancelledAndReset: (state, action: PayloadAction<number>) => {
+      const requestId = action.payload;
+      // Mark as vendor cancelled (for UI toast)
+      state.vendorCancelledRequest = requestId;
+      // Clear accepted proposal tracking since vendor cancelled
+      state.activeJobId = null;
+      state.activeProposalId = null;
+    },
+
+    clearVendorCancelledRequest: (state) => {
+      state.vendorCancelledRequest = null;
+    },
+
+    // Clear all proposals for a specific request (used when vendor cancels)
+    clearProposalsForRequest: (state, action: PayloadAction<number>) => {
+      const requestId = action.payload;
+      const proposalIds = state.proposalIdsByRequest[requestId] || [];
+      proposalIds.forEach(id => {
+        delete state.proposalsById[id];
+      });
+      delete state.proposalIdsByRequest[requestId];
+    },
+
     // Vendor Distance Tracking - updates cumulative distance and stationary status
     updateVendorDistanceTracking: (
       state,
@@ -1601,6 +1727,9 @@ export const {
   clearCompletedService,
   setServiceCancelled,
   clearServiceCancelled,
+  setVendorCancelledAndReset,
+  clearVendorCancelledRequest,
+  clearProposalsForRequest,
   updateVendorDistanceTracking,
   resetVendorDistanceTracking,
   setVendorStationary,
@@ -1724,6 +1853,9 @@ export const selectCompletedService = (state: RootState) => state.dispatch.compl
 
 // Service Cancellation (for both customer and vendor notification)
 export const selectCancelledService = (state: RootState) => state.dispatch.cancelledService;
+
+// Vendor cancelled and request reset to pending (for customer UI toast)
+export const selectVendorCancelledRequest = (state: RootState) => state.dispatch.vendorCancelledRequest;
 
 // Vendor Distance Tracking (for customer cancel eligibility)
 export const selectVendorDistanceTracking = (state: RootState) => state.dispatch.vendorDistanceTracking;

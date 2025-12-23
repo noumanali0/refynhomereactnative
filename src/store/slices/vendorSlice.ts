@@ -1,4 +1,4 @@
-import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
+import { createSlice, createAsyncThunk, PayloadAction, createSelector } from '@reduxjs/toolkit';
 import { Vendor, VendorFilters } from '../../types';
 import { MOCK_VENDORS } from '../../utils/mockData';
 import { favoriteService, FavoriteVendor } from '@/services/favoriteService';
@@ -9,7 +9,6 @@ import { favoriteService, FavoriteVendor } from '@/services/favoriteService';
 
 interface VendorState {
   vendors: Vendor[];
-  filteredVendors: Vendor[];
   filters: VendorFilters;
   favoriteVendorIds: number[];
   favoriteVendors: FavoriteVendor[];
@@ -20,7 +19,6 @@ interface VendorState {
 
 const initialState: VendorState = {
   vendors: MOCK_VENDORS,
-  filteredVendors: MOCK_VENDORS,
   filters: {},
   favoriteVendorIds: [],
   favoriteVendors: [],
@@ -111,7 +109,6 @@ const vendorSlice = createSlice({
   reducers: {
     setFilters: (state, action: PayloadAction<VendorFilters>) => {
       state.filters = action.payload;
-      state.filteredVendors = filterVendors(state.vendors, action.payload);
     },
     // Local toggle for optimistic updates
     toggleFavoriteLocal: (state, action: PayloadAction<number>) => {
@@ -242,6 +239,17 @@ function filterVendors(vendors: Vendor[], filters: VendorFilters): Vendor[] {
 // SELECTORS
 // ============================================================================
 
+// Base selectors
+export const selectVendors = (state: { vendor: VendorState }) => state.vendor.vendors;
+export const selectVendorFilters = (state: { vendor: VendorState }) => state.vendor.filters;
+
+// Memoized selector for filtered vendors - prevents duplicate data in state
+export const selectFilteredVendors = createSelector(
+  [selectVendors, selectVendorFilters],
+  (vendors, filters) => filterVendors(vendors, filters)
+);
+
+// Favorite selectors
 export const selectFavoriteVendorIds = (state: { vendor: VendorState }) => state.vendor.favoriteVendorIds;
 export const selectFavoriteVendors = (state: { vendor: VendorState }) => state.vendor.favoriteVendors;
 export const selectIsVendorFavorite = (vendorId: number) => (state: { vendor: VendorState }) =>

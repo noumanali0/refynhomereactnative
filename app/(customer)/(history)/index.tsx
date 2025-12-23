@@ -20,6 +20,7 @@ import { AppDispatch } from '@/store';
 import {
     fetchServiceHistory,
     refreshServiceHistory,
+    loadMoreHistory,
     setFilter,
     selectFilteredHistory,
     selectHistoryStats,
@@ -27,6 +28,8 @@ import {
     selectIsRefreshing,
     selectHistoryError,
     selectCurrentFilter,
+    selectHasMore,
+    selectCurrentPage,
 } from '@/store/slices/serviceHistorySlice';
 
 type FilterType = 'all' | 'active' | 'completed' | 'cancelled';
@@ -42,6 +45,11 @@ export default function CustomerHistoryScreen() {
     const isRefreshing = useSelector(selectIsRefreshing);
     const error = useSelector(selectHistoryError);
     const activeFilter = useSelector(selectCurrentFilter);
+    const hasMore = useSelector(selectHasMore);
+    const currentPage = useSelector(selectCurrentPage);
+
+    // Local state for load more
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
 
     // Fetch data on mount
     useEffect(() => {
@@ -57,6 +65,23 @@ export default function CustomerHistoryScreen() {
     const onRefresh = useCallback(() => {
         dispatch(refreshServiceHistory());
     }, [dispatch]);
+
+    // Handle load more (pagination)
+    const handleLoadMore = useCallback(async () => {
+        // Only load if: not already loading, not refreshing, has more data
+        if (isLoadingMore || isLoading || isRefreshing || !hasMore) return;
+
+        setIsLoadingMore(true);
+        try {
+            await dispatch(loadMoreHistory(currentPage + 1)).unwrap();
+        } catch (error) {
+            if (__DEV__) {
+                console.error('[History] Load more error:', error);
+            }
+        } finally {
+            setIsLoadingMore(false);
+        }
+    }, [dispatch, currentPage, hasMore, isLoadingMore, isLoading, isRefreshing]);
 
     // Get count for each filter
     const getFilterCount = (filter: FilterType): number => {
@@ -90,8 +115,20 @@ export default function CustomerHistoryScreen() {
         );
     };
 
+    // Render footer with loading indicator when loading more
+    const renderFooter = useCallback(() => {
+        if (!isLoadingMore) return null;
+
+        return (
+            <View style={styles.footerLoader}>
+                <ActivityIndicator size="small" color={COLORS.primary} />
+                <Text style={styles.footerLoaderText}>Loading more...</Text>
+            </View>
+        );
+    }, [isLoadingMore]);
+
     // Render empty state
-    const renderEmptyState = () => {
+    const renderEmptyState = useCallback(() => {
         if (isLoading) {
             return (
                 <View style={styles.loadingState}>
@@ -140,7 +177,7 @@ export default function CustomerHistoryScreen() {
                 )}
             </View>
         );
-    };
+    }, [isLoading, error, activeFilter, handleFilterChange, dispatch]);
 
     return (
         <View style={styles.container}>
@@ -211,6 +248,7 @@ export default function CustomerHistoryScreen() {
                 keyExtractor={(item) => item.id.toString()}
                 contentContainerStyle={styles.listContent}
                 ListEmptyComponent={renderEmptyState}
+                ListFooterComponent={renderFooter}
                 refreshControl={
                     <RefreshControl
                         refreshing={isRefreshing}
@@ -219,6 +257,9 @@ export default function CustomerHistoryScreen() {
                         tintColor={COLORS.primary}
                     />
                 }
+                // Pagination
+                onEndReached={handleLoadMore}
+                onEndReachedThreshold={0.5}
                 showsVerticalScrollIndicator={false}
                 // Performance optimizations for low-end devices
                 initialNumToRender={5}
@@ -292,4 +333,15 @@ const styles = StyleSheet.create({
     clearFilterText: { color: COLORS.white },
     loadingState: { alignItems: 'center', paddingVertical: verticalScale(80), paddingHorizontal: scale(32) },
     loadingText: { color: COLORS.gray600, marginTop: verticalScale(16), fontSize: moderateScale(14) },
+    footerLoader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: verticalScale(20),
+        gap: scale(12),
+    },
+    footerLoaderText: {
+        color: COLORS.gray600,
+        fontSize: moderateScale(14),
+    },
 });

@@ -25,6 +25,16 @@ export interface VendorProfile {
   averageRating: number;
   totalReviews: number;
   completedJobs: number;
+  // Rating distribution from API
+  rating_distribution?: {
+    "1": number;
+    "2": number;
+    "3": number;
+    "4": number;
+    "5": number;
+  } | null;
+  // Service categories from API
+  categories?: Array<{ id: number; name: string; slug: string }>;
   // Legacy fields for backward compatibility
   rating?: number;
   isOnline?: boolean;

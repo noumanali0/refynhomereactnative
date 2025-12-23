@@ -11,7 +11,6 @@ import {
     StyleSheet,
     TouchableOpacity,
     ActivityIndicator,
-    Platform,
     Alert,
     FlatList,
     Animated,
@@ -19,26 +18,27 @@ import {
     AppState,
     AppStateStatus,
     InteractionManager,
+    Image,
 } from "react-native";
 import MapView, {
     Marker,
     PROVIDER_DEFAULT,
-    UrlTile,
     Polyline,
 } from "react-native-maps";
 import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { useRouter, useLocalSearchParams } from "expo-router";
 import { useDispatch, useSelector } from "react-redux";
-import { MapPin, X, Navigation } from "lucide-react-native";
+import { MapPin } from "lucide-react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { moderateScale, scale, verticalScale } from "react-native-size-matters";
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, FontAwesome5 } from "@expo/vector-icons";
 
 import Text from "@/components/common/Text";
 import { SocketStatusIndicator } from "@/components/common/SocketStatusIndicator";
 import RatingModal from "@/components/common/RatingModal";
 import CancelRequestModal from "@/components/customer/CancelRequestModal";
+import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { COLORS } from "@/constants/colors";
 import { serviceRequestApi, type CreateServiceRequestParams, type CustomerCancelReasonCode } from "@/services/serviceRequestApi";
 import type { AppDispatch, RootState } from "@/store";
@@ -56,12 +56,15 @@ import {
     clearCompletedService,
     selectCancelledService,
     clearServiceCancelled,
+    selectVendorCancelledRequest,
+    clearVendorCancelledRequest,
     selectCanCustomerCancel,
     selectVendorDistanceTracking,
     resetVendorDistanceTracking,
     setVendorStationary,
     setCurrentCustomerRequest,
     clearCurrentCustomerRequest,
+    setVendorLocation,
 } from "@/store/slices/dispatchSlice";
 import { clearReviewState } from "@/store/slices/reviewSlice";
 import { useVendorProximity } from "@/hooks/useVendorProximity";
@@ -100,6 +103,36 @@ const CONSTANTS = {
     PROPOSAL_TIMER_TOTAL: 30,
     /** Urgent threshold for proposal timer */
     PROPOSAL_URGENT_THRESHOLD: 10,
+} as const;
+
+/**
+ * Smart Zoom Thresholds for Map
+ * Distance-aware zoom levels for Uber/Careem-like experience
+ */
+const ZOOM_THRESHOLDS = {
+    // Distance thresholds in kilometers
+    VERY_CLOSE: 0.5,    // < 500m - street-level detail
+    CLOSE: 2,           // < 2km - neighborhood view
+    MEDIUM: 5,          // < 5km - city block view
+    FAR: Infinity,      // >= 5km - wide area view
+
+    // Corresponding zoom deltas (smaller = more zoomed in)
+    DELTAS: {
+        VERY_CLOSE: 0.005,  // Like Uber when vendor nearby
+        CLOSE: 0.015,       // User selected threshold
+        MEDIUM: 0.03,       // Balanced view
+        FAR: 0.05,          // Show full route
+    },
+
+    // Edge padding per zoom level (bottom padding accounts for bottom sheet)
+    PADDING: {
+        VERY_CLOSE: { top: 80, right: 80, bottom: 350, left: 80 },
+        CLOSE: { top: 100, right: 100, bottom: 400, left: 100 },
+        MEDIUM: { top: 120, right: 120, bottom: 450, left: 120 },
+        FAR: { top: 150, right: 150, bottom: 500, left: 150 },
+    },
+
+    ANIMATION_DURATION: 800, // Smooth 800ms animations
 } as const;
 
 const SNAP_POINTS = ["25%", "50%", "85%"];
@@ -274,7 +307,7 @@ const ProposalCard = React.memo(({
     };
 
     const statusBadge = getStatusBadge();
-
+    // console.log("-->proposal logs",proposal.vendor)
     return (
         <Animated.View
             style={[
@@ -307,11 +340,10 @@ const ProposalCard = React.memo(({
                     >
                         <View style={styles.avatarContainer}>
                             {proposal.vendor?.profile_photo_url ? (
-                                <View style={styles.avatar}>
-                                    <Text style={styles.avatarText}>
-                                        {proposal.vendor.full_name?.charAt(0)?.toUpperCase() || 'V'}
-                                    </Text>
-                                </View>
+                                <Image
+                                    source={{ uri: proposal.vendor.profile_photo_url }}
+                                    style={styles.avatarImage}
+                                />
                             ) : (
                                 <LinearGradient
                                     colors={[COLORS.primary, COLORS.accent]}
@@ -320,7 +352,7 @@ const ProposalCard = React.memo(({
                                     style={styles.avatar}
                                 >
                                     <Text style={styles.avatarTextWhite}>
-                                        {proposal.vendor?.full_name?.charAt(0)?.toUpperCase() || 'V'}
+                                        {proposal?.vendor?.full_name?.charAt(0)?.toUpperCase() || 'V'}
                                     </Text>
                                 </LinearGradient>
                             )}
@@ -353,11 +385,10 @@ const ProposalCard = React.memo(({
                     <View style={styles.vendorInfo}>
                         <View style={styles.avatarContainer}>
                             {proposal.vendor?.profile_photo_url ? (
-                                <View style={styles.avatar}>
-                                    <Text style={styles.avatarText}>
-                                        {proposal.vendor.full_name?.charAt(0)?.toUpperCase() || 'V'}
-                                    </Text>
-                                </View>
+                                <Image
+                                    source={{ uri: proposal.vendor.profile_photo_url }}
+                                    style={styles.avatarImage}
+                                />
                             ) : (
                                 <LinearGradient
                                     colors={[COLORS.primary, COLORS.accent]}
@@ -517,22 +548,32 @@ const ProposalCard = React.memo(({
                         onPress={handleWhatsApp}
                         activeOpacity={0.8}
                     >
-                        <View style={styles.whatsappButtonInner}>
-                            <Ionicons name="logo-whatsapp" size={18} color="#25D366" />
-                            <Text style={styles.whatsappButtonText}>WhatsApp</Text>
-                        </View>
+                        <LinearGradient
+                            colors={['#25D366', '#128C7E']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={styles.whatsappButtonInner}
+                        >
+                            <Ionicons name="logo-whatsapp" size={18} color={COLORS.white} />
+                            <Text style={[styles.whatsappButtonText, { color: COLORS.white }]}>WhatsApp</Text>
+                        </LinearGradient>
                     </TouchableOpacity>
                 </View>
             )}
         </Animated.View>
     );
 }, (prevProps, nextProps) => {
+    // Check all critical props to prevent stale renders
     return (
         prevProps.proposal.id === nextProps.proposal.id &&
         prevProps.proposal.status === nextProps.proposal.status &&
         prevProps.proposal.remaining_expiry_time === nextProps.proposal.remaining_expiry_time &&
         prevProps.isAccepting === nextProps.isAccepting &&
-        prevProps.isDeclining === nextProps.isDeclining
+        prevProps.isDeclining === nextProps.isDeclining &&
+        // Include vendor checks to detect when vendor data arrives
+        prevProps.proposal.vendor?.id === nextProps.proposal.vendor?.id &&
+        prevProps.proposal.vendor?.phone === nextProps.proposal.vendor?.phone &&
+        prevProps.onVendorTap === nextProps.onVendorTap
     );
 });
 
@@ -568,16 +609,21 @@ export default function LiveOffersScreen() {
     const vendorLocation = useSelector(selectVendorLocation);
     const completedService = useSelector(selectCompletedService);
     const cancelledService = useSelector(selectCancelledService);
+    const vendorCancelledRequest = useSelector(selectVendorCancelledRequest);
     const canCustomerCancel = useSelector(selectCanCustomerCancel);
     const vendorDistanceTracking = useSelector(selectVendorDistanceTracking);
 
     // Get current request and its proposals
     const requestId = params.requestId ? parseInt(params.requestId, 10) : null;
     const currentRequest = useMemo(() => {
-        if (requestId) {
-            return customerRequests.find(r => r?.id === requestId);
+        // Safety check: return null if customerRequests is empty or undefined
+        if (!customerRequests || customerRequests.length === 0) {
+            return null;
         }
-        return customerRequests[0];
+        if (requestId) {
+            return customerRequests.find(r => r?.id === requestId) || null;
+        }
+        return customerRequests[0] || null;
     }, [customerRequests, requestId]);
 
     // Use requestId directly from params OR from currentRequest
@@ -644,6 +690,10 @@ export default function LiveOffersScreen() {
     const appStateRef = useRef<AppStateStatus>(AppState.currentState);
     const backgroundTimeRef = useRef<number | null>(null);
 
+    // Vendor location age tracking (for staleness indicators)
+    const [locationAge, setLocationAge] = useState<number>(0);
+    const [isRefreshingLocation, setIsRefreshingLocation] = useState(false);
+
     // =========================================================================
     // Set currentCustomerRequestId in Redux for cancellation tracking
     // This ensures the cancellation handler can detect this request even if
@@ -692,20 +742,95 @@ export default function LiveOffersScreen() {
     const serviceAddress = params.address || currentRequest?.address_line || 'Service Location';
 
     // =========================================================================
+    // Smart Zoom Calculation
+    // =========================================================================
+
+    /**
+     * Calculate optimal zoom level based on vendor-to-customer distance
+     * Returns: delta, padding, and zoom level for map animations
+     */
+    const calculateSmartZoom = useCallback((
+        origin: Coordinates,
+        destination: Coordinates
+    ): {
+        delta: number;
+        padding: typeof ZOOM_THRESHOLDS.PADDING.CLOSE;
+        zoomLevel: 'very_close' | 'close' | 'medium' | 'far';
+    } => {
+        const { haversineDistanceKm } = require('@/utils/geo');
+        const distanceKm = haversineDistanceKm(
+            origin.latitude,
+            origin.longitude,
+            destination.latitude,
+            destination.longitude
+        );
+
+        if (__DEV__) {
+            console.log('[SmartZoom] Distance:', distanceKm.toFixed(2), 'km');
+        }
+
+        if (distanceKm < ZOOM_THRESHOLDS.VERY_CLOSE) {
+            return {
+                delta: ZOOM_THRESHOLDS.DELTAS.VERY_CLOSE,
+                padding: ZOOM_THRESHOLDS.PADDING.VERY_CLOSE,
+                zoomLevel: 'very_close',
+            };
+        } else if (distanceKm < ZOOM_THRESHOLDS.CLOSE) {
+            return {
+                delta: ZOOM_THRESHOLDS.DELTAS.CLOSE,
+                padding: ZOOM_THRESHOLDS.PADDING.CLOSE,
+                zoomLevel: 'close',
+            };
+        } else if (distanceKm < ZOOM_THRESHOLDS.MEDIUM) {
+            return {
+                delta: ZOOM_THRESHOLDS.DELTAS.MEDIUM,
+                padding: ZOOM_THRESHOLDS.PADDING.MEDIUM,
+                zoomLevel: 'medium',
+            };
+        } else {
+            return {
+                delta: ZOOM_THRESHOLDS.DELTAS.FAR,
+                padding: ZOOM_THRESHOLDS.PADDING.FAR,
+                zoomLevel: 'far',
+            };
+        }
+    }, []);
+
+    // =========================================================================
     // Route Tracking Hook - Uses optimized useRouteTracking
     // =========================================================================
     const handleFirstRouteFetch = useCallback((route: Coordinates[]) => {
         // Defer map animation until UI is idle
         // This prevents jank on low-end devices during first route fetch
         InteractionManager.runAfterInteractions(() => {
-            if (route.length > 2 && mapRef.current) {
-                mapRef.current.fitToCoordinates(route, {
-                    edgePadding: CONSTANTS.MAP_EDGE_PADDING,
+            if (!mapRef.current || !vendorLocation || !serviceLocation) return;
+
+            const zoomConfig = calculateSmartZoom(vendorLocation, serviceLocation);
+
+            if (__DEV__) {
+                console.log('[FirstRouteFetch] Smart zoom:', zoomConfig.zoomLevel);
+            }
+
+            if (zoomConfig.zoomLevel === 'very_close' || zoomConfig.zoomLevel === 'close') {
+                // Close proximity: Zoom to midpoint for street-level detail
+                const midLat = (vendorLocation.latitude + serviceLocation.latitude) / 2;
+                const midLng = (vendorLocation.longitude + serviceLocation.longitude) / 2;
+
+                mapRef.current.animateToRegion({
+                    latitude: midLat,
+                    longitude: midLng,
+                    latitudeDelta: zoomConfig.delta,
+                    longitudeDelta: zoomConfig.delta,
+                }, ZOOM_THRESHOLDS.ANIMATION_DURATION);
+            } else {
+                // Medium/Far: Show full route with smart padding
+                mapRef.current.fitToCoordinates(route.length > 2 ? route : [vendorLocation, serviceLocation], {
+                    edgePadding: zoomConfig.padding,
                     animated: true,
                 });
             }
         });
-    }, []);
+    }, [vendorLocation, serviceLocation, calculateSmartZoom]);
 
     // Memoize enabled flag to prevent unnecessary hook re-renders
     // This is critical for preventing crash on low-end devices
@@ -742,6 +867,47 @@ export default function LiveOffersScreen() {
         }
     }, [routeCoords]);
 
+    // =========================================================================
+    // Dynamic Zoom Updates - Adjust as vendor approaches
+    // =========================================================================
+
+    /**
+     * Update zoom as vendor approaches
+     * Debounced to prevent excessive map operations
+     */
+    useEffect(() => {
+        if (!vendorLocation || !serviceLocation || !acceptedProposal || routeCoords.length === 0) {
+            return;
+        }
+
+        const zoomUpdateTimer = setTimeout(() => {
+            InteractionManager.runAfterInteractions(() => {
+                if (!mapRef.current) return;
+
+                const zoomConfig = calculateSmartZoom(vendorLocation, serviceLocation);
+
+                if (zoomConfig.zoomLevel === 'very_close' || zoomConfig.zoomLevel === 'close') {
+                    const midLat = (vendorLocation.latitude + serviceLocation.latitude) / 2;
+                    const midLng = (vendorLocation.longitude + serviceLocation.longitude) / 2;
+
+                    mapRef.current.animateToRegion({
+                        latitude: midLat,
+                        longitude: midLng,
+                        latitudeDelta: zoomConfig.delta,
+                        longitudeDelta: zoomConfig.delta,
+                    }, ZOOM_THRESHOLDS.ANIMATION_DURATION);
+                } else {
+                    mapRef.current.fitToCoordinates(routeCoords, {
+                        edgePadding: zoomConfig.padding,
+                        animated: true,
+                    });
+                }
+            });
+        }, 2000); // 2 second debounce prevents zoom oscillation
+
+        return () => clearTimeout(zoomUpdateTimer);
+    }, [vendorLocation, serviceLocation, acceptedProposal, routeCoords, calculateSmartZoom]);
+
     // Vendor proximity detection (100m arrival notification)
     // IMPORTANT: Only enable after staged initialization is complete
     const { hasArrived: vendorHasArrived, formattedDistance } = useVendorProximity({
@@ -754,14 +920,6 @@ export default function LiveOffersScreen() {
             console.log('[LiveOffers] Vendor arrived within 100m');
         },
     });
-
-    // Memoize vendor marker colors to prevent object recreation on every render
-    // This prevents crash on low-end devices from frequent re-renders during location updates
-    const vendorMarkerColors = useMemo(() => {
-        return vendorHasArrived
-            ? [COLORS.success, '#059669'] as const
-            : [COLORS.warning, '#d97706'] as const;
-    }, [vendorHasArrived]);
 
     // Animation for waiting state
     const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -813,14 +971,14 @@ export default function LiveOffersScreen() {
         // Fallback to currentRequest from Redux
         if (currentRequest) {
             setOriginalRequestParams({
-                category: currentRequest.category?.id ?? (currentRequest.category as unknown as number),
-                problem_title: currentRequest.problem_title,
-                description: currentRequest.description,
-                address_line: currentRequest.address_line,
-                latitude: currentRequest.latitude,
-                longitude: currentRequest.longitude,
-                location_source: currentRequest.location_source,
-                radius_km: currentRequest.radius_km,
+                category: currentRequest?.category?.id ?? (currentRequest?.category as unknown as number),
+                problem_title: currentRequest?.problem_title || '',
+                description: currentRequest?.description || '',
+                address_line: currentRequest?.address_line || '',
+                latitude: currentRequest?.latitude || 0,
+                longitude: currentRequest?.longitude || 0,
+                location_source: currentRequest?.location_source,
+                radius_km: currentRequest?.radius_km,
             });
         }
     }, [currentRequest, originalRequestParams, params]);
@@ -879,6 +1037,156 @@ export default function LiveOffersScreen() {
             restoreCancelTimer();
         }
     }, [acceptedProposal, params.acceptedAtTimestamp]);
+
+    // Restore vendor location from persisted storage on mount (for app kill recovery)
+    useEffect(() => {
+        let mounted = true;
+
+        const restoreVendorLocation = async () => {
+            // Only restore if:
+            // 1. Proposal is accepted
+            // 2. No vendor location in Redux yet (prevents overwriting fresh WebSocket data)
+            if (!acceptedProposal || vendorLocation) return;
+
+            try {
+                const { getCustomerActiveService } = require('@/services/customerActiveServiceService');
+                const activeService = await getCustomerActiveService();
+
+                // Check if still mounted before updating state
+                if (!mounted) return;
+
+                if (activeService?.vendorLocation) {
+                    const { latitude, longitude, timestamp } = activeService.vendorLocation;
+
+                    // Check location age
+                    const age = Date.now() - timestamp;
+                    const ageMinutes = Math.floor(age / 60000);
+
+                    // Restore to Redux for immediate map display
+                    dispatch(setVendorLocation({ latitude, longitude }));
+
+                    if (__DEV__) {
+                        console.log('[LiveOffers] Restored vendor location:', {
+                            lat: latitude.toFixed(4),
+                            lng: longitude.toFixed(4),
+                            ageMinutes,
+                        });
+                    }
+
+                    // Show toast if location is stale (> 2 minutes)
+                    if (age > 2 * 60 * 1000 && ageMinutes < 30) {
+                        showToast({ type: 'info', title: `Last known location (${ageMinutes} min ago)` });
+                    } else if (ageMinutes >= 30) {
+                        showToast({ type: 'warning', title: 'Vendor location may be outdated' });
+                    }
+                }
+            } catch (error) {
+                if (__DEV__) console.error('[LiveOffers] Failed to restore vendor location:', error);
+            }
+        };
+
+        // Defer restoration until after mounted to avoid race with WebSocket
+        const timeoutId = setTimeout(restoreVendorLocation, 1000);
+
+        return () => {
+            mounted = false;
+            clearTimeout(timeoutId);
+        };
+    }, [acceptedProposal, vendorLocation, dispatch]);
+
+    // Track vendor location age for staleness indicators
+    useEffect(() => {
+        if (!vendorLocation || !acceptedProposal) {
+            setLocationAge(0);
+            return;
+        }
+
+        // Update age every 30 seconds for better performance
+        const updateAge = async () => {
+            try {
+                const { getCustomerActiveService } = require('@/services/customerActiveServiceService');
+                const activeService = await getCustomerActiveService();
+                if (activeService?.vendorLocation) {
+                    const age = Date.now() - activeService.vendorLocation.timestamp;
+                    setLocationAge(age);
+                }
+            } catch (error) {
+                if (__DEV__) console.error('[LiveOffers] Failed to update location age:', error);
+            }
+        };
+
+        // Initial update
+        updateAge();
+
+        // Update every 30 seconds
+        const interval = setInterval(updateAge, 30000);
+
+        return () => clearInterval(interval);
+    }, [vendorLocation, acceptedProposal]);
+
+    // API fallback: Fetch vendor location from backend if WebSocket didn't provide it
+    // Or if cached location is too stale (>10 min)
+    useEffect(() => {
+        const fetchVendorLocationFallback = async () => {
+            // Skip if:
+            // - No accepted proposal
+            // - Already have vendor location in Redux
+            // - No request ID
+            if (!acceptedProposal || vendorLocation || !effectiveRequestId) return;
+
+            try {
+                // Check if cached location is too stale (> 10 min)
+                const { getCustomerActiveService } = require('@/services/customerActiveServiceService');
+                const activeService = await getCustomerActiveService();
+                const cachedLocation = activeService?.vendorLocation;
+
+                if (cachedLocation) {
+                    const age = Date.now() - cachedLocation.timestamp;
+                    if (age < 10 * 60 * 1000) {
+                        // Cache is fresh enough, skip API call
+                        return;
+                    }
+                }
+
+                if (__DEV__) {
+                    console.log('[LiveOffers] Fetching vendor location from API (fallback)');
+                }
+
+                const response = await serviceRequestApi.getVendorLocation(effectiveRequestId);
+
+                if (response.vendor_location) {
+                    // Update Redux
+                    dispatch(setVendorLocation({
+                        latitude: response.vendor_location.latitude,
+                        longitude: response.vendor_location.longitude,
+                    }));
+
+                    // Persist for future app kills
+                    const { updateVendorLocation } = require('@/services/customerActiveServiceService');
+                    await updateVendorLocation(
+                        response.vendor_location.latitude,
+                        response.vendor_location.longitude
+                    );
+
+                    if (__DEV__) {
+                        console.log('[LiveOffers] Vendor location fetched via API fallback');
+                    }
+                } else if (!response.is_online && __DEV__) {
+                    console.log('[LiveOffers] Vendor is offline, no location available');
+                }
+            } catch (error) {
+                if (__DEV__) {
+                    console.error('[LiveOffers] API fallback failed:', error);
+                }
+                // Don't show error to user - might resolve when vendor comes online
+            }
+        };
+
+        // Delay API call to give WebSocket 5 seconds to provide location first
+        const timeoutId = setTimeout(fetchVendorLocationFallback, 5000);
+
+        return () => clearTimeout(timeoutId);
+    }, [acceptedProposal, vendorLocation, effectiveRequestId, dispatch]);
 
     // Cancel disable countdown timer - using setTimeout for better stability on low-end devices
     useEffect(() => {
@@ -1021,6 +1329,33 @@ export default function LiveOffersScreen() {
             // NOTE: No auto-redirect - user will see "Request Cancelled" UI with Search Again option
         }
     }, [cancelledService, effectiveRequestId, dispatch, showToast, serviceCancelledByVendor]);
+
+    // Handle vendor cancellation with request reset to pending (new flow)
+    // Backend resets request to PENDING and re-broadcasts to other vendors
+    useEffect(() => {
+        if (vendorCancelledRequest === effectiveRequestId) {
+            // Show toast - request is still active, searching for new vendors
+            showToast({
+                type: 'info',
+                title: 'Vendor Cancelled',
+                message: 'Searching for other vendors...',
+                duration: 4000,
+            });
+
+            // Clear the flag
+            dispatch(clearVendorCancelledRequest());
+
+            // Reset vendor distance tracking
+            dispatch(resetVendorDistanceTracking());
+
+            if (__DEV__) {
+                console.log('[LiveOffers] Vendor cancelled, request reset to pending - waiting for new proposals');
+            }
+
+            // NOTE: Don't navigate away - user stays on this screen
+            // Backend will re-broadcast request and new proposals will arrive
+        }
+    }, [vendorCancelledRequest, effectiveRequestId, dispatch, showToast]);
 
     // =========================================================================
     // Periodic Stationary Check Timer
@@ -1355,6 +1690,28 @@ export default function LiveOffersScreen() {
             // Now do the socket accept (this waits for ACK)
             await dispatch(acceptProposal(proposalId)).unwrap();
 
+            // Persist vendor info for offline display after app kill
+            const acceptedProposal = proposals.find(p => p.id === proposalId);
+            if (acceptedProposal?.vendor) {
+                const { updateAcceptedVendorInfo } = require('@/services/customerActiveServiceService');
+                updateAcceptedVendorInfo({
+                    id: acceptedProposal.vendor.id,
+                    full_name: acceptedProposal.vendor.full_name,
+                    phone: acceptedProposal.vendor.phone,
+                    average_rating: acceptedProposal.vendor.average_rating,
+                    total_reviews: acceptedProposal.vendor.total_reviews,
+                }).catch((error: any) => {
+                    if (__DEV__) console.error('[LiveOffers] Failed to persist vendor info:', error);
+                });
+
+                // Prefetch vendor avatar for smooth map marker rendering
+                if (acceptedProposal.vendor.profile_photo_url) {
+                    Image.prefetch(acceptedProposal.vendor.profile_photo_url).catch((error) => {
+                        if (__DEV__) console.log('[Avatar] Prefetch failed:', error);
+                    });
+                }
+            }
+
             // Defer non-critical UI operations to after the main thread is free
             // This prevents jank and potential crash from too many simultaneous updates
             InteractionManager.runAfterInteractions(() => {
@@ -1400,6 +1757,52 @@ export default function LiveOffersScreen() {
             params: { vendorId: vendorId.toString() }
         });
     }, [router]);
+
+    // Manually refresh vendor location from API
+    const handleRefreshVendorLocation = useCallback(async () => {
+        if (!effectiveRequestId || isRefreshingLocation) return;
+
+        try {
+            setIsRefreshingLocation(true);
+
+            if (__DEV__) {
+                console.log('[LiveOffers] Manually refreshing vendor location from API');
+            }
+
+            const response = await serviceRequestApi.getVendorLocation(effectiveRequestId);
+
+            if (response.vendor_location) {
+                // Update Redux
+                dispatch(setVendorLocation({
+                    latitude: response.vendor_location.latitude,
+                    longitude: response.vendor_location.longitude,
+                }));
+
+                // Persist for future app kills
+                const { updateVendorLocation } = require('@/services/customerActiveServiceService');
+                await updateVendorLocation(
+                    response.vendor_location.latitude,
+                    response.vendor_location.longitude
+                );
+
+                showToast({ type: 'success', title: 'Location updated' });
+
+                // Reset age counter
+                setLocationAge(0);
+            } else if (!response.is_online) {
+                showToast({ type: 'warning', title: 'Vendor is currently offline' });
+            } else {
+                showToast({ type: 'info', title: 'No location available yet' });
+            }
+        } catch (error) {
+            if (__DEV__) {
+                console.error('[LiveOffers] Failed to refresh vendor location:', error);
+            }
+            showToast({ type: 'error', title: 'Unable to refresh location' });
+        } finally {
+            setIsRefreshingLocation(false);
+        }
+    }, [effectiveRequestId, isRefreshingLocation, dispatch, showToast]);
 
     // Open cancel modal
     const handleCancelRequest = useCallback(() => {
@@ -1497,40 +1900,30 @@ export default function LiveOffersScreen() {
 
         return (
             <>
-                {/* Service Address marker (destination - where customer wants service) */}
+                {/* Service Address Marker - Clean Icon */}
                 <Marker
                     key="service-location"
                     coordinate={serviceLocation}
                     title="Service Location"
                     description={serviceAddress}
                 >
-                    <LinearGradient
-                        colors={[COLORS.primary, COLORS.accent]}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 1 }}
-                        style={styles.userMarker}
-                    >
-                        <MapPin size={24} color={COLORS.white} />
-                    </LinearGradient>
+                    <Ionicons name="location" size={36} color={COLORS.accent} />
                 </Marker>
 
-                {/* Vendor live location marker (only after acceptance and when vendor shares location) */}
-                {/* Hide marker when vendor cancels */}
+                {/* Vendor Car Marker - Clean Icon */}
                 {acceptedProposal && vendorLocation && !serviceCancelledByVendor && (
                     <Marker
                         key={`vendor-${acceptedProposal.id}`}
                         coordinate={vendorLocation}
+                        anchor={{ x: 0.5, y: 0.5 }}
                         title={acceptedProposal.vendor?.full_name || 'Vendor'}
-                        description={vendorHasArrived ? "Vendor has arrived!" : "Vendor is on the way"}
+                        description={vendorHasArrived ? "Arrived!" : "On the way"}
                     >
-                        <LinearGradient
-                            colors={vendorMarkerColors}
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 1 }}
-                            style={styles.acceptedVendorMarker}
-                        >
-                            <Navigation size={24} color={COLORS.white} />
-                        </LinearGradient>
+                        <FontAwesome5
+                            name="car"
+                            size={32}
+                            color={vendorHasArrived ? COLORS.success : COLORS.primary}
+                        />
                     </Marker>
                 )}
             </>
@@ -1539,14 +1932,16 @@ export default function LiveOffersScreen() {
 
     // Render proposal item
     const renderProposalItem = useCallback(({ item }: { item: SocketProposal }) => (
-        <ProposalCard
-            proposal={item}
-            onAccept={handleAcceptProposal}
-            onDecline={handleDeclineProposal}
-            onVendorTap={handleVendorProfileTap}
-            isAccepting={acceptingId === item.id}
-            isDeclining={decliningId === item.id}
-        />
+        <ErrorBoundary>
+            <ProposalCard
+                proposal={item}
+                onAccept={handleAcceptProposal}
+                onDecline={handleDeclineProposal}
+                onVendorTap={handleVendorProfileTap}
+                isAccepting={acceptingId === item.id}
+                isDeclining={decliningId === item.id}
+            />
+        </ErrorBoundary>
     ), [handleAcceptProposal, handleDeclineProposal, handleVendorProfileTap, acceptingId, decliningId]);
 
     const keyExtractor = useCallback((item: SocketProposal) => item.id.toString(), []);
@@ -1685,34 +2080,43 @@ export default function LiveOffersScreen() {
                             <Ionicons name="refresh" size={18} color={COLORS.primary} />
                         </TouchableOpacity>
                     </View>
-                </View>
-            )}
 
-            {/* Floating Cancel Button - Show when customer can cancel based on vendor distance
-                - Before 1km: Always visible
-                - After 1km: Hidden
-                - After 1km + 10 mins stationary: Visible again
-                - Hidden if vendor already cancelled */}
-            {acceptedProposal && canCustomerCancel && !serviceCancelledByVendor && (
-                <TouchableOpacity
-                    style={styles.cancelButton}
-                    onPress={handleCancelRequest}
-                    activeOpacity={0.8}
-                >
-                    <LinearGradient
-                        colors={[COLORS.error, '#dc2626']}
-                        start={{ x: 0, y: 0 }}
-                        end={{ x: 1, y: 0 }}
-                        style={styles.cancelButtonInner}
-                    >
-                        <X size={20} color={COLORS.white} />
-                        <Text style={styles.cancelButtonText}>
-                            {vendorDistanceTracking.isVendorStationary
-                                ? 'Cancel (Vendor Stationary)'
-                                : 'Cancel Request'}
-                        </Text>
-                    </LinearGradient>
-                </TouchableOpacity>
+                    {/* Location staleness indicator + manual refresh */}
+                    {locationAge > 2 * 60 * 1000 && (
+                        <View style={styles.locationAgeRow}>
+                            <View style={[
+                                styles.locationAgeBadge,
+                                locationAge > 30 * 60 * 1000 && styles.locationAgeBadgeStale
+                            ]}>
+                                <Ionicons
+                                    name="time-outline"
+                                    size={14}
+                                    color={locationAge > 30 * 60 * 1000 ? COLORS.error : COLORS.warning}
+                                />
+                                <Text style={[
+                                    styles.locationAgeText,
+                                    locationAge > 30 * 60 * 1000 && styles.locationAgeTextStale
+                                ]}>
+                                    {Math.floor(locationAge / 60000)} min ago
+                                </Text>
+                            </View>
+                            <TouchableOpacity
+                                onPress={handleRefreshVendorLocation}
+                                style={styles.refreshLocationButton}
+                                disabled={isRefreshingLocation}
+                            >
+                                {isRefreshingLocation ? (
+                                    <ActivityIndicator size="small" color={COLORS.primary} />
+                                ) : (
+                                    <>
+                                        <Ionicons name="location" size={14} color={COLORS.primary} />
+                                        <Text style={styles.refreshLocationText}>Update</Text>
+                                    </>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    )}
+                </View>
             )}
 
             {/* Bottom Sheet */}
@@ -1741,9 +2145,7 @@ export default function LiveOffersScreen() {
                                 {serviceCancelledByVendor
                                     ? 'Request Cancelled'
                                     : acceptedProposal
-                                        ? vendorHasArrived
-                                            ? 'Vendor Arrived!'
-                                            : 'Vendor on the way'
+                                        ? 'Vendor on the way'
                                         : requestExpired
                                             ? 'Request Expired'
                                             : activeProposals.length === 0
@@ -1758,84 +2160,34 @@ export default function LiveOffersScreen() {
                     {acceptedProposal && !serviceCancelledByVendor ? (
                         // Accepted state - hide when vendor cancels
                         <View style={styles.acceptedContainer}>
-                            <ProposalCard
-                                proposal={acceptedProposal}
-                                onAccept={() => { }}
-                                onDecline={() => { }}
-                                onVendorTap={handleVendorProfileTap}
-                                isAccepting={false}
-                                isDeclining={false}
-                            />
+                            <ErrorBoundary>
+                                <ProposalCard
+                                    proposal={acceptedProposal}
+                                    onAccept={() => { }}
+                                    onDecline={() => { }}
+                                    onVendorTap={handleVendorProfileTap}
+                                    isAccepting={false}
+                                    isDeclining={false}
+                                />
+                            </ErrorBoundary>
 
-                            {/* Vendor Contact Info */}
-                            {acceptedProposal?.vendor?.phone && (
+                            {/* Cancel Request Button - Shows based on vendor distance and time logic */}
+                            {canCustomerCancel && (
                                 <TouchableOpacity
-                                    style={styles.contactCard}
-                                    onPress={() => {
-                                        // Safe access in callback - acceptedProposal might change between render and callback
-                                        const phone = acceptedProposal?.vendor?.phone;
-                                        if (phone) {
-                                            Linking.openURL(`tel:${phone}`);
-                                        }
-                                    }}
-                                    activeOpacity={0.8}
+                                    style={styles.cancelButtonInSheetAccepted}
+                                    onPress={handleCancelRequest}
+                                    activeOpacity={0.7}
                                 >
-                                    <Ionicons name="call" size={20} color={COLORS.success} />
-                                    <Text style={styles.contactText}>
-                                        Call Vendor: {acceptedProposal.vendor.phone}
-                                    </Text>
-                                </TouchableOpacity>
-                            )}
-
-                            {/* Vendor Arrival Badge (100m proximity) */}
-                            {vendorHasArrived && (
-                                <View style={styles.arrivalBadge}>
-                                    <Ionicons name="location" size={16} color={COLORS.white} />
-                                    <Text style={styles.arrivalText}>Vendor Arrived!</Text>
-                                </View>
-                            )}
-
-                            {/* Live Tracking Status - Shows real-time road distance and ETA from Google Routes */}
-                            {vendorLocation ? (
-                                <View style={styles.trackingInfo}>
                                     <LinearGradient
-                                        colors={[COLORS.primary + '10', COLORS.accent + '10']}
+                                        colors={[COLORS.error, '#dc2626']}
                                         start={{ x: 0, y: 0 }}
                                         end={{ x: 1, y: 0 }}
-                                        style={styles.trackingCard}
+                                        style={styles.cancelButtonGradient}
                                     >
-                                        <View style={styles.trackingRow}>
-                                            <View style={styles.trackingItem}>
-                                                <Ionicons name="navigate" size={20} color={COLORS.primary} />
-                                                <Text style={styles.trackingLabel}>Road Distance</Text>
-                                                <Text type="subtitle" style={styles.trackingValue}>
-                                                    {roadDistanceFormatted || formattedDistance || `${acceptedProposal.vendor?.distance_km?.toFixed(1) || '0.0'} km`}
-                                                </Text>
-                                            </View>
-                                            <View style={styles.trackingDivider} />
-                                            <View style={styles.trackingItem}>
-                                                <Ionicons name="time" size={20} color={COLORS.accent} />
-                                                <Text style={styles.trackingLabel}>ETA</Text>
-                                                <Text type="subtitle" style={styles.trackingValue}>
-                                                    {etaFormatted || `~${acceptedProposal.eta_minutes || '?'} min`}
-                                                </Text>
-                                            </View>
-                                        </View>
-                                        {isRouteLoading && (
-                                            <View style={styles.routeLoadingIndicator}>
-                                                <ActivityIndicator size="small" color={COLORS.primary} />
-                                                <Text style={styles.routeLoadingText}>Updating route...</Text>
-                                            </View>
-                                        )}
+                                        <Ionicons name="close-circle" size={20} color={COLORS.white} />
+                                        <Text style={styles.cancelButtonGradientText}>Cancel Request</Text>
                                     </LinearGradient>
-                                </View>
-                            ) : (
-                                <View style={styles.waitingForLocationContainer}>
-                                    <ActivityIndicator size="small" color={COLORS.primary} />
-                                    <Text style={styles.waitingForLocationText}>
-                                        Waiting for vendor location...
-                                    </Text>
-                                </View>
+                                </TouchableOpacity>
                             )}
                         </View>
                     ) : requestExpired && !serviceCancelledByVendor ? (
@@ -1980,7 +2332,6 @@ export default function LiveOffersScreen() {
                                 data={activeProposals}
                                 renderItem={renderProposalItem}
                                 keyExtractor={keyExtractor}
-                                getItemLayout={getItemLayout}
                                 showsVerticalScrollIndicator={false}
                                 contentContainerStyle={styles.proposalsList}
                                 removeClippedSubviews={true}
@@ -2125,20 +2476,6 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.3,
         shadowRadius: 6,
         elevation: 8,
-    },
-    acceptedVendorMarker: {
-        width: moderateScale(52),
-        height: moderateScale(52),
-        borderRadius: moderateScale(26),
-        justifyContent: "center",
-        alignItems: "center",
-        borderWidth: 4,
-        borderColor: COLORS.white,
-        shadowColor: COLORS.black,
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.4,
-        shadowRadius: 8,
-        elevation: 10,
     },
 
     // Tracking info card
@@ -2382,6 +2719,26 @@ const styles = StyleSheet.create({
         fontWeight: '600',
     },
 
+    // Cancel button for accepted state (with gradient, shows conditionally based on distance/time)
+    cancelButtonInSheetAccepted: {
+        marginTop: verticalScale(16),
+        borderRadius: scale(12),
+        overflow: 'hidden',
+    },
+    cancelButtonGradient: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: verticalScale(14),
+        paddingHorizontal: scale(20),
+        gap: scale(8),
+    },
+    cancelButtonGradientText: {
+        color: COLORS.white,
+        fontSize: moderateScale(15),
+        fontWeight: '700',
+    },
+
     // Cancel button secondary (in expired state)
     cancelButtonSecondary: {
         marginTop: verticalScale(16),
@@ -2479,6 +2836,11 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         backgroundColor: COLORS.primary + '20',
+    },
+    avatarImage: {
+        width: moderateScale(50),
+        height: moderateScale(50),
+        borderRadius: moderateScale(25),
     },
     avatarText: {
         fontSize: moderateScale(20),
@@ -2662,8 +3024,11 @@ const styles = StyleSheet.create({
     // Contact Buttons (Call/WhatsApp) - Show when proposal is accepted
     contactButtonsContainer: {
         flexDirection: 'row',
-        gap: scale(10),
+        gap: scale(12),
         marginTop: verticalScale(12),
+        paddingHorizontal: scale(4),
+        marginBottom: verticalScale(12),
+        
     },
     callButton: {
         flex: 1,
@@ -2680,7 +3045,9 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         paddingVertical: verticalScale(12),
-        gap: scale(6),
+        paddingHorizontal: scale(16),
+        gap: scale(8),
+        // marginBottom:moderateScale(10)
     },
     contactButtonText: {
         fontSize: moderateScale(14),
@@ -2690,16 +3057,20 @@ const styles = StyleSheet.create({
     whatsappButton: {
         flex: 1,
         borderRadius: moderateScale(10),
-        borderWidth: 1.5,
-        borderColor: '#25D366',
         overflow: 'hidden',
+        shadowColor: '#25D366',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 4,
+        elevation: 3,
     },
     whatsappButtonInner: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: verticalScale(10),
-        gap: scale(6),
+        paddingVertical: verticalScale(12),
+        // paddingHorizontal: scale(16),
+        gap: scale(8),
     },
     whatsappButtonText: {
         fontSize: moderateScale(14),
@@ -2780,5 +3151,50 @@ const styles = StyleSheet.create({
         fontSize: moderateScale(14),
         fontWeight: '600',
         color: COLORS.white,
+    },
+
+    // Location age indicator
+    locationAgeRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: verticalScale(8),
+        paddingTop: verticalScale(8),
+        borderTopWidth: 1,
+        borderTopColor: COLORS.gray300,
+    },
+    locationAgeBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: COLORS.warning + '15',
+        paddingVertical: verticalScale(4),
+        paddingHorizontal: scale(8),
+        borderRadius: moderateScale(12),
+        gap: scale(4),
+    },
+    locationAgeBadgeStale: {
+        backgroundColor: COLORS.error + '15',
+    },
+    locationAgeText: {
+        fontSize: moderateScale(11),
+        color: COLORS.warning,
+        fontWeight: '600',
+    },
+    locationAgeTextStale: {
+        color: COLORS.error,
+    },
+    refreshLocationButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: COLORS.primary + '10',
+        paddingVertical: verticalScale(4),
+        paddingHorizontal: scale(10),
+        borderRadius: moderateScale(12),
+        gap: scale(4),
+    },
+    refreshLocationText: {
+        fontSize: moderateScale(11),
+        color: COLORS.primary,
+        fontWeight: '600',
     },
 });

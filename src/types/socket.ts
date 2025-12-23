@@ -204,6 +204,17 @@ export interface ServiceRequestExpiredEvent {
   remaining_expiry_time: number;
 }
 
+/**
+ * Service cancelled event - sent when vendor cancels
+ * When vendor cancels: status = 'pending' (request re-broadcast to other vendors)
+ * When customer cancels: status = 'cancelled' (handled by service_request.updated)
+ */
+export interface ServiceCancelledEvent {
+  event: 'service.cancelled';
+  service_request_id: number;
+  status: 'pending' | 'cancelled';
+}
+
 export interface ProposalUpdatedEvent {
   event: 'proposal.updated';
   proposal: SocketProposal;

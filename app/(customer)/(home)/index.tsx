@@ -111,6 +111,17 @@ export default function CustomerHomeScreen() {
               ...(activeService.acceptedAt && {
                 acceptedAtTimestamp: activeService.acceptedAt.toString(),
               }),
+              // Pass vendor location for immediate restoration (app kill recovery)
+              ...(activeService.vendorLocation && {
+                vendorLatitude: activeService.vendorLocation.latitude.toString(),
+                vendorLongitude: activeService.vendorLocation.longitude.toString(),
+                vendorTimestamp: activeService.vendorLocation.timestamp.toString(),
+              }),
+              // Pass vendor info for offline display
+              ...(activeService.acceptedVendor && {
+                vendorId: activeService.acceptedVendor.id.toString(),
+                vendorName: activeService.acceptedVendor.full_name,
+              }),
             },
           });
         }

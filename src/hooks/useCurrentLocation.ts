@@ -7,7 +7,7 @@
  * To switch to Mapbox: Change import from openStreetMapService to mapboxService
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import * as Location from 'expo-location';
 // TODO: Switch to mapboxService when public token is available
 // import { mapboxService } from '@/services/mapboxService';
@@ -45,6 +45,17 @@ export function useCurrentLocation(
   const [error, setError] = useState<string | null>(null);
   const [permissionStatus, setPermissionStatus] =
     useState<Location.PermissionStatus | null>(null);
+
+  // Track if component is mounted to prevent state updates after unmount
+  const isMountedRef = useRef(true);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Check permission status on mount
   useEffect(() => {
@@ -95,6 +106,9 @@ export function useCurrentLocation(
    * Fetch current location and reverse geocode
    */
   const fetchCurrentLocation = useCallback(async () => {
+    // Early exit if unmounted
+    if (!isMountedRef.current) return;
+
     setLoading(true);
     setError(null);
 
@@ -103,16 +117,20 @@ export function useCurrentLocation(
       let status = permissionStatus;
       if (!status || status === Location.PermissionStatus.UNDETERMINED) {
         const granted = await requestPermission();
-        if (!granted) {
-          setLoading(false);
+        if (!granted || !isMountedRef.current) {
+          if (isMountedRef.current) setLoading(false);
           return;
         }
         status = Location.PermissionStatus.GRANTED;
       }
 
+      if (!isMountedRef.current) return;
+
       if (status !== Location.PermissionStatus.GRANTED) {
-        setError('Location permission is required');
-        setLoading(false);
+        if (isMountedRef.current) {
+          setError('Location permission is required');
+          setLoading(false);
+        }
         return;
       }
 
@@ -121,6 +139,9 @@ export function useCurrentLocation(
         accuracy: Location.Accuracy.Balanced,
         timeInterval: 10000, // Use cached location if less than 10s old
       });
+
+      // Check if still mounted after async call
+      if (!isMountedRef.current) return;
 
       const coords = {
         latitude: position.coords.latitude,
@@ -134,6 +155,9 @@ export function useCurrentLocation(
         position.coords.latitude
       );
 
+      // Check if still mounted after async call
+      if (!isMountedRef.current) return;
+
       if (address) {
         setLocation(address);
         setCity(address.city || null);
@@ -141,14 +165,20 @@ export function useCurrentLocation(
         setError('Could not determine location');
       }
     } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : 'Failed to get current location';
-      setError(message);
-      console.error('useCurrentLocation error:', err);
+      // Only update state if still mounted
+      if (isMountedRef.current) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : 'Failed to get current location';
+        setError(message);
+        console.error('useCurrentLocation error:', err);
+      }
     } finally {
-      setLoading(false);
+      // Only update loading state if still mounted
+      if (isMountedRef.current) {
+        setLoading(false);
+      }
     }
   }, [permissionStatus, requestPermission]);
 
