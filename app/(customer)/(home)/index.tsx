@@ -28,6 +28,7 @@ import {
   clearCustomerActiveService,
   isActiveServiceExpired,
 } from '@/services/customerActiveServiceService';
+import { clearCustomerActiveServiceState } from '@/store/slices/dispatchSlice';
 // import { useAppSelector } from '@/store/hooks';
 // import { useGetServiceHistoryQuery } from '@/services/customerApi';
 // import { SERVICE_TYPES } from '@/utils/constants';
@@ -65,6 +66,7 @@ export default function CustomerHomeScreen() {
               console.log('[CustomerHome] Active service expired, clearing storage');
             }
             await clearCustomerActiveService();
+            dispatch(clearCustomerActiveServiceState());
             setCheckingActiveService(false);
             return;
           }
@@ -131,13 +133,14 @@ export default function CustomerHomeScreen() {
         }
         // Clear potentially corrupted data
         await clearCustomerActiveService().catch(() => { });
+        dispatch(clearCustomerActiveServiceState());
       } finally {
         setCheckingActiveService(false);
       }
     };
 
     checkActiveService();
-  }, [router]);
+  }, [router, dispatch]);
 
   // Fetch user profile and recent services on mount
   useEffect(() => {

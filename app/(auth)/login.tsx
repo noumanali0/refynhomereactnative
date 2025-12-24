@@ -224,6 +224,7 @@ export default function Login() {
                                 />
                                 <TextInput
                                     placeholder="+92 300 1234567"
+                                    placeholderTextColor="#94a3b8"
                                     value={phoneNumber}
                                     onChangeText={setPhoneNumber}
                                     keyboardType="phone-pad"

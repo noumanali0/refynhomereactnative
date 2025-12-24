@@ -59,9 +59,13 @@ export default function HistoryScreen() {
             const jobDate = new Date(j.completed_at || j.created_at);
             return jobDate.getMonth() === now.getMonth() && jobDate.getFullYear() === now.getFullYear();
         }).length;
+        // Get price from price_quote or accepted_proposal.price_quote (API may return either)
         const totalEarnings = jobs
             .filter(j => isCompleted(j.status))
-            .reduce((sum, j) => sum + (j.price_quote || 0), 0);
+            .reduce((sum, j) => {
+                const price = j.price_quote || (j as any).accepted_proposal?.price_quote || 0;
+                return sum + price;
+            }, 0);
 
         return {
             totalCompleted: completed,

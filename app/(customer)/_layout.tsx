@@ -1,6 +1,5 @@
 // app/(customer)/_layout.tsx
 import { Tabs } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 import GradientIcon from "@/components/common/GradientIcon";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { moderateScale, verticalScale } from "react-native-size-matters";
@@ -20,11 +19,22 @@ export default function CustomerTabsLayout() {
                     height: verticalScale(70),
                     paddingBottom: verticalScale(8),
                     paddingTop: verticalScale(8),
+                    backgroundColor: '#fff',
+                    borderTopWidth: 0,
+                    // Shadow for iOS
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: -3 },
+                    shadowOpacity: 0.1,
+                    shadowRadius: 6,
+                    // Shadow for Android
+                    elevation: 10,
                 },
                 tabBarLabelStyle: {
                     fontSize: moderateScale(11),
                     fontWeight: '500',
                 },
+                // Set background color behind the tab bar (for rounded corners)
+                sceneStyle: { backgroundColor: '#fff' },
             }}
         >
             <Tabs.Screen

@@ -40,6 +40,8 @@ interface AuthState {
   phoneNumber: string | null; // Store for OTP verification
   // Vendor onboarding status
   vendorOnboardingStatus: 'not_started' | 'in_progress' | 'pending_verification' | 'complete';
+  // Logout in progress flag - prevents navigation race conditions
+  isLoggingOut: boolean;
 }
 
 // ============================================================================
@@ -58,6 +60,7 @@ const initialState: AuthState = {
   resendCooldown: 60, // 60 seconds cooldown
   phoneNumber: null,
   vendorOnboardingStatus: 'not_started',
+  isLoggingOut: false,
 };
 
 // ============================================================================
@@ -920,6 +923,7 @@ const authSlice = createSlice({
     builder
       .addCase(logoutUser.pending, (state) => {
         state.isLoading = true;
+        state.isLoggingOut = true; // Prevent navigation during logout
       })
       .addCase(logoutUser.fulfilled, (state) => {
         return { ...initialState }; // Reset to initial state

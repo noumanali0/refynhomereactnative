@@ -27,6 +27,14 @@ export interface VendorHistoryCategory {
   icon?: string;
 }
 
+export interface VendorHistoryProposal {
+  id: number;
+  price_quote: number | null;
+  eta_minutes?: number | null;
+  message?: string;
+  status?: string;
+}
+
 export interface VendorHistoryJob {
   id: number;
   customer: VendorHistoryCustomer;
@@ -38,6 +46,8 @@ export interface VendorHistoryJob {
   longitude: number;
   status: 'completed' | 'cancelled' | 'expired' | 'done';
   price_quote: number | null;
+  // API may return price in accepted_proposal instead of price_quote
+  accepted_proposal?: VendorHistoryProposal | null;
   created_at: string;
   updated_at: string;
   completed_at: string | null;
@@ -114,10 +124,20 @@ export async function getVendorHistory(
 
     const response = await apiClient.get<VendorHistoryResponse>(url);
 
-    // Normalize status values from API and filter
+    // Debug: Log first job to see API response structure
+    if (__DEV__ && response.data.results?.length > 0) {
+      const firstJob = response.data.results[0];
+      console.log('[VendorHistory] API Response - First job structure:', JSON.stringify(firstJob, null, 2));
+      console.log('[VendorHistory] price_quote:', firstJob.price_quote);
+      console.log('[VendorHistory] accepted_proposal:', firstJob.accepted_proposal);
+    }
+
+    // Normalize status values from API and extract price from accepted_proposal if needed
     let results = (response.data.results || []).map(job => ({
       ...job,
       status: normalizeStatus(job.status),
+      // Map price_quote from accepted_proposal if not directly available
+      price_quote: job.price_quote ?? job.accepted_proposal?.price_quote ?? null,
     }));
 
     if (filters?.status && filters.status !== 'all') {

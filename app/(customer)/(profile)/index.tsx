@@ -22,6 +22,7 @@ import AppHeader from "@/components/common/AppHeader";
 import Text from "@/components/common/Text";
 import { useAppDispatch, useAppSelector } from "@/hooks/useAppDispatch";
 import { logoutUser, fetchUserProfile, deleteAccount, changePassword, updateUserProfile } from "@/store/slices/authSlice";
+import { selectCustomerHasActiveJob } from "@/store/slices/dispatchSlice";
 import { COLORS } from "@/constants/colors";
 import { useToast } from "@/contexts/ToastContext";
 
@@ -54,6 +55,9 @@ export default function ProfileScreen() {
     // Get user from Redux store
     const { user, isLoading } = useAppSelector((state) => state.auth);
 
+    // Check if customer has active service (blocks logout)
+    const { hasActiveJob, reason: activeJobReason } = useAppSelector(selectCustomerHasActiveJob);
+
     // Fetch latest profile on mount
     useEffect(() => {
         dispatch(fetchUserProfile());
@@ -66,6 +70,16 @@ export default function ProfileScreen() {
     const userProfilePhoto = user?.profilePhoto || (user as any)?.profile_photo_url || (user as any)?.profile_photo || imageUri;
 
     const handleLogout = () => {
+        // Block logout if customer has active service
+        if (hasActiveJob) {
+            Alert.alert(
+                'Cannot Logout',
+                activeJobReason || 'You have an active service. Please complete or cancel it before logging out.',
+                [{ text: 'OK', style: 'default' }]
+            );
+            return;
+        }
+
         Alert.alert(
             "Logout",
             "Are you sure you want to logout?",
@@ -80,14 +94,14 @@ export default function ProfileScreen() {
                     onPress: async () => {
                         setIsLoggingOut(true);
 
-                        // Timeout to prevent infinite loading if logout hangs
+                        // Timeout to show error if logout hangs (navigation handled by _layout.tsx)
                         const logoutTimeout = setTimeout(() => {
                             if (__DEV__) {
-                                console.warn('[Profile] Logout timeout - forcing navigation');
+                                console.warn('[Profile] Logout timeout - showing error');
                             }
                             setIsLoggingOut(false);
-                            router.replace("/(auth)/login");
-                        }, 5000); // 5 second timeout
+                            Alert.alert('Logout Timeout', 'Logout is taking longer than expected. Please try again.');
+                        }, 8000); // 8 second timeout
 
                         try {
                             await dispatch(logoutUser()).unwrap();

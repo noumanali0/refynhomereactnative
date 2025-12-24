@@ -250,14 +250,14 @@ export default function VendorProfileScreen() {
                     onPress: async () => {
                         setIsLoggingOut(true);
 
-                        // Timeout to prevent infinite loading if logout hangs
+                        // Timeout to show error if logout hangs (navigation handled by _layout.tsx)
                         const logoutTimeout = setTimeout(() => {
                             if (__DEV__) {
-                                console.warn('[VendorProfile] Logout timeout - forcing navigation');
+                                console.warn('[VendorProfile] Logout timeout - showing error');
                             }
                             setIsLoggingOut(false);
-                            router.replace('/(auth)/login');
-                        }, 5000); // 5 second timeout
+                            Alert.alert('Logout Timeout', 'Logout is taking longer than expected. Please try again.');
+                        }, 8000); // 8 second timeout
 
                         try {
                             await dispatch(logoutUser()).unwrap();

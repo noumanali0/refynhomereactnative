@@ -31,6 +31,8 @@ import {
     ServiceCategory,
 } from "@/services/serviceRequestApi";
 import { saveCustomerActiveService } from "@/services/customerActiveServiceService";
+import { useAppDispatch } from "@/hooks/useAppDispatch";
+import { setCustomerActiveService } from "@/store/slices/dispatchSlice";
 
 // ============================================================================
 // Error Boundary Component
@@ -817,6 +819,7 @@ const FormContent = memo(function FormContent({
 
 const RequestServiceScreen = () => {
     const [showAddressSearch, setShowAddressSearch] = useState(false);
+    const dispatch = useAppDispatch();
 
     // Custom hooks for data fetching and image picking
     const { categories, categoryItems, loadingCategories } = useServiceCategories();
@@ -1080,6 +1083,9 @@ const RequestServiceScreen = () => {
             }).catch((error) => {
                 if (__DEV__) console.error('[CreateRequest] Failed to persist active service:', error);
             });
+
+            // Update Redux state for logout restriction
+            dispatch(setCustomerActiveService({ requestId: response.request.id, status: 'pending' }));
 
             navigateToLiveOffers(
                 response.request.id,

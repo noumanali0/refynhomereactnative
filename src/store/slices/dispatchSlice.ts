@@ -205,6 +205,12 @@ interface DispatchState {
     expiredRequestBatchQueue: number[];
     expiredRequestBatchTimeout: number | null; // Store timeout ID as number
   };
+
+  // Customer Active Service (for logout restriction)
+  customerActiveService: {
+    requestId: number | null;
+    status: 'pending' | 'accepted' | 'expired' | null;
+  };
 }
 
 // ============================================================================
@@ -270,6 +276,12 @@ const initialState: DispatchState = {
     lastVendorLocationUpdateTime: 0,
     expiredRequestBatchQueue: [],
     expiredRequestBatchTimeout: null,
+  },
+
+  // Customer Active Service (for logout restriction)
+  customerActiveService: {
+    requestId: null,
+    status: null,
   },
 };
 
@@ -1668,6 +1680,24 @@ const dispatchSlice = createSlice({
       // Clear vendor location
       state.vendorLocation = null;
     },
+
+    // Customer Active Service (for logout restriction)
+    setCustomerActiveService: (
+      state,
+      action: PayloadAction<{ requestId: number; status: 'pending' | 'accepted' | 'expired' }>
+    ) => {
+      state.customerActiveService = {
+        requestId: action.payload.requestId,
+        status: action.payload.status,
+      };
+    },
+
+    clearCustomerActiveServiceState: (state) => {
+      state.customerActiveService = {
+        requestId: null,
+        status: null,
+      };
+    },
   },
   extraReducers: (builder) => {
     // Connect
@@ -1699,6 +1729,16 @@ const dispatchSlice = createSlice({
       state.activeJobId = null;
       state.activeProposalId = null;
       state.vendorLocation = null;
+    });
+
+    // Restore customer active service (on app startup)
+    builder.addCase(restoreCustomerActiveService.fulfilled, (state, action) => {
+      if (action.payload) {
+        state.customerActiveService = {
+          requestId: action.payload.requestId,
+          status: action.payload.status as 'pending' | 'accepted' | 'expired',
+        };
+      }
     });
   },
 });
@@ -1741,6 +1781,8 @@ export const {
   clearAllErrors,
   resetDispatchState,
   cleanupCompletedService,
+  setCustomerActiveService,
+  clearCustomerActiveServiceState,
 } = dispatchSlice.actions;
 
 // ============================================================================
@@ -1958,6 +2000,50 @@ export const selectVendorHasActiveJob = (state: RootState): {
   }
 
   return { hasActiveJob: false, reason: null, requestStatus: null };
+};
+
+/**
+ * Selector to check if customer has an active service that prevents logout
+ * Block logout for BOTH 'pending' (request created) and 'accepted' (proposal accepted) statuses
+ * Only 'expired' status allows logout
+ *
+ * Returns:
+ * - hasActiveJob: boolean - whether customer has active service
+ * - reason: string | null - human readable reason for restriction
+ * - status: string | null - current status for debugging
+ */
+export const selectCustomerHasActiveJob = (state: RootState): {
+  hasActiveJob: boolean;
+  reason: string | null;
+  status: string | null;
+} => {
+  const { customerActiveService } = state.dispatch;
+
+  // No active service
+  if (!customerActiveService.requestId || !customerActiveService.status) {
+    return { hasActiveJob: false, reason: null, status: null };
+  }
+
+  // Block logout for 'pending' status (request created, waiting for proposals)
+  if (customerActiveService.status === 'pending') {
+    return {
+      hasActiveJob: true,
+      reason: 'You have an active service request. Please wait for it to expire or cancel it before logging out.',
+      status: 'pending'
+    };
+  }
+
+  // Block logout for 'accepted' status (proposal accepted, service in progress)
+  if (customerActiveService.status === 'accepted') {
+    return {
+      hasActiveJob: true,
+      reason: 'You have an active service in progress. Please complete or cancel it before logging out.',
+      status: 'accepted'
+    };
+  }
+
+  // 'expired' status or any other - allow logout
+  return { hasActiveJob: false, reason: null, status: customerActiveService.status };
 };
 
 // UI State

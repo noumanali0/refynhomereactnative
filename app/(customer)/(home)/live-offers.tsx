@@ -65,6 +65,8 @@ import {
     setCurrentCustomerRequest,
     clearCurrentCustomerRequest,
     setVendorLocation,
+    setCustomerActiveService,
+    clearCustomerActiveServiceState,
 } from "@/store/slices/dispatchSlice";
 import { clearReviewState } from "@/store/slices/reviewSlice";
 import { useVendorProximity } from "@/hooks/useVendorProximity";
@@ -1284,6 +1286,7 @@ export default function LiveOffersScreen() {
                     }
                     // Clear storage if request doesn't exist
                     await clearCustomerActiveService().catch(() => { });
+                    dispatch(clearCustomerActiveServiceState());
                     setRequestExpired(true);
                 }
             }
@@ -1297,8 +1300,9 @@ export default function LiveOffersScreen() {
     useEffect(() => {
         if (completedService && completedService.requestId === effectiveRequestId) {
             clearCustomerActiveService().catch(() => { });
+            dispatch(clearCustomerActiveServiceState());
         }
-    }, [completedService, effectiveRequestId]);
+    }, [completedService, effectiveRequestId, dispatch]);
 
     // Handle service cancellation by vendor (via WebSocket)
     useEffect(() => {
@@ -1311,6 +1315,7 @@ export default function LiveOffersScreen() {
 
             // Clear persisted service
             clearCustomerActiveService().catch(() => { });
+            dispatch(clearCustomerActiveServiceState());
 
             // Reset vendor distance tracking
             dispatch(resetVendorDistanceTracking());
@@ -1415,6 +1420,7 @@ export default function LiveOffersScreen() {
                     // Trigger the same flow as WebSocket cancellation
                     setServiceCancelledByVendor(true);
                     clearCustomerActiveService().catch(() => { });
+                    dispatch(clearCustomerActiveServiceState());
                     dispatch(resetVendorDistanceTracking());
                     dispatch(clearCurrentCustomerRequest());
 
@@ -1690,6 +1696,11 @@ export default function LiveOffersScreen() {
             // Now do the socket accept (this waits for ACK)
             await dispatch(acceptProposal(proposalId)).unwrap();
 
+            // Update Redux state for logout restriction
+            if (effectiveRequestId) {
+                dispatch(setCustomerActiveService({ requestId: effectiveRequestId, status: 'accepted' }));
+            }
+
             // Persist vendor info for offline display after app kill
             const acceptedProposal = proposals.find(p => p.id === proposalId);
             if (acceptedProposal?.vendor) {
@@ -1833,6 +1844,7 @@ export default function LiveOffersScreen() {
 
             // Clear persisted active service
             await clearCustomerActiveService().catch(() => { });
+            dispatch(clearCustomerActiveServiceState());
 
             // Reset vendor distance tracking for next request
             dispatch(resetVendorDistanceTracking());

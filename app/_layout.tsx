@@ -38,7 +38,7 @@ function RootLayoutNav() {
   const router = useRouter();
   const dispatch = useAppDispatch();
 
-  const { isAuthenticated, user, isLoading, vendorOnboardingStatus } = useAppSelector((s) => s.auth);
+  const { isAuthenticated, user, isLoading, vendorOnboardingStatus, isLoggingOut } = useAppSelector((s) => s.auth);
   const activeJobId = useAppSelector((s) => s.dispatch.activeJobId);
   const [isInitialized, setIsInitialized] = useState(false);
   const [hasSeenOnboarding, setHasSeenOnboarding] = useState<boolean | null>(null);
@@ -135,7 +135,8 @@ function RootLayoutNav() {
   // Handle navigation based on auth state and onboarding status
   useEffect(() => {
     // Wait for initialization and loading to complete
-    if (!isInitialized || isLoading || hasSeenOnboarding === null) return;
+    // Also skip navigation during logout to prevent race conditions
+    if (!isInitialized || isLoading || hasSeenOnboarding === null || isLoggingOut) return;
 
     if (__DEV__) {
       console.log('[_layout] Navigation effect running:', {
@@ -244,7 +245,7 @@ function RootLayoutNav() {
     }, 100);
 
     return () => clearTimeout(redirectTimeout);
-  }, [isAuthenticated, role, segments, isLoading, isInitialized, activeJobId, hasSeenOnboarding]);
+  }, [isAuthenticated, role, segments, isLoading, isInitialized, activeJobId, hasSeenOnboarding, isLoggingOut]);
 
   // WebSocket connection management
   useEffect(() => {
@@ -310,7 +311,7 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   safe: {
     flex: 1,
-    // backgroundColor: "white",
+    backgroundColor: "#fff",
   },
 });
 
