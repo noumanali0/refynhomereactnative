@@ -14,10 +14,14 @@
  */
 
 import * as SecureStore from 'expo-secure-store';
+import { serviceRequestApi } from './serviceRequestApi';
 
 // ============================================================================
 // Constants
 // ============================================================================
+
+/** Active status values that indicate customer has an ongoing request */
+const ACTIVE_STATUSES = ['pending', 'accepted', 'en_route', 'in_progress'];
 
 /** Single storage key for atomic operations */
 const STORAGE_KEY = 'customer_active_service';
@@ -398,6 +402,141 @@ export async function updateAcceptedVendorInfo(vendorInfo: {
 }
 
 // ============================================================================
+// Multi-Device Sync Functions
+// ============================================================================
+
+/**
+ * Result of backend sync operation
+ */
+export interface SyncResult {
+    /** Whether customer has an active request on backend */
+    hasActive: boolean;
+    /** Active service data if found */
+    activeService: CustomerActiveServiceData | null;
+    /** Source of the data */
+    source: 'backend' | 'local' | null;
+}
+
+/**
+ * Map backend status to local status type
+ */
+function mapBackendStatusToLocal(backendStatus: string): ActiveServiceStatus {
+    if (['accepted', 'en_route', 'in_progress'].includes(backendStatus)) {
+        return 'accepted';
+    }
+    if (backendStatus === 'pending') {
+        return 'pending';
+    }
+    return 'expired';
+}
+
+/**
+ * Sync customer's active service from backend (for multi-device support)
+ *
+ * Call this on app launch to detect if another device created a request.
+ * This ensures Device B knows about a request created on Device A.
+ *
+ * Flow:
+ * 1. Fetch all customer requests from backend
+ * 2. Find any active request (pending, accepted, en_route, in_progress)
+ * 3. If found: save to local SecureStore and return
+ * 4. If not found: clear stale local data if exists
+ * 5. On error: fall back to local storage
+ */
+export async function syncCustomerActiveServiceFromBackend(): Promise<SyncResult> {
+    try {
+        if (__DEV__) {
+            console.log('[CustomerActiveService] Starting backend sync...');
+        }
+
+        // Fetch all customer requests from backend
+        const requests = await serviceRequestApi.getCustomerRequests();
+
+        // Find any active request
+        const activeRequest = requests.find(r => ACTIVE_STATUSES.includes(r.status));
+
+        if (!activeRequest) {
+            if (__DEV__) {
+                console.log('[CustomerActiveService] No active request found on backend');
+            }
+
+            // No active request on backend - clear local if stale
+            const localActive = await getCustomerActiveService();
+            if (localActive) {
+                // Only clear if local data exists and is not accepted (service in progress)
+                // Keep accepted services as they might be offline
+                if (localActive.status !== 'accepted') {
+                    await clearCustomerActiveService();
+                    if (__DEV__) {
+                        console.log('[CustomerActiveService] Cleared stale local data');
+                    }
+                }
+            }
+
+            return { hasActive: false, activeService: null, source: null };
+        }
+
+        if (__DEV__) {
+            console.log('[CustomerActiveService] Found active request on backend:', {
+                id: activeRequest.id,
+                status: activeRequest.status,
+            });
+        }
+
+        // Map backend response to local format
+        const activeService: CustomerActiveServiceData = {
+            requestId: activeRequest.id,
+            expiresAt: activeRequest.expires_at,
+            status: mapBackendStatusToLocal(activeRequest.status),
+            serviceLocation: {
+                latitude: parseFloat(activeRequest.latitude),
+                longitude: parseFloat(activeRequest.longitude),
+            },
+            serviceAddress: activeRequest.address_line,
+            categoryId: activeRequest.category,
+            problemTitle: activeRequest.problem_title,
+            description: activeRequest.description,
+            updatedAt: new Date().toISOString(),
+        };
+
+        // If proposal accepted, add vendor info
+        if (activeRequest.accepted_proposal) {
+            activeService.proposalId = activeRequest.accepted_proposal.id;
+            if (activeRequest.accepted_proposal.vendor) {
+                activeService.acceptedVendor = {
+                    id: activeRequest.accepted_proposal.vendor.id,
+                    full_name: activeRequest.accepted_proposal.vendor.full_name,
+                    phone: activeRequest.accepted_proposal.vendor.phone,
+                    average_rating: activeRequest.accepted_proposal.vendor.average_rating || 0,
+                    total_reviews: activeRequest.accepted_proposal.vendor.total_reviews || 0,
+                };
+            }
+        }
+
+        // Save to local storage for offline access
+        await SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(activeService));
+
+        if (__DEV__) {
+            console.log('[CustomerActiveService] Backend sync complete - saved to local');
+        }
+
+        return { hasActive: true, activeService, source: 'backend' };
+    } catch (error) {
+        if (__DEV__) {
+            console.error('[CustomerActiveService] Backend sync failed, falling back to local:', error);
+        }
+
+        // On error, fall back to local storage
+        const localActive = await getCustomerActiveService();
+        return {
+            hasActive: !!localActive,
+            activeService: localActive,
+            source: localActive ? 'local' : null,
+        };
+    }
+}
+
+// ============================================================================
 // Export Service Object
 // ============================================================================
 
@@ -412,6 +551,7 @@ export const customerActiveServiceService = {
     getTimeRemaining: getRequestTimeRemaining,
     canCancel: canCancelService,
     getCancelRemaining: getCancelDisableRemaining,
+    syncFromBackend: syncCustomerActiveServiceFromBackend,
 };
 
 export default customerActiveServiceService;

@@ -1010,6 +1010,9 @@ export const sendProposal = createAsyncThunk(
               });
             }
 
+            // Update Redux state to show lock banner, timer, and hide send button
+            dispatch(dispatchSlice.actions.markProposalSent(serviceRequestId));
+
             resolve(data);
           }
         });
@@ -1698,6 +1701,25 @@ const dispatchSlice = createSlice({
         status: null,
       };
     },
+
+    // Mark proposal as sent - update request state after proposal.ack
+    // This enables the lock banner, timer, and hides the send button
+    markProposalSent: (state, action: PayloadAction<number>) => {
+      const requestId = action.payload;
+      const request = state.serviceRequestsById[requestId];
+      if (request) {
+        state.serviceRequestsById[requestId] = {
+          ...request,
+          already_sent: true,
+          vendor_status: 'pending',
+        };
+      }
+    },
+
+    // Clear vendor location when no longer needed
+    clearVendorLocation: (state) => {
+      state.vendorLocation = null;
+    },
   },
   extraReducers: (builder) => {
     // Connect
@@ -1763,6 +1785,7 @@ export const {
   setCurrentCustomerRequest,
   clearCurrentCustomerRequest,
   setVendorLocation,
+  clearVendorLocation,
   setServiceCompleted,
   clearCompletedService,
   setServiceCancelled,
@@ -1783,6 +1806,7 @@ export const {
   cleanupCompletedService,
   setCustomerActiveService,
   clearCustomerActiveServiceState,
+  markProposalSent,
 } = dispatchSlice.actions;
 
 // ============================================================================

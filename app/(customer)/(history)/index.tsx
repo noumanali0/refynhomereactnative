@@ -7,7 +7,7 @@
  * Integrated with backend API for real data.
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useEffect, useCallback } from 'react';
 import { View, ScrollView, TouchableOpacity, StyleSheet, FlatList, RefreshControl, ActivityIndicator, Platform } from 'react-native';
 import Text from '@/components/common/Text';
 import { Ionicons } from '@expo/vector-icons';
@@ -30,6 +30,8 @@ import {
     selectCurrentFilter,
     selectHasMore,
     selectCurrentPage,
+    selectTotalCount,
+    selectIsLoadingMore,
 } from '@/store/slices/serviceHistorySlice';
 
 type FilterType = 'all' | 'active' | 'completed' | 'cancelled';
@@ -39,17 +41,15 @@ export default function CustomerHistoryScreen() {
 
     // Redux state
     const filteredServices = useSelector(selectFilteredHistory);
-    // console.log("🚀 ~ CustomerHistoryScreen ~ filteredServices:", filteredServices)
     const stats = useSelector(selectHistoryStats);
     const isLoading = useSelector(selectIsLoading);
+    const isLoadingMore = useSelector(selectIsLoadingMore);  // From Redux now
     const isRefreshing = useSelector(selectIsRefreshing);
     const error = useSelector(selectHistoryError);
     const activeFilter = useSelector(selectCurrentFilter);
     const hasMore = useSelector(selectHasMore);
     const currentPage = useSelector(selectCurrentPage);
-
-    // Local state for load more
-    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const totalCount = useSelector(selectTotalCount);
 
     // Fetch data on mount
     useEffect(() => {
@@ -67,20 +67,11 @@ export default function CustomerHistoryScreen() {
     }, [dispatch]);
 
     // Handle load more (pagination)
-    const handleLoadMore = useCallback(async () => {
+    const handleLoadMore = useCallback(() => {
         // Only load if: not already loading, not refreshing, has more data
         if (isLoadingMore || isLoading || isRefreshing || !hasMore) return;
 
-        setIsLoadingMore(true);
-        try {
-            await dispatch(loadMoreHistory(currentPage + 1)).unwrap();
-        } catch (error) {
-            if (__DEV__) {
-                console.error('[History] Load more error:', error);
-            }
-        } finally {
-            setIsLoadingMore(false);
-        }
+        dispatch(loadMoreHistory(currentPage + 1));
     }, [dispatch, currentPage, hasMore, isLoadingMore, isLoading, isRefreshing]);
 
     // Get count for each filter
@@ -115,17 +106,30 @@ export default function CustomerHistoryScreen() {
         );
     };
 
-    // Render footer with loading indicator when loading more
+    // Render footer with loading indicator or total count
     const renderFooter = useCallback(() => {
-        if (!isLoadingMore) return null;
+        if (isLoadingMore) {
+            return (
+                <View style={styles.footerLoader}>
+                    <ActivityIndicator size="small" color={COLORS.primary} />
+                    <Text style={styles.footerLoaderText}>Loading more...</Text>
+                </View>
+            );
+        }
 
-        return (
-            <View style={styles.footerLoader}>
-                <ActivityIndicator size="small" color={COLORS.primary} />
-                <Text style={styles.footerLoaderText}>Loading more...</Text>
-            </View>
-        );
-    }, [isLoadingMore]);
+        // Show total count when all data is loaded
+        if (!hasMore && filteredServices.length > 0 && totalCount > 0) {
+            return (
+                <View style={styles.footerLoader}>
+                    <Text style={styles.footerLoaderText}>
+                        Showing all {filteredServices.length} of {totalCount} records
+                    </Text>
+                </View>
+            );
+        }
+
+        return null;
+    }, [isLoadingMore, hasMore, filteredServices.length, totalCount]);
 
     // Render empty state
     const renderEmptyState = useCallback(() => {
@@ -275,7 +279,7 @@ export default function CustomerHistoryScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.gray50 },
     header: {
-        paddingTop: verticalScale(60),
+        paddingTop: verticalScale(20),
         paddingBottom: verticalScale(24),
         paddingHorizontal: scale(16),
         borderBottomLeftRadius: moderateScale(24),

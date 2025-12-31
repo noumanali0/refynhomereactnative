@@ -31,9 +31,15 @@ import { router } from 'expo-router';
 import type { AppDispatch } from '@/store';
 import {
     fetchFavoriteVendors,
+    loadMoreFavorites,
+    refreshFavorites,
     removeFromFavorites,
     selectFavoriteVendors,
     selectIsAddingFavorite,
+    selectIsLoadingFavorites,
+    selectIsLoadingMoreFavorites,
+    selectFavoritesHasMore,
+    selectFavoritesTotalCount,
 } from '@/store/slices/vendorSlice';
 import type { FavoriteVendor } from '@/services/favoriteService';
 import { useToast } from '@/contexts/ToastContext';
@@ -212,12 +218,15 @@ export default function Favorites() {
 
     // Redux selectors
     const favoriteVendors = useAppSelector(selectFavoriteVendors);
-    const isLoadingFavorites = useAppSelector((state) => state.vendor.isLoadingFavorites);
+    const isLoadingFavorites = useAppSelector(selectIsLoadingFavorites);
+    const isLoadingMore = useAppSelector(selectIsLoadingMoreFavorites);
     const isRemovingFavorite = useAppSelector(selectIsAddingFavorite);
+    const hasMore = useAppSelector(selectFavoritesHasMore);
+    const totalCount = useAppSelector(selectFavoritesTotalCount);
     const favoriteError = useAppSelector((state) => state.vendor.favoriteError);
 
-    // Memoized count
-    const vendorCount = useMemo(() => favoriteVendors.length, [favoriteVendors.length]);
+    // Memoized count - use totalCount from API for accurate display
+    const vendorCount = useMemo(() => totalCount || favoriteVendors.length, [totalCount, favoriteVendors.length]);
 
     // Fetch favorites on mount
     useEffect(() => {
@@ -235,10 +244,17 @@ export default function Favorites() {
         }
     }, [favoriteError, showToast]);
 
-    // Handle refresh
+    // Handle refresh (pull to refresh)
     const onRefresh = useCallback(() => {
-        dispatch(fetchFavoriteVendors());
+        dispatch(refreshFavorites());
     }, [dispatch]);
+
+    // Handle load more (infinite scroll)
+    const handleLoadMore = useCallback(() => {
+        if (!isLoadingMore && hasMore) {
+            dispatch(loadMoreFavorites());
+        }
+    }, [dispatch, isLoadingMore, hasMore]);
 
     // Handle remove from favorites
     const handleRemoveFavorite = useCallback(async (vendorId: number) => {
@@ -304,6 +320,32 @@ export default function Favorites() {
         return renderEmptyState();
     }, [isLoadingFavorites, renderEmptyState]);
 
+    // Render list footer (pagination info and loading indicator)
+    const renderListFooter = useCallback(() => {
+        if (favoriteVendors.length === 0) return null;
+
+        if (isLoadingMore) {
+            return (
+                <View style={styles.footerContainer}>
+                    <ActivityIndicator size="small" color={COLORS.primary} />
+                    <Text type="body2" style={styles.footerText}>Loading more...</Text>
+                </View>
+            );
+        }
+
+        if (!hasMore && favoriteVendors.length > 0) {
+            return (
+                <View style={styles.footerContainer}>
+                    <Text type="body2" style={styles.footerText}>
+                        Showing {favoriteVendors.length} of {totalCount} vendors
+                    </Text>
+                </View>
+            );
+        }
+
+        return null;
+    }, [isLoadingMore, hasMore, favoriteVendors.length, totalCount]);
+
     return (
         <View style={styles.container}>
             {/* Header with Gradient */}
@@ -337,10 +379,11 @@ export default function Favorites() {
                         keyExtractor={keyExtractor}
                         renderItem={renderVendorCard}
                         ListEmptyComponent={ListEmptyComponent}
+                        ListFooterComponent={renderListFooter}
                         showsVerticalScrollIndicator={false}
                         contentContainerStyle={[
                             styles.listContent,
-                            vendorCount === 0 && styles.listContentEmpty,
+                            favoriteVendors.length === 0 && styles.listContentEmpty,
                         ]}
                         refreshControl={
                             <RefreshControl
@@ -350,6 +393,11 @@ export default function Favorites() {
                                 tintColor={COLORS.primary}
                             />
                         }
+                        onEndReached={handleLoadMore}
+                        onEndReachedThreshold={0.5}
+                        initialNumToRender={5}
+                        maxToRenderPerBatch={5}
+                        windowSize={3}
                     />
                 )}
             </View>
@@ -551,5 +599,17 @@ const styles = StyleSheet.create({
     },
     browseButtonText: {
         color: COLORS.white,
+    },
+
+    // Footer (pagination)
+    footerContainer: {
+        paddingVertical: verticalScale(16),
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'row',
+        gap: scale(8),
+    },
+    footerText: {
+        color: COLORS.gray500,
     },
 });

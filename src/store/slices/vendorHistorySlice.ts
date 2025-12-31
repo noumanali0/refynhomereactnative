@@ -21,11 +21,14 @@ interface VendorHistoryState {
   jobs: VendorHistoryJob[];
   selectedJob: VendorHistoryJob | null;
   isLoading: boolean;
+  isLoadingMore: boolean;
   isRefreshing: boolean;
   error: string | null;
   filter: HistoryFilter;
   hasMore: boolean;
   page: number;
+  totalCount: number;
+  totalPages: number;
   stats: {
     totalCompleted: number;
     totalCancelled: number;
@@ -38,11 +41,14 @@ const initialState: VendorHistoryState = {
   jobs: [],
   selectedJob: null,
   isLoading: false,
+  isLoadingMore: false,
   isRefreshing: false,
   error: null,
   filter: 'all',
-  hasMore: true,
+  hasMore: false,
   page: 1,
+  totalCount: 0,
+  totalPages: 1,
   stats: {
     totalCompleted: 0,
     totalCancelled: 0,
@@ -56,16 +62,23 @@ const initialState: VendorHistoryState = {
 // ============================================================================
 
 /**
- * Fetch vendor job history
+ * Fetch vendor job history (initial load - page 1)
  */
 export const fetchVendorHistory = createAsyncThunk(
   'vendorHistory/fetch',
   async (filters: VendorHistoryFilters | undefined, { rejectWithValue }) => {
     try {
-      const response = await vendorHistoryService.getHistory(filters);
+      const response = await vendorHistoryService.getHistory({
+        page: 1,
+        page_size: 10,
+        status: filters?.status,
+      });
       return {
         jobs: response.results,
-        hasMore: false, // Server returns all history, no pagination
+        hasMore: response.has_more,
+        page: response.page,
+        totalCount: response.count,
+        totalPages: response.total_pages,
       };
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : 'Failed to fetch history');
@@ -82,12 +95,15 @@ export const refreshVendorHistory = createAsyncThunk(
     try {
       const response = await vendorHistoryService.getHistory({
         page: 1,
-        page_size: 50,
+        page_size: 10,
         status: filter === 'all' ? undefined : filter,
       });
       return {
         jobs: response.results,
-        hasMore: false, // Server returns all history, no pagination
+        hasMore: response.has_more,
+        page: response.page,
+        totalCount: response.count,
+        totalPages: response.total_pages,
       };
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : 'Failed to refresh history');
@@ -96,22 +112,31 @@ export const refreshVendorHistory = createAsyncThunk(
 );
 
 /**
- * Load more history (pagination)
- * Note: Server returns all history at once, so this just returns empty
+ * Load more history (pagination - next page)
  */
 export const loadMoreVendorHistory = createAsyncThunk(
   'vendorHistory/loadMore',
-  async ({ page, filter }: { page: number; filter: HistoryFilter }, { rejectWithValue }) => {
+  async (_, { getState, rejectWithValue }) => {
     try {
+      const state = getState() as { vendorHistory: VendorHistoryState };
+      const nextPage = state.vendorHistory.page + 1;
+
+      // Don't load if no more pages
+      if (!state.vendorHistory.hasMore) {
+        return null;
+      }
+
       const response = await vendorHistoryService.getHistory({
-        page,
-        page_size: 50,
-        status: filter === 'all' ? undefined : filter,
+        page: nextPage,
+        page_size: 10,
+        status: state.vendorHistory.filter === 'all' ? undefined : state.vendorHistory.filter,
       });
       return {
         jobs: response.results,
-        hasMore: false, // Server returns all history, no pagination
-        page,
+        hasMore: response.has_more,
+        page: response.page,
+        totalCount: response.count,
+        totalPages: response.total_pages,
       };
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : 'Failed to load more');
@@ -177,7 +202,7 @@ const vendorHistorySlice = createSlice({
     },
   },
   extraReducers: (builder) => {
-    // Fetch history
+    // Fetch history (initial load)
     builder
       .addCase(fetchVendorHistory.pending, (state) => {
         state.isLoading = true;
@@ -187,14 +212,16 @@ const vendorHistorySlice = createSlice({
         state.isLoading = false;
         state.jobs = action.payload.jobs;
         state.hasMore = action.payload.hasMore;
-        state.page = 1;
+        state.page = action.payload.page;
+        state.totalCount = action.payload.totalCount;
+        state.totalPages = action.payload.totalPages;
       })
       .addCase(fetchVendorHistory.rejected, (state, action) => {
         state.isLoading = false;
         state.error = action.payload as string;
       });
 
-    // Refresh history
+    // Refresh history (pull to refresh)
     builder
       .addCase(refreshVendorHistory.pending, (state) => {
         state.isRefreshing = true;
@@ -204,26 +231,36 @@ const vendorHistorySlice = createSlice({
         state.isRefreshing = false;
         state.jobs = action.payload.jobs;
         state.hasMore = action.payload.hasMore;
-        state.page = 1;
+        state.page = action.payload.page;
+        state.totalCount = action.payload.totalCount;
+        state.totalPages = action.payload.totalPages;
       })
       .addCase(refreshVendorHistory.rejected, (state, action) => {
         state.isRefreshing = false;
         state.error = action.payload as string;
       });
 
-    // Load more
+    // Load more (next page)
     builder
       .addCase(loadMoreVendorHistory.pending, (state) => {
-        state.isLoading = true;
+        state.isLoadingMore = true;
+        state.error = null;
       })
       .addCase(loadMoreVendorHistory.fulfilled, (state, action) => {
-        state.isLoading = false;
-        state.jobs = [...state.jobs, ...action.payload.jobs];
-        state.hasMore = action.payload.hasMore;
-        state.page = action.payload.page;
+        state.isLoadingMore = false;
+        if (action.payload) {
+          // Append new jobs, avoiding duplicates
+          const existingIds = new Set(state.jobs.map(j => j.id));
+          const newJobs = action.payload.jobs.filter(j => !existingIds.has(j.id));
+          state.jobs = [...state.jobs, ...newJobs];
+          state.hasMore = action.payload.hasMore;
+          state.page = action.payload.page;
+          state.totalCount = action.payload.totalCount;
+          state.totalPages = action.payload.totalPages;
+        }
       })
       .addCase(loadMoreVendorHistory.rejected, (state, action) => {
-        state.isLoading = false;
+        state.isLoadingMore = false;
         state.error = action.payload as string;
       });
 
@@ -282,6 +319,9 @@ export const selectSelectedJob = (state: { vendorHistory: VendorHistoryState }) 
 export const selectVendorHistoryLoading = (state: { vendorHistory: VendorHistoryState }) =>
   state.vendorHistory.isLoading;
 
+export const selectVendorHistoryLoadingMore = (state: { vendorHistory: VendorHistoryState }) =>
+  state.vendorHistory.isLoadingMore;
+
 export const selectVendorHistoryRefreshing = (state: { vendorHistory: VendorHistoryState }) =>
   state.vendorHistory.isRefreshing;
 
@@ -293,6 +333,12 @@ export const selectVendorHistoryHasMore = (state: { vendorHistory: VendorHistory
 
 export const selectVendorHistoryPage = (state: { vendorHistory: VendorHistoryState }) =>
   state.vendorHistory.page;
+
+export const selectVendorHistoryTotalCount = (state: { vendorHistory: VendorHistoryState }) =>
+  state.vendorHistory.totalCount;
+
+export const selectVendorHistoryTotalPages = (state: { vendorHistory: VendorHistoryState }) =>
+  state.vendorHistory.totalPages;
 
 // ============================================================================
 // EXPORTS

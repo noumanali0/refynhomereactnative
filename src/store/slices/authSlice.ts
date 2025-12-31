@@ -14,6 +14,7 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit';
 import { Customer, Vendor, UserRole } from '../../types';
 import { authService } from '@/services/authService';
+import { deviceService } from '@/services/deviceService'; // Keep for device transfer flow (will be used after Firebase setup)
 // import { tokenService } from '@/services/tokenService';
 import { getErrorMessage } from '@/api/client';
 import type {
@@ -42,6 +43,18 @@ interface AuthState {
   vendorOnboardingStatus: 'not_started' | 'in_progress' | 'pending_verification' | 'complete';
   // Logout in progress flag - prevents navigation race conditions
   isLoggingOut: boolean;
+  // Session conflict info (for single-device login)
+  sessionConflict: {
+    hasExistingSession: boolean;
+    hasActiveService: boolean;
+    activeServiceType: 'service_request' | 'active_job' | 'pending_proposal' | null;
+    existingDeviceName: string | null;
+    requiresOtp: boolean;
+  } | null;
+  // Device transfer OTP sent flag
+  deviceTransferOtpSent: boolean;
+  // Password stored temporarily for device transfer (cleared after use)
+  pendingPassword: string | null;
 }
 
 // ============================================================================
@@ -61,6 +74,10 @@ const initialState: AuthState = {
   phoneNumber: null,
   vendorOnboardingStatus: 'not_started',
   isLoggingOut: false,
+  // Single-device login state
+  sessionConflict: null,
+  deviceTransferOtpSent: false,
+  pendingPassword: null,
 };
 
 // ============================================================================
@@ -151,7 +168,7 @@ export const verifyOTP = createAsyncThunk(
 );
 
 /**
- * Login - Login with phone and password
+ * Login - Login with phone and password (with device tracking for single-device enforcement)
  * POST /api/auth/login/
  */
 export const loginUser = createAsyncThunk(
@@ -161,8 +178,19 @@ export const loginUser = createAsyncThunk(
     { rejectWithValue }
   ) => {
     try {
-      const response = await authService.login(phone, password);
-      console.log("🚀 ~ response:", response)
+      // Get device info for single-device login enforcement
+      const deviceId = await deviceService.getOrCreateDeviceId();
+      const deviceName = deviceService.getDeviceName();
+
+      // Use loginWithDevice to include device tracking
+      const response = await authService.loginWithDevice(
+        phone,
+        password,
+        deviceId,
+        deviceName,
+        null, // pushToken - will be registered separately after login
+        false // forceLogoutOther - false for normal login
+      );
 
       // Store tokens and user in SecureStore
       await tokenService.saveSession(
@@ -354,11 +382,12 @@ export const logoutUser = createAsyncThunk(
         console.log('[Auth] Clear customer active service skipped:', serviceError);
       }
 
-      // Call logout API to blacklist refresh token
+      // Call logout API to blacklist refresh token and deactivate device session
       const refreshToken = await tokenService.getRefreshToken();
+      const deviceId = await deviceService.getOrCreateDeviceId();
       if (refreshToken) {
-        await authService.logout(refreshToken);
-        if (__DEV__) console.log('[Auth] Refresh token blacklisted on server');
+        await authService.logout(refreshToken, deviceId);
+        if (__DEV__) console.log('[Auth] Refresh token blacklisted, device session deactivated');
       }
 
       // Clear all tokens and user data from SecureStore
@@ -656,6 +685,127 @@ export const restoreSession = createAsyncThunk(
 );
 
 // ============================================================================
+// Device Session Management Thunks (Single-Device Login)
+// ============================================================================
+
+/**
+ * Check Session Status - Pre-login check for device conflicts
+ * POST /api/auth/check-session/
+ */
+export const checkSessionStatus = createAsyncThunk(
+  'auth/checkSessionStatus',
+  async ({ phone }: { phone: string }, { rejectWithValue }) => {
+    try {
+      const deviceId = await deviceService.getOrCreateDeviceId();
+      const result = await authService.checkSessionStatus(phone, deviceId);
+
+      return {
+        ...result,
+        deviceId,
+      };
+    } catch (error: any) {
+      const message = getErrorMessage(error);
+      return rejectWithValue(message);
+    }
+  }
+);
+
+/**
+ * Request Device Transfer OTP - Send OTP for device transfer
+ * POST /api/auth/request-device-transfer-otp/
+ */
+export const requestDeviceTransferOTP = createAsyncThunk(
+  'auth/requestDeviceTransferOTP',
+  async ({ phone, password }: { phone: string; password: string }, { rejectWithValue }) => {
+    try {
+      const deviceId = await deviceService.getOrCreateDeviceId();
+      const result = await authService.requestDeviceTransferOTP(phone, deviceId);
+
+      return {
+        ...result,
+        phone,
+        password, // Store for device transfer verification
+      };
+    } catch (error: any) {
+      const message = getErrorMessage(error);
+      return rejectWithValue(message);
+    }
+  }
+);
+
+/**
+ * Verify Device Transfer - Verify OTP and transfer session
+ * POST /api/auth/verify-device-transfer/
+ */
+export const verifyDeviceTransfer = createAsyncThunk(
+  'auth/verifyDeviceTransfer',
+  async (
+    { phone, code, password }: { phone: string; code: string; password: string },
+    { rejectWithValue }
+  ) => {
+    try {
+      const { deviceId, deviceName } = await deviceService.getDeviceInfo();
+
+      // Get push token (best-effort)
+      let pushToken: string | null = null;
+      try {
+        const { setupPushNotifications } = await import('@/utils/notifications');
+        pushToken = await setupPushNotifications();
+      } catch {
+        // Push token is optional
+      }
+
+      const response = await authService.verifyDeviceTransfer({
+        phone,
+        code,
+        password,
+        deviceId,
+        deviceName,
+        pushToken,
+      });
+
+      // Store tokens and user in SecureStore
+      await tokenService.saveSession(
+        response.access,
+        response.refresh,
+        response.user
+      );
+
+      return {
+        user: response.user,
+        accessToken: response.access,
+        refreshToken: response.refresh,
+        isVerified: response.isVerified,
+        isOnboardingComplete: response.isOnboardingComplete,
+        transferredFromDevice: response.transferredFromDevice,
+      };
+    } catch (error: any) {
+      const message = getErrorMessage(error);
+      return rejectWithValue(message);
+    }
+  }
+);
+
+/**
+ * Register Push Token - Register device push token with backend
+ * POST /api/auth/register-push-token/
+ */
+export const registerPushToken = createAsyncThunk(
+  'auth/registerPushToken',
+  async ({ pushToken }: { pushToken: string }, { rejectWithValue }) => {
+    try {
+      const deviceId = await deviceService.getOrCreateDeviceId();
+      await authService.registerPushToken(pushToken, deviceId);
+      return { success: true };
+    } catch (error: any) {
+      // Best-effort, don't fail
+      console.error('[Auth] Failed to register push token:', error);
+      return { success: false };
+    }
+  }
+);
+
+// ============================================================================
 // Legacy Thunks (Backward Compatibility)
 // ============================================================================
 
@@ -717,6 +867,24 @@ const authSlice = createSlice({
     // Set phone number (for OTP flow)
     setPhoneNumber: (state, action: PayloadAction<string>) => {
       state.phoneNumber = action.payload;
+    },
+
+    // Clear session conflict (for single-device login)
+    clearSessionConflict: (state) => {
+      state.sessionConflict = null;
+      state.deviceTransferOtpSent = false;
+      state.pendingPassword = null;
+    },
+
+    // Set session conflict (used when login returns conflict)
+    setSessionConflict: (state, action: PayloadAction<AuthState['sessionConflict']>) => {
+      state.sessionConflict = action.payload;
+    },
+
+    // Clear logout state (called after navigation to login completes)
+    clearLogoutState: (state) => {
+      state.isLoggingOut = false;
+      state.isLoading = false;
     },
   },
   extraReducers: (builder) => {
@@ -926,10 +1094,39 @@ const authSlice = createSlice({
         state.isLoggingOut = true; // Prevent navigation during logout
       })
       .addCase(logoutUser.fulfilled, (state) => {
-        return { ...initialState }; // Reset to initial state
+        // Clear all sensitive data but keep isLoggingOut = true
+        // This prevents navigation race conditions - clearLogoutState will reset it
+        state.user = null;
+        state.token = null;
+        state.refreshToken = null;
+        state.isAuthenticated = false;
+        state.isLoading = false;
+        state.error = null;
+        state.otpSent = false;
+        state.lastOtpSentTime = null;
+        state.phoneNumber = null;
+        state.vendorOnboardingStatus = 'not_started';
+        state.sessionConflict = null;
+        state.deviceTransferOtpSent = false;
+        state.pendingPassword = null;
+        // isLoggingOut stays TRUE until clearLogoutState is called after navigation
       })
       .addCase(logoutUser.rejected, (state) => {
-        return { ...initialState }; // Reset anyway
+        // Reset anyway on failure, same approach
+        state.user = null;
+        state.token = null;
+        state.refreshToken = null;
+        state.isAuthenticated = false;
+        state.isLoading = false;
+        state.error = null;
+        state.otpSent = false;
+        state.lastOtpSentTime = null;
+        state.phoneNumber = null;
+        state.vendorOnboardingStatus = 'not_started';
+        state.sessionConflict = null;
+        state.deviceTransferOtpSent = false;
+        state.pendingPassword = null;
+        // isLoggingOut stays TRUE until clearLogoutState is called
       });
 
     // ========================================================================
@@ -1073,6 +1270,102 @@ const authSlice = createSlice({
       .addCase(restoreSession.rejected, (state) => {
         state.isLoading = false;
       });
+
+    // ========================================================================
+    // Check Session Status (Single-Device Login)
+    // ========================================================================
+    builder
+      .addCase(checkSessionStatus.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(checkSessionStatus.fulfilled, (state, action) => {
+        state.isLoading = false;
+        if (action.payload.hasExistingSession) {
+          state.sessionConflict = {
+            hasExistingSession: action.payload.hasExistingSession,
+            hasActiveService: action.payload.hasActiveService,
+            activeServiceType: action.payload.activeServiceType,
+            existingDeviceName: action.payload.existingDeviceName,
+            requiresOtp: action.payload.requiresOtp,
+          };
+        } else {
+          state.sessionConflict = null;
+        }
+      })
+      .addCase(checkSessionStatus.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      });
+
+    // ========================================================================
+    // Request Device Transfer OTP
+    // ========================================================================
+    builder
+      .addCase(requestDeviceTransferOTP.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(requestDeviceTransferOTP.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.deviceTransferOtpSent = true;
+        state.phoneNumber = action.payload.phone;
+        state.pendingPassword = action.payload.password;
+        state.lastOtpSentTime = Date.now();
+      })
+      .addCase(requestDeviceTransferOTP.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      });
+
+    // ========================================================================
+    // Verify Device Transfer
+    // ========================================================================
+    builder
+      .addCase(verifyDeviceTransfer.pending, (state) => {
+        state.isLoading = true;
+        state.error = null;
+      })
+      .addCase(verifyDeviceTransfer.fulfilled, (state, action) => {
+        state.isLoading = false;
+        state.user = action.payload.user;
+        state.token = action.payload.accessToken;
+        state.refreshToken = action.payload.refreshToken;
+        state.isAuthenticated = true;
+        state.error = null;
+        // Clear session conflict state
+        state.sessionConflict = null;
+        state.deviceTransferOtpSent = false;
+        state.pendingPassword = null;
+
+        // Set vendor onboarding status based on backend response
+        if (action.payload.user.role === 'vendor') {
+          if (!action.payload.isOnboardingComplete) {
+            state.vendorOnboardingStatus = 'in_progress';
+          } else if (!action.payload.isVerified) {
+            state.vendorOnboardingStatus = 'pending_verification';
+          } else {
+            state.vendorOnboardingStatus = 'complete';
+          }
+        } else {
+          state.vendorOnboardingStatus = 'complete';
+        }
+      })
+      .addCase(verifyDeviceTransfer.rejected, (state, action) => {
+        state.isLoading = false;
+        state.error = action.payload as string;
+      });
+
+    // ========================================================================
+    // Register Push Token (best-effort, no state changes needed)
+    // ========================================================================
+    builder
+      .addCase(registerPushToken.fulfilled, () => {
+        // No state changes needed
+      })
+      .addCase(registerPushToken.rejected, () => {
+        // Best-effort, no state changes needed
+      });
   },
 });
 
@@ -1085,6 +1378,9 @@ export const {
   updateProfile,
   resetOTPState,
   setPhoneNumber,
+  clearSessionConflict,
+  setSessionConflict,
+  clearLogoutState,
 } = authSlice.actions;
 
 export default authSlice.reducer;

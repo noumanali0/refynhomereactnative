@@ -139,6 +139,72 @@ export const AUTH_ENDPOINTS = {
    * This prevents the refresh token from being used to generate new access tokens.
    */
   LOGOUT: '/auth/logout/',
+
+  // ========================================================================
+  // DEVICE SESSION MANAGEMENT (Single-Device Login)
+  // ========================================================================
+
+  /**
+   * POST /api/auth/check-session/
+   * Body: { phone: string, device_id: string }
+   * Response: {
+   *   has_existing_session: boolean,
+   *   has_active_service: boolean,
+   *   active_service_type: 'service_request' | 'active_job' | 'pending_proposal' | null,
+   *   existing_device_name: string | null,
+   *   can_login: boolean,
+   *   requires_otp: boolean
+   * }
+   *
+   * Pre-login check to determine if user has existing session on another device
+   * and whether they have an active service that would block login.
+   */
+  CHECK_SESSION: '/auth/check-session/',
+
+  /**
+   * POST /api/auth/request-device-transfer-otp/
+   * Body: { phone: string, device_id: string }
+   * Response: { message: string, otp_sent: boolean }
+   *
+   * Request OTP for device transfer when taking over session from another device.
+   * Only available when user has existing session but NO active service.
+   */
+  REQUEST_DEVICE_TRANSFER_OTP: '/auth/request-device-transfer-otp/',
+
+  /**
+   * POST /api/auth/verify-device-transfer/
+   * Body: {
+   *   phone: string,
+   *   code: string,
+   *   password: string,
+   *   device_id: string,
+   *   device_name: string,
+   *   push_token?: string
+   * }
+   * Response: {
+   *   access: string,
+   *   refresh: string,
+   *   user: User,
+   *   is_verified: boolean,
+   *   is_onboarding_complete: boolean,
+   *   transferred_from_device: string | null
+   * }
+   *
+   * Verify OTP and transfer session to new device.
+   * This will force logout the old device and send push notification.
+   */
+  VERIFY_DEVICE_TRANSFER: '/auth/verify-device-transfer/',
+
+  /**
+   * POST /api/auth/register-push-token/
+   * Headers: Authorization: Bearer {token}
+   * Body: { push_token: string, device_id: string }
+   * Response: { message: string }
+   *
+   * Register or update push token for the current device session.
+   * Used to send push notifications for login attempts and force logouts.
+   */
+  REGISTER_PUSH_TOKEN: '/auth/register-push-token/',
 } as const;
 
 // ============================================================================

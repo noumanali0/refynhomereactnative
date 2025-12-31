@@ -226,14 +226,17 @@ const WebSocketProposalCardInner = ({ proposal, isNew = false }: Props) => {
                             <View style={styles.ratingRow}>
                                 <Ionicons name="star" size={14} color={COLORS.warning} />
                                 <Text style={styles.ratingText}>
-                                    {proposal?.vendor?.average_rating?.toFixed(1) || '0.0'}
+                                    {/* Use category-specific rating if available, fallback to overall */}
+                                    {(proposal?.vendor?.category_average_rating ?? proposal?.vendor?.average_rating)?.toFixed(1) || '0.0'}
                                 </Text>
                                 <Text style={styles.reviewsText}>
-                                    ({proposal?.vendor?.total_reviews || 0} reviews)
+                                    {/* Use category-specific reviews if available, fallback to overall */}
+                                    ({proposal?.vendor?.category_total_reviews ?? proposal?.vendor?.total_reviews ?? 0} reviews)
                                 </Text>
                             </View>
                             <Text style={styles.jobsText}>
-                                {proposal?.vendor?.completed_jobs || 0} jobs completed
+                                {/* Use category-specific jobs if available, fallback to overall */}
+                                {proposal?.vendor?.category_completed_jobs ?? proposal?.vendor?.completed_jobs ?? 0} jobs completed
                             </Text>
                         </View>
                     </View>

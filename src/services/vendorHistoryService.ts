@@ -63,6 +63,11 @@ export interface VendorHistoryResponse {
   count: number;
   results: VendorHistoryJob[];
   type: string;
+  page: number;
+  total_pages: number;
+  has_more: boolean;
+  next: string | null;
+  previous: string | null;
 }
 
 export interface VendorHistoryFilters {
@@ -109,7 +114,7 @@ function normalizeStatus(status: string | undefined | null): VendorHistoryJob['s
 // ============================================================================
 
 /**
- * Get vendor's job history
+ * Get vendor's job history with pagination
  * Uses /api/vendors/service-requests/?type=history endpoint
  */
 export async function getVendorHistory(
@@ -119,7 +124,8 @@ export async function getVendorHistory(
     // Build URL with type=history to get past completed/cancelled jobs
     const url = buildUrl(VENDOR_ENDPOINTS.SERVICE_REQUESTS, {
       type: 'history',
-      limit: filters?.page_size || 50,
+      page: filters?.page || 1,
+      page_size: filters?.page_size || 10,
     });
 
     const response = await apiClient.get<VendorHistoryResponse>(url);
@@ -133,21 +139,23 @@ export async function getVendorHistory(
     }
 
     // Normalize status values from API and extract price from accepted_proposal if needed
-    let results = (response.data.results || []).map(job => ({
+    const results = (response.data.results || []).map(job => ({
       ...job,
       status: normalizeStatus(job.status),
       // Map price_quote from accepted_proposal if not directly available
       price_quote: job.price_quote ?? job.accepted_proposal?.price_quote ?? null,
     }));
 
-    if (filters?.status && filters.status !== 'all') {
-      results = results.filter(job => job.status === filters.status);
-    }
-
+    // Note: Status filtering now happens on the backend or in the slice for pagination consistency
     return {
-      count: results.length,
+      count: response.data.count || results.length,
       results,
-      type: 'history',
+      type: response.data.type || 'history',
+      page: response.data.page || 1,
+      total_pages: response.data.total_pages || 1,
+      has_more: response.data.has_more || false,
+      next: response.data.next || null,
+      previous: response.data.previous || null,
     };
   } catch (error) {
     console.error('[VendorHistoryService] Get history error:', error);

@@ -54,7 +54,8 @@ export interface GetVendorReviewsParams {
     vendorId: number;
     stars?: number;
     sort?: 'latest' | 'highest' | 'lowest';
-    limit?: number;
+    page?: number;
+    page_size?: number;
 }
 
 export interface VendorReviewsResponse {
@@ -62,6 +63,11 @@ export interface VendorReviewsResponse {
     count: number;
     distribution: Record<string, number>;
     average_rating: number;
+    total_reviews: number;
+    page: number;
+    total_pages: number;
+    next: string | null;
+    previous: string | null;
 }
 
 // ============================================================================
@@ -101,7 +107,7 @@ async function submitReview(params: CreateReviewParams): Promise<ReviewResponse>
 }
 
 /**
- * Get reviews for a vendor with optional filtering and sorting
+ * Get reviews for a vendor with optional filtering, sorting, and pagination
  *
  * @param params - Query parameters
  * @returns Promise with vendor reviews response
@@ -113,7 +119,8 @@ async function submitReview(params: CreateReviewParams): Promise<ReviewResponse>
  *   vendorId: 123,
  *   stars: 5,      // optional: filter by star rating
  *   sort: 'latest', // optional: 'latest', 'highest', 'lowest'
- *   limit: 50       // optional: number of results
+ *   page: 1,       // optional: page number
+ *   page_size: 10  // optional: number of results per page
  * });
  * console.log('Reviews:', response.results);
  * console.log('Average rating:', response.average_rating);
@@ -125,13 +132,23 @@ async function getVendorReviews(params: GetVendorReviewsParams): Promise<VendorR
         const queryParams = new URLSearchParams();
         if (params.stars) queryParams.append('stars', params.stars.toString());
         if (params.sort) queryParams.append('sort', params.sort);
-        if (params.limit) queryParams.append('limit', params.limit.toString());
+        if (params.page) queryParams.append('page', params.page.toString());
+        if (params.page_size) queryParams.append('page_size', params.page_size.toString());
 
         const queryString = queryParams.toString();
         const url = VENDOR_ENDPOINTS.REVIEWS(params.vendorId) + (queryString ? `?${queryString}` : '');
 
         const response = await apiClient.get<VendorReviewsResponse>(url);
-        return response.data;
+
+        // Ensure pagination fields have defaults
+        return {
+            ...response.data,
+            page: response.data.page || 1,
+            total_pages: response.data.total_pages || 1,
+            total_reviews: response.data.total_reviews || response.data.count || 0,
+            next: response.data.next || null,
+            previous: response.data.previous || null,
+        };
     } catch (error) {
         throw new Error(getErrorMessage(error));
     }

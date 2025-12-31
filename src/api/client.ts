@@ -47,8 +47,9 @@ export const apiClient = axios.create({
 // ============================================================================
 
 /**
- * Request interceptor to add JWT token to all requests
+ * Request interceptor to add JWT token and device ID to all requests
  * Token is fetched from SecureStore for each request
+ * Device ID is sent for session validation (single-device login enforcement)
  */
 apiClient.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
@@ -59,6 +60,21 @@ apiClient.interceptors.request.use(
       // Add token to Authorization header if available
       if (token && config.headers) {
         config.headers.Authorization = `Bearer ${token}`;
+      }
+
+      // Add device ID for session validation
+      // This enables immediate logout when device transfer happens
+      try {
+        const deviceService = await import('@/services/deviceService');
+        const deviceId = await deviceService.default.getOrCreateDeviceId();
+        if (deviceId && config.headers) {
+          config.headers['X-Device-ID'] = deviceId;
+        }
+      } catch (deviceError) {
+        // Device ID is best-effort, don't block request if it fails
+        if (__DEV__) {
+          console.warn('[API] Failed to get device ID:', deviceError);
+        }
       }
 
       // Log request in development

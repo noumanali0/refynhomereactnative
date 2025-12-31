@@ -22,6 +22,10 @@ export interface ServiceHistoryVendor {
   profile_photo_url: string | null;
   service_radius_km: number;
   is_favorite?: boolean;
+  // Category-specific stats (for the service category of this request)
+  category_average_rating?: number;
+  category_total_reviews?: number;
+  category_completed_jobs?: number;
 }
 
 export interface ServiceHistoryCategory {
@@ -75,6 +79,8 @@ export interface ServiceHistoryResponse {
   count: number;
   next: string | null;
   previous: string | null;
+  page?: number;
+  total_pages?: number;
   results: ServiceHistoryRequest[];
 }
 
@@ -95,7 +101,7 @@ export interface ServiceHistoryFilters {
 export async function getServiceHistory(filters?: ServiceHistoryFilters): Promise<ServiceHistoryResponse> {
   try {
     // Use limit as alias for page_size if provided
-    const pageSize = filters?.limit || filters?.page_size || 50;
+    const pageSize = filters?.limit || filters?.page_size || 10;
 
     // Build URL with type=history to get completed/cancelled requests (like vendor history)
     const url = buildUrl(CUSTOMER_ENDPOINTS.SERVICE_REQUESTS, {
@@ -118,17 +124,29 @@ export async function getServiceHistory(filters?: ServiceHistoryFilters): Promis
       console.log('[ServiceHistory] Response:', response.data);
     }
 
-    // Handle response format from backend: { results: [], count: number, type: string }
+    // Handle DRF paginated response: { results, count, next, previous, page, total_pages }
     if (response.data && 'results' in response.data) {
+      const data = response.data as {
+        results: ServiceHistoryRequest[];
+        count: number;
+        next?: string | null;
+        previous?: string | null;
+        page?: number;
+        total_pages?: number;
+        type?: string;
+      };
+
       return {
-        count: response.data.count || response.data.results.length,
-        next: null,
-        previous: null,
-        results: response.data.results,
+        count: data.count || data.results.length,
+        next: data.next || null,
+        previous: data.previous || null,
+        page: data.page,
+        total_pages: data.total_pages,
+        results: data.results,
       };
     }
 
-    // Handle array response (fallback)
+    // Handle array response (fallback for old API format)
     if (Array.isArray(response.data)) {
       return {
         count: response.data.length,
@@ -172,6 +190,7 @@ export async function getServiceRequestDetail(requestId: number): Promise<Servic
  */
 export async function getAllServiceHistory(): Promise<ServiceHistoryRequest[]> {
   try {
+    // Use max page size for fetching all records
     const response = await getServiceHistory({ page_size: 100 });
     return response.results;
   } catch (error) {

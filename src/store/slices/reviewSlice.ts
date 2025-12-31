@@ -35,6 +35,8 @@ interface ReviewState {
     vendorReviews: VendorReview[];
     /** Whether vendor reviews are loading */
     isLoadingVendorReviews: boolean;
+    /** Whether loading more reviews */
+    isLoadingMoreReviews: boolean;
     /** Error message from fetching vendor reviews */
     vendorReviewsError: string | null;
     /** Total count of vendor reviews */
@@ -43,6 +45,14 @@ interface ReviewState {
     vendorReviewsDistribution: Record<string, number>;
     /** Average rating */
     vendorAverageRating: number;
+    /** Current page for pagination */
+    vendorReviewsPage: number;
+    /** Total pages for pagination */
+    vendorReviewsTotalPages: number;
+    /** Whether there are more reviews to load */
+    vendorReviewsHasMore: boolean;
+    /** Current vendor ID for reviews */
+    currentVendorId: number | null;
 }
 
 // ============================================================================
@@ -56,10 +66,15 @@ const initialState: ReviewState = {
     lastReview: null,
     vendorReviews: [],
     isLoadingVendorReviews: false,
+    isLoadingMoreReviews: false,
     vendorReviewsError: null,
     vendorReviewsCount: 0,
     vendorReviewsDistribution: { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 },
     vendorAverageRating: 0,
+    vendorReviewsPage: 1,
+    vendorReviewsTotalPages: 1,
+    vendorReviewsHasMore: false,
+    currentVendorId: null,
 };
 
 // ============================================================================
@@ -98,9 +113,9 @@ export const submitReview = createAsyncThunk<
 );
 
 /**
- * Fetch vendor reviews with optional filtering and sorting
+ * Fetch vendor reviews with pagination (initial load - page 1)
  *
- * @param params - Query parameters (vendorId, stars?, sort?, limit?)
+ * @param params - Query parameters (vendorId, stars?, sort?)
  * @returns VendorReviewsResponse on success
  *
  * @example
@@ -113,17 +128,77 @@ export const submitReview = createAsyncThunk<
  * ```
  */
 export const fetchVendorReviews = createAsyncThunk<
-    VendorReviewsResponse,
+    VendorReviewsResponse & { vendorId: number },
     GetVendorReviewsParams,
     { rejectValue: string }
 >(
     'review/fetchVendorReviews',
     async (params, { rejectWithValue }) => {
         try {
-            const response = await reviewApi.getVendorReviews(params);
-            return response;
+            const response = await reviewApi.getVendorReviews({
+                ...params,
+                page: 1,
+                page_size: 10,
+            });
+            return { ...response, vendorId: params.vendorId };
         } catch (error: any) {
             return rejectWithValue(error.message || 'Failed to fetch reviews');
+        }
+    }
+);
+
+/**
+ * Load more vendor reviews (pagination - next page)
+ */
+export const loadMoreVendorReviews = createAsyncThunk<
+    VendorReviewsResponse | null,
+    { vendorId: number; stars?: number; sort?: 'latest' | 'highest' | 'lowest' },
+    { state: { review: ReviewState }; rejectValue: string }
+>(
+    'review/loadMoreVendorReviews',
+    async (params, { getState, rejectWithValue }) => {
+        try {
+            const state = getState().review;
+            const nextPage = state.vendorReviewsPage + 1;
+
+            // Don't load if no more pages
+            if (!state.vendorReviewsHasMore) {
+                return null;
+            }
+
+            const response = await reviewApi.getVendorReviews({
+                vendorId: params.vendorId,
+                stars: params.stars,
+                sort: params.sort,
+                page: nextPage,
+                page_size: 10,
+            });
+            return response;
+        } catch (error: any) {
+            return rejectWithValue(error.message || 'Failed to load more reviews');
+        }
+    }
+);
+
+/**
+ * Refresh vendor reviews (pull to refresh)
+ */
+export const refreshVendorReviews = createAsyncThunk<
+    VendorReviewsResponse & { vendorId: number },
+    GetVendorReviewsParams,
+    { rejectValue: string }
+>(
+    'review/refreshVendorReviews',
+    async (params, { rejectWithValue }) => {
+        try {
+            const response = await reviewApi.getVendorReviews({
+                ...params,
+                page: 1,
+                page_size: 10,
+            });
+            return { ...response, vendorId: params.vendorId };
+        } catch (error: any) {
+            return rejectWithValue(error.message || 'Failed to refresh reviews');
         }
     }
 );
@@ -154,10 +229,15 @@ const reviewSlice = createSlice({
         clearVendorReviews: (state) => {
             state.vendorReviews = [];
             state.isLoadingVendorReviews = false;
+            state.isLoadingMoreReviews = false;
             state.vendorReviewsError = null;
             state.vendorReviewsCount = 0;
             state.vendorReviewsDistribution = { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 };
             state.vendorAverageRating = 0;
+            state.vendorReviewsPage = 1;
+            state.vendorReviewsTotalPages = 1;
+            state.vendorReviewsHasMore = false;
+            state.currentVendorId = null;
         },
     },
     extraReducers: (builder) => {
@@ -179,7 +259,7 @@ const reviewSlice = createSlice({
                 state.isSubmitting = false;
                 state.submitError = action.payload || 'Failed to submit review';
             })
-            // Fetch vendor reviews: Pending
+            // Fetch vendor reviews: Pending (initial load)
             .addCase(fetchVendorReviews.pending, (state) => {
                 state.isLoadingVendorReviews = true;
                 state.vendorReviewsError = null;
@@ -191,11 +271,62 @@ const reviewSlice = createSlice({
                 state.vendorReviewsCount = action.payload.count;
                 state.vendorReviewsDistribution = action.payload.distribution;
                 state.vendorAverageRating = action.payload.average_rating;
+                state.vendorReviewsPage = action.payload.page;
+                state.vendorReviewsTotalPages = action.payload.total_pages;
+                state.vendorReviewsHasMore = action.payload.page < action.payload.total_pages;
+                state.currentVendorId = action.payload.vendorId;
             })
             // Fetch vendor reviews: Rejected
             .addCase(fetchVendorReviews.rejected, (state, action) => {
                 state.isLoadingVendorReviews = false;
                 state.vendorReviewsError = action.payload || 'Failed to fetch reviews';
+            })
+
+            // Load more vendor reviews: Pending
+            .addCase(loadMoreVendorReviews.pending, (state) => {
+                state.isLoadingMoreReviews = true;
+                state.vendorReviewsError = null;
+            })
+            // Load more vendor reviews: Fulfilled
+            .addCase(loadMoreVendorReviews.fulfilled, (state, action) => {
+                state.isLoadingMoreReviews = false;
+                if (action.payload) {
+                    // Append new reviews, avoiding duplicates
+                    const existingIds = new Set(state.vendorReviews.map(r => r.id));
+                    const newReviews = action.payload.results.filter(r => !existingIds.has(r.id));
+                    state.vendorReviews = [...state.vendorReviews, ...newReviews];
+                    state.vendorReviewsPage = action.payload.page;
+                    state.vendorReviewsTotalPages = action.payload.total_pages;
+                    state.vendorReviewsHasMore = action.payload.page < action.payload.total_pages;
+                }
+            })
+            // Load more vendor reviews: Rejected
+            .addCase(loadMoreVendorReviews.rejected, (state, action) => {
+                state.isLoadingMoreReviews = false;
+                state.vendorReviewsError = action.payload || 'Failed to load more reviews';
+            })
+
+            // Refresh vendor reviews: Pending
+            .addCase(refreshVendorReviews.pending, (state) => {
+                state.isLoadingVendorReviews = true;
+                state.vendorReviewsError = null;
+            })
+            // Refresh vendor reviews: Fulfilled
+            .addCase(refreshVendorReviews.fulfilled, (state, action) => {
+                state.isLoadingVendorReviews = false;
+                state.vendorReviews = action.payload.results;
+                state.vendorReviewsCount = action.payload.count;
+                state.vendorReviewsDistribution = action.payload.distribution;
+                state.vendorAverageRating = action.payload.average_rating;
+                state.vendorReviewsPage = action.payload.page;
+                state.vendorReviewsTotalPages = action.payload.total_pages;
+                state.vendorReviewsHasMore = action.payload.page < action.payload.total_pages;
+                state.currentVendorId = action.payload.vendorId;
+            })
+            // Refresh vendor reviews: Rejected
+            .addCase(refreshVendorReviews.rejected, (state, action) => {
+                state.isLoadingVendorReviews = false;
+                state.vendorReviewsError = action.payload || 'Failed to refresh reviews';
             });
     },
 });
@@ -228,6 +359,9 @@ export const selectVendorReviews = (state: RootState) => state.review.vendorRevi
 /** Whether vendor reviews are loading */
 export const selectIsLoadingVendorReviews = (state: RootState) => state.review.isLoadingVendorReviews;
 
+/** Whether loading more reviews */
+export const selectIsLoadingMoreReviews = (state: RootState) => state.review.isLoadingMoreReviews;
+
 /** Error message from fetching vendor reviews */
 export const selectVendorReviewsError = (state: RootState) => state.review.vendorReviewsError;
 
@@ -239,6 +373,15 @@ export const selectVendorReviewsDistribution = (state: RootState) => state.revie
 
 /** Average vendor rating */
 export const selectVendorAverageRating = (state: RootState) => state.review.vendorAverageRating;
+
+/** Current page for vendor reviews */
+export const selectVendorReviewsPage = (state: RootState) => state.review.vendorReviewsPage;
+
+/** Total pages for vendor reviews */
+export const selectVendorReviewsTotalPages = (state: RootState) => state.review.vendorReviewsTotalPages;
+
+/** Whether there are more reviews to load */
+export const selectVendorReviewsHasMore = (state: RootState) => state.review.vendorReviewsHasMore;
 
 // ============================================================================
 // Export

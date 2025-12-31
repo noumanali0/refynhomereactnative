@@ -2,14 +2,22 @@
 import { Tabs, useRouter } from "expo-router";
 import GradientIcon from "@/components/common/GradientIcon";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
-import { useAppSelector } from "@/hooks/useAppDispatch";
-import { useEffect } from "react";
+import { useAppSelector, useAppDispatch } from "@/hooks/useAppDispatch";
+import { useEffect, useRef, useState } from "react";
 import { moderateScale, verticalScale } from "react-native-size-matters";
+import { View, ActivityIndicator, Alert } from "react-native";
+import Text from "@/components/common/Text";
+import { COLORS } from "@/constants/colors";
+import { syncVendorActiveJobFromBackend } from "@/services/activeJobService";
+import { setActiveJob } from "@/store/slices/dispatchSlice";
 
 
 export default function VendorTabsLayout() {
     const router = useRouter();
+    const dispatch = useAppDispatch();
     const { user, vendorOnboardingStatus } = useAppSelector((state) => state.auth);
+    const [syncingBackend, setSyncingBackend] = useState(true);
+    const hasSyncedBackend = useRef(false);
 
     // Guard: Only verified vendors can access dashboard
     useEffect(() => {
@@ -25,6 +33,92 @@ export default function VendorTabsLayout() {
             }
         }
     }, [user, vendorOnboardingStatus]);
+
+    // Backend sync for multi-device support
+    useEffect(() => {
+        const syncActiveJob = async () => {
+            // Only sync once per mount
+            if (hasSyncedBackend.current) return;
+            hasSyncedBackend.current = true;
+
+            try {
+                if (__DEV__) {
+                    console.log('[VendorLayout] Starting backend sync for active job...');
+                }
+
+                const { hasActive, activeJob, jobType, source } = await syncVendorActiveJobFromBackend();
+
+                if (hasActive && activeJob) {
+                    // Update Redux state
+                    dispatch(setActiveJob({
+                        jobId: activeJob.jobId,
+                        proposalId: activeJob.proposalId,
+                    }));
+
+                    if (__DEV__) {
+                        console.log('[VendorLayout] Found active job from', source, ':', activeJob);
+                    }
+
+                    // Show alert with option to view job/proposal
+                    const title = jobType === 'active' ? 'Active Job Found' : 'Pending Proposal Found';
+                    const message = jobType === 'active'
+                        ? 'You have an active job in progress. Would you like to view it?'
+                        : 'You have a pending proposal waiting for customer response. Would you like to view it?';
+
+                    Alert.alert(
+                        title,
+                        message,
+                        [
+                            {
+                                text: 'View',
+                                onPress: () => {
+                                    router.push({
+                                        pathname: '/(vendor)/(servicerequests)/websocket-request-details',
+                                        params: { requestId: activeJob.jobId.toString() },
+                                    });
+                                    setSyncingBackend(false);
+                                },
+                            },
+                            {
+                                text: 'Stay Here',
+                                style: 'cancel',
+                                onPress: () => setSyncingBackend(false),
+                            },
+                        ],
+                        { cancelable: false }
+                    );
+                    return;
+                }
+
+                // No active job found
+                setSyncingBackend(false);
+            } catch (error) {
+                if (__DEV__) {
+                    console.error('[VendorLayout] Backend sync error:', error);
+                }
+                setSyncingBackend(false);
+            }
+        };
+
+        // Only sync if user is verified vendor
+        if (user?.role === 'vendor' && user.vendorProfile?.verified) {
+            syncActiveJob();
+        } else {
+            setSyncingBackend(false);
+        }
+    }, [user, dispatch, router]);
+
+    // Show loading while syncing backend
+    if (syncingBackend && user?.role === 'vendor' && user.vendorProfile?.verified) {
+        return (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#F9F9F9' }}>
+                <ActivityIndicator size="large" color={COLORS.primary} />
+                <Text type="body" style={{ marginTop: 16, color: COLORS.gray600 }}>
+                    Checking for active jobs...
+                </Text>
+            </View>
+        );
+    }
     return (
         <ErrorBoundary>
         <Tabs

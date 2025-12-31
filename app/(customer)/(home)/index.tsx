@@ -27,8 +27,9 @@ import {
   getCustomerActiveService,
   clearCustomerActiveService,
   isActiveServiceExpired,
+  syncCustomerActiveServiceFromBackend,
 } from '@/services/customerActiveServiceService';
-import { clearCustomerActiveServiceState } from '@/store/slices/dispatchSlice';
+import { clearCustomerActiveServiceState, setCustomerActiveService } from '@/store/slices/dispatchSlice';
 // import { useAppSelector } from '@/store/hooks';
 // import { useGetServiceHistoryQuery } from '@/services/customerApi';
 // import { SERVICE_TYPES } from '@/utils/constants';
@@ -46,7 +47,60 @@ export default function CustomerHomeScreen() {
   // const { isConnected } = useSocket();
   const isConnected = true;
 
-  // Check for active service on mount and redirect to live-offers if found
+  // Helper function to navigate to live-offers with all required params
+  const navigateToLiveOffers = (activeService: NonNullable<Awaited<ReturnType<typeof getCustomerActiveService>>>) => {
+    router.replace({
+      pathname: '/(customer)/(home)/live-offers',
+      params: {
+        requestId: activeService.requestId.toString(),
+        // Pass expiresAt for timer restoration
+        ...(activeService.expiresAt && {
+          expiresAt: activeService.expiresAt,
+        }),
+        // Pass status for state restoration
+        ...(activeService.status && {
+          restoredStatus: activeService.status,
+        }),
+        ...(activeService.serviceLocation && {
+          latitude: activeService.serviceLocation.latitude.toString(),
+          longitude: activeService.serviceLocation.longitude.toString(),
+        }),
+        ...(activeService.serviceAddress && {
+          address: activeService.serviceAddress,
+        }),
+        // Retry params for Search Again functionality
+        ...(activeService.categoryId && {
+          categoryId: activeService.categoryId.toString(),
+        }),
+        ...(activeService.problemTitle && {
+          problemTitle: activeService.problemTitle,
+        }),
+        ...(activeService.description !== undefined && {
+          description: activeService.description,
+        }),
+        // Pass acceptance data if available (for cancel window restoration)
+        ...(activeService.proposalId && {
+          proposalId: activeService.proposalId.toString(),
+        }),
+        ...(activeService.acceptedAt && {
+          acceptedAtTimestamp: activeService.acceptedAt.toString(),
+        }),
+        // Pass vendor location for immediate restoration (app kill recovery)
+        ...(activeService.vendorLocation && {
+          vendorLatitude: activeService.vendorLocation.latitude.toString(),
+          vendorLongitude: activeService.vendorLocation.longitude.toString(),
+          vendorTimestamp: activeService.vendorLocation.timestamp.toString(),
+        }),
+        // Pass vendor info for offline display
+        ...(activeService.acceptedVendor && {
+          vendorId: activeService.acceptedVendor.id.toString(),
+          vendorName: activeService.acceptedVendor.full_name,
+        }),
+      },
+    });
+  };
+
+  // Check for active service on mount - uses backend sync for multi-device support
   useEffect(() => {
     const checkActiveService = async () => {
       // Only check once per mount
@@ -54,9 +108,15 @@ export default function CustomerHomeScreen() {
       hasCheckedActiveService.current = true;
 
       try {
-        const activeService = await getCustomerActiveService();
+        if (__DEV__) {
+          console.log('[CustomerHome] Starting backend sync for active service...');
+        }
 
-        if (activeService) {
+        // Step 1: Backend sync (multi-device support)
+        // This fetches active request from backend to catch requests created on other devices
+        const { hasActive, activeService, source } = await syncCustomerActiveServiceFromBackend();
+
+        if (hasActive && activeService) {
           // Check if request has already expired (based on stored expiresAt)
           const isExpired = await isActiveServiceExpired();
 
@@ -71,62 +131,26 @@ export default function CustomerHomeScreen() {
             return;
           }
 
+          // Update Redux state for logout restriction
+          dispatch(setCustomerActiveService({
+            requestId: activeService.requestId,
+            status: activeService.status,
+          }));
+
           if (__DEV__) {
-            console.log('[CustomerHome] Found active service, redirecting to live-offers:', activeService);
+            console.log('[CustomerHome] Found active service from', source, ':', activeService);
           }
 
-          // Redirect to live-offers with the stored data (including retry params)
-          // Pass status and expiresAt for proper state restoration
-          router.replace({
-            pathname: '/(customer)/(home)/live-offers',
-            params: {
-              requestId: activeService.requestId.toString(),
-              // Pass expiresAt for timer restoration
-              ...(activeService.expiresAt && {
-                expiresAt: activeService.expiresAt,
-              }),
-              // Pass status for state restoration
-              ...(activeService.status && {
-                restoredStatus: activeService.status,
-              }),
-              ...(activeService.serviceLocation && {
-                latitude: activeService.serviceLocation.latitude.toString(),
-                longitude: activeService.serviceLocation.longitude.toString(),
-              }),
-              ...(activeService.serviceAddress && {
-                address: activeService.serviceAddress,
-              }),
-              // Retry params for Search Again functionality
-              ...(activeService.categoryId && {
-                categoryId: activeService.categoryId.toString(),
-              }),
-              ...(activeService.problemTitle && {
-                problemTitle: activeService.problemTitle,
-              }),
-              ...(activeService.description !== undefined && {
-                description: activeService.description,
-              }),
-              // Pass acceptance data if available (for cancel window restoration)
-              ...(activeService.proposalId && {
-                proposalId: activeService.proposalId.toString(),
-              }),
-              ...(activeService.acceptedAt && {
-                acceptedAtTimestamp: activeService.acceptedAt.toString(),
-              }),
-              // Pass vendor location for immediate restoration (app kill recovery)
-              ...(activeService.vendorLocation && {
-                vendorLatitude: activeService.vendorLocation.latitude.toString(),
-                vendorLongitude: activeService.vendorLocation.longitude.toString(),
-                vendorTimestamp: activeService.vendorLocation.timestamp.toString(),
-              }),
-              // Pass vendor info for offline display
-              ...(activeService.acceptedVendor && {
-                vendorId: activeService.acceptedVendor.id.toString(),
-                vendorName: activeService.acceptedVendor.full_name,
-              }),
-            },
-          });
+          // Auto-navigate to live offers (no alert)
+          if (__DEV__) {
+            console.log('[CustomerHome] Auto-navigating to live-offers for active request');
+          }
+          navigateToLiveOffers(activeService);
+          return;
         }
+
+        // No active request found
+        setCheckingActiveService(false);
       } catch (error) {
         if (__DEV__) {
           console.error('[CustomerHome] Error checking active service:', error);
@@ -134,7 +158,6 @@ export default function CustomerHomeScreen() {
         // Clear potentially corrupted data
         await clearCustomerActiveService().catch(() => { });
         dispatch(clearCustomerActiveServiceState());
-      } finally {
         setCheckingActiveService(false);
       }
     };
@@ -180,11 +203,14 @@ export default function CustomerHomeScreen() {
     });
   };
 
-  // Show loading while checking for active service
+  // Show loading while checking for active service (backend sync)
   if (checkingActiveService) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color={COLORS.primary} />
+        <Text type="body" style={{ marginTop: 16, color: COLORS.gray600 }}>
+          Checking for active requests...
+        </Text>
       </View>
     );
   }

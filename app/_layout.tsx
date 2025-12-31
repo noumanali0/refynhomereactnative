@@ -1,7 +1,7 @@
 import 'react-native-gesture-handler';
 import '../global.css';
 import { Slot, useRouter, useSegments } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Provider, useDispatch } from "react-redux";
 // import { PersistGate } from "redux-persist/integration/react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -9,17 +9,21 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { store } from "@/store";
 import { useAppSelector, useAppDispatch } from '@/hooks/useAppDispatch';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, Alert, View, ActivityIndicator } from 'react-native';
 import { useFonts } from "expo-font";
 import { FONTS } from '@/constants/fonts';
 import * as SplashScreen from "expo-splash-screen";
+import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { restoreSession, logoutUser } from '@/store/slices/authSlice';
+import { restoreSession, logoutUser, clearLogoutState } from '@/store/slices/authSlice';
+import { COLORS } from '@/constants/colors';
+import Text from '@/components/common/Text';
 import { ToastProvider } from '@/contexts/ToastContext';
 import { initializeApiClient } from '@/api/client';
 import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import { connectSocket, disconnectSocket, resetDispatchState, restoreActiveJob, restoreCustomerActiveService } from '@/store/slices/dispatchSlice';
 import { defineBackgroundLocationTask } from '@/services/backgroundLocationService';
+import { setupAndRegisterPushToken } from '@/utils/notifications';
 
 // Onboarding storage key
 const ONBOARDING_COMPLETE_KEY = 'hasSeenOnboarding';
@@ -247,14 +251,60 @@ function RootLayoutNav() {
     return () => clearTimeout(redirectTimeout);
   }, [isAuthenticated, role, segments, isLoading, isInitialized, activeJobId, hasSeenOnboarding, isLoggingOut]);
 
-  // WebSocket connection management
+  // Handle logout completion - navigate to login and clear logout state
+  useEffect(() => {
+    if (isLoggingOut && !isAuthenticated && isInitialized) {
+      if (__DEV__) {
+        console.log('[_layout] Logout complete, redirecting to login...');
+      }
+
+      // Small delay to ensure smooth transition
+      const logoutTimeout = setTimeout(() => {
+        router.replace('/(auth)/login');
+        // Clear logout state after navigation starts
+        dispatch(clearLogoutState());
+      }, 100);
+
+      return () => clearTimeout(logoutTimeout);
+    }
+  }, [isLoggingOut, isAuthenticated, isInitialized, router, dispatch]);
+
+  // WebSocket connection management and push token registration
   useEffect(() => {
     if (isAuthenticated && userId && role) {
       // Connect to WebSocket when authenticated
       dispatch(connectSocket());
 
+      // Register push token with backend for device session tracking (best-effort)
+      setupAndRegisterPushToken().catch((error) => {
+        if (__DEV__) {
+          console.warn('[_layout] Failed to register push token:', error);
+        }
+      });
+
+      // Periodic session validation - checks if token is still valid
+      // This ensures logout happens even if push notification fails
+      // If token is blacklisted (device transfer), API call will fail with 401
+      // and the interceptor will automatically trigger logout
+      const sessionCheckInterval = setInterval(async () => {
+        try {
+          const { apiClient } = await import('@/api/client');
+          await apiClient.get('/auth/me/');
+          if (__DEV__) {
+            console.log('[Auth] Session check: valid');
+          }
+        } catch (error: any) {
+          // If 401, the interceptor will handle logout automatically
+          // Just log here for debugging
+          if (__DEV__) {
+            console.log('[Auth] Session check failed:', error?.response?.status || error?.message);
+          }
+        }
+      }, 30000); // Check every 30 seconds
+
       return () => {
-        // Disconnect and reset state on unmount
+        // Cleanup interval and disconnect
+        clearInterval(sessionCheckInterval);
         dispatch(disconnectSocket());
         dispatch(resetDispatchState());
       };
@@ -263,6 +313,84 @@ function RootLayoutNav() {
       dispatch(resetDispatchState());
     }
   }, [isAuthenticated, userId, role]);
+
+  // Push notification listener for force logout and login attempts
+  useEffect(() => {
+    // Only set up listener when authenticated
+    if (!isAuthenticated) return;
+
+    // Handler for received notifications (when app is in foreground)
+    const notificationReceivedSubscription = Notifications.addNotificationReceivedListener(notification => {
+      const data = notification.request.content.data as {
+        type?: string;
+        action?: string;
+      };
+
+      // DEBUG: Log ALL notifications to verify they're being received
+      console.log('[NOTIFICATION] Received in foreground:', JSON.stringify(data));
+      if (__DEV__) {
+        console.log('[_layout] Notification received:', data);
+      }
+
+      if (data.type === 'force_logout' && data.action === 'logout') {
+        // Force logout this device - user was logged in from another device
+        Alert.alert(
+          'Session Ended',
+          'Your account was logged in from another device. You have been logged out.',
+          [{
+            text: 'OK',
+            onPress: () => {
+              dispatch(logoutUser());
+              router.replace('/(auth)/login');
+            }
+          }],
+          { cancelable: false }
+        );
+      }
+
+      if (data.type === 'login_attempt') {
+        // Show notification about login attempt on another device
+        Alert.alert(
+          'Login Attempt',
+          'Someone is trying to login to your account from another device.'
+        );
+      }
+    });
+
+    // Handler for notification responses (when user taps notification)
+    const notificationResponseSubscription = Notifications.addNotificationResponseReceivedListener(response => {
+      const data = response.notification.request.content.data as {
+        type?: string;
+        action?: string;
+      };
+
+      if (__DEV__) {
+        console.log('[_layout] Notification tapped:', data);
+      }
+
+      if (data.type === 'force_logout' && data.action === 'logout') {
+        // Force logout when notification is tapped
+        dispatch(logoutUser());
+        router.replace('/(auth)/login');
+      }
+    });
+
+    return () => {
+      notificationReceivedSubscription.remove();
+      notificationResponseSubscription.remove();
+    };
+  }, [isAuthenticated, dispatch, router]);
+
+  // Show full-screen logout overlay during logout process
+  // This prevents the weird UI flash when navigation state changes
+  if (isLoggingOut) {
+    return (
+      <View style={styles.logoutOverlay}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+        <Text style={styles.logoutText}>Logging out...</Text>
+      </View>
+    );
+  }
 
   return <Slot />;
 }
@@ -312,6 +440,17 @@ const styles = StyleSheet.create({
   safe: {
     flex: 1,
     backgroundColor: "#fff",
+  },
+  logoutOverlay: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  logoutText: {
+    marginTop: 16,
+    color: COLORS.gray600,
+    fontSize: 16,
   },
 });
 

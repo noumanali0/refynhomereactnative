@@ -22,10 +22,11 @@ import {
     setFilter,
     selectFilteredVendorHistory,
     selectVendorHistoryLoading,
+    selectVendorHistoryLoadingMore,
     selectVendorHistoryRefreshing,
     selectVendorHistoryFilter,
     selectVendorHistoryHasMore,
-    selectVendorHistoryPage,
+    selectVendorHistoryTotalCount,
     selectVendorHistory,
 } from '@/store/slices/vendorHistorySlice';
 import type { VendorHistoryJob } from '@/services/vendorHistoryService';
@@ -39,14 +40,15 @@ export default function HistoryScreen() {
     const jobs = useSelector(selectVendorHistory);
     const filteredJobs = useSelector(selectFilteredVendorHistory);
     const isLoading = useSelector(selectVendorHistoryLoading);
+    const isLoadingMore = useSelector(selectVendorHistoryLoadingMore);
     const isRefreshing = useSelector(selectVendorHistoryRefreshing);
     const activeFilter = useSelector(selectVendorHistoryFilter);
     const hasMore = useSelector(selectVendorHistoryHasMore);
-    const currentPage = useSelector(selectVendorHistoryPage);
+    const totalCount = useSelector(selectVendorHistoryTotalCount);
 
     // Fetch history on mount
     useEffect(() => {
-        dispatch(fetchVendorHistory({ page: 1, page_size: 20 }));
+        dispatch(fetchVendorHistory(undefined));
     }, [dispatch]);
 
     // Calculate stats from real data
@@ -95,8 +97,6 @@ export default function HistoryScreen() {
     const handleFilterChange = useCallback((filter: FilterType) => {
         dispatch(setFilter(filter));
         dispatch(fetchVendorHistory({
-            page: 1,
-            page_size: 20,
             status: filter === 'all' ? undefined : filter,
         }));
     }, [dispatch]);
@@ -106,12 +106,12 @@ export default function HistoryScreen() {
         dispatch(refreshVendorHistory(activeFilter));
     }, [dispatch, activeFilter]);
 
-    // Handle load more
+    // Handle load more (infinite scroll)
     const onEndReached = useCallback(() => {
-        if (!isLoading && hasMore) {
-            dispatch(loadMoreVendorHistory({ page: currentPage + 1, filter: activeFilter }));
+        if (!isLoadingMore && hasMore) {
+            dispatch(loadMoreVendorHistory());
         }
-    }, [dispatch, isLoading, hasMore, currentPage, activeFilter]);
+    }, [dispatch, isLoadingMore, hasMore]);
 
     // Render filter tab
     const renderFilterTab = (filter: FilterType, label: string, icon: string, color: string) => {
@@ -244,15 +244,31 @@ export default function HistoryScreen() {
         </View>
     );
 
-    // Render footer loading
-    const renderFooter = () => {
-        if (!isLoading || !hasMore) return null;
-        return (
-            <View style={styles.footerLoader}>
-                <ActivityIndicator size="small" color={COLORS.primary} />
-            </View>
-        );
-    };
+    // Render footer (pagination info and loading indicator)
+    const renderFooter = useCallback(() => {
+        if (sortedJobs.length === 0) return null;
+
+        if (isLoadingMore) {
+            return (
+                <View style={styles.footerContainer}>
+                    <ActivityIndicator size="small" color={COLORS.primary} />
+                    <Text type="body2" style={styles.footerText}>Loading more...</Text>
+                </View>
+            );
+        }
+
+        if (!hasMore && sortedJobs.length > 0) {
+            return (
+                <View style={styles.footerContainer}>
+                    <Text type="body2" style={styles.footerText}>
+                        Showing {jobs.length} of {totalCount} jobs
+                    </Text>
+                </View>
+            );
+        }
+
+        return null;
+    }, [isLoadingMore, hasMore, sortedJobs.length, jobs.length, totalCount]);
 
     return (
         <View style={styles.container}>
@@ -473,4 +489,16 @@ const styles = StyleSheet.create({
     emptyMessage: { color: COLORS.gray600, textAlign: 'center', lineHeight: moderateScale(20) },
     clearFilterButton: { marginTop: verticalScale(20), paddingVertical: verticalScale(10), paddingHorizontal: scale(20), backgroundColor: COLORS.primary, borderRadius: moderateScale(10) },
     clearFilterText: { color: COLORS.white },
+
+    // Footer (pagination)
+    footerContainer: {
+        paddingVertical: verticalScale(16),
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'row',
+        gap: scale(8),
+    },
+    footerText: {
+        color: COLORS.gray500,
+    },
 });

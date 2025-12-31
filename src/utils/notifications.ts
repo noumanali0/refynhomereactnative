@@ -2,6 +2,8 @@
 import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import { Platform } from "react-native";
+// Note: store and registerPushToken are imported lazily inside setupAndRegisterPushToken
+// to avoid circular import issues with Redux store initialization
 
 // ✅ Maintain in-memory map of offerId → notificationId
 const activeNotifications: Record<string, string> = {};
@@ -39,15 +41,26 @@ export async function setupPushNotifications(): Promise<string | null> {
         console.warn("🚫 Push notification permission not granted");
         return null;
     }
+    // Get Expo push token
+    let pushToken: string | null = null;
 
-    const projectId = Device.isDevice
-        ? (await Notifications.getExpoPushTokenAsync({
-            projectId: "YOUR-EXPO-PROJECT-ID", // 👈 must be set for bare workflow or SDK 51+
-        })).data
-        : null;
+    if (Device.isDevice) {
+        try {
+            console.log("📱 Getting Expo push token...");
+            const tokenResponse = await Notifications.getExpoPushTokenAsync({
+                projectId: "7a3ee123-d1a2-450e-abec-70c92c577477",
+            });
+            pushToken = tokenResponse.data;
+            console.log("✅ Expo Push Token:", pushToken);
+        } catch (error) {
+            console.error("❌ Failed to get Expo push token:", error);
+            return null;
+        }
+    } else {
+        console.log("⚠️ Not a physical device, skipping push token");
+    }
 
-    token = projectId;
-    console.log("✅ Expo Push Token:", token);
+    token = pushToken;
 
     // Android channel
     if (Platform.OS === "android") {
@@ -60,6 +73,35 @@ export async function setupPushNotifications(): Promise<string | null> {
     }
 
     return token;
+}
+
+// ✅ 2b. Setup push notifications and register token with backend
+// Call this after successful login to register the push token for device session tracking
+export async function setupAndRegisterPushToken(): Promise<string | null> {
+    try {
+        // Get the push token
+        const token = await setupPushNotifications();
+
+        if (!token) {
+            console.log("📱 No push token available (simulator or permission denied)");
+            return null;
+        }
+
+        // Register push token with backend for device session tracking
+        try {
+            const { store } = await import("@/store");
+            const { registerPushToken } = await import("@/store/slices/authSlice");
+            await store.dispatch(registerPushToken({ pushToken: token })).unwrap();
+            console.log("✅ Push token registered with backend");
+        } catch (error) {
+            console.warn("⚠️ Failed to register push token with backend:", error);
+        }
+
+        return token;
+    } catch (error) {
+        console.warn("⚠️ Failed to setup push notifications:", error);
+        return null;
+    }
 }
 
 // ✅ 3. Send offer notification & store ID for later removal

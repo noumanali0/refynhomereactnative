@@ -12,6 +12,7 @@
 
 import { apiClient } from '@/api/client';
 import { AUTH_ENDPOINTS } from '@/api/endpoints';
+import { deviceService } from './deviceService';
 import type {
   SignupRequest,
   SignupResponse,
@@ -462,15 +463,18 @@ class AuthService {
    * @param refreshToken - The refresh token to blacklist
    * @returns Promise that resolves when logout is complete
    */
-  async logout(refreshToken: string): Promise<{ message: string; status: 'logged_out' }> {
+  async logout(refreshToken: string, deviceId?: string): Promise<{ message: string; status: 'logged_out' }> {
     try {
       const response = await apiClient.post<{ message: string; status: 'logged_out' }>(
         AUTH_ENDPOINTS.LOGOUT,
-        { refresh: refreshToken }
+        {
+          refresh: refreshToken,
+          device_id: deviceId
+        }
       );
 
       if (__DEV__) {
-        console.log('[AuthService] Logout complete - token blacklisted');
+        console.log('[AuthService] Logout complete - token blacklisted, session deactivated');
       }
 
       return response.data;
@@ -667,6 +671,256 @@ class AuthService {
         message: 'OTP resent successfully',
       };
     } catch (error) {
+      throw error;
+    }
+  }
+
+  // ==========================================================================
+  // DEVICE SESSION MANAGEMENT (Single-Device Login)
+  // ==========================================================================
+
+  /**
+   * Check session status before login
+   * POST /api/auth/check-session/
+   *
+   * Determines if user has existing session on another device
+   * and whether they have an active service that would block login.
+   *
+   * @param phone - User's phone number
+   * @param deviceId - Current device's unique ID
+   * @returns Session status information
+   */
+  async checkSessionStatus(phone: string, deviceId: string): Promise<{
+    hasExistingSession: boolean;
+    hasActiveService: boolean;
+    activeServiceType: 'service_request' | 'active_job' | 'pending_proposal' | null;
+    existingDeviceName: string | null;
+    canLogin: boolean;
+    requiresOtp: boolean;
+  }> {
+    try {
+      const response = await apiClient.post<{
+        has_existing_session: boolean;
+        has_active_service: boolean;
+        active_service_type: 'service_request' | 'active_job' | 'pending_proposal' | null;
+        existing_device_name: string | null;
+        can_login: boolean;
+        requires_otp: boolean;
+      }>(AUTH_ENDPOINTS.CHECK_SESSION, {
+        phone,
+        device_id: deviceId,
+      });
+
+      return {
+        hasExistingSession: response.data.has_existing_session,
+        hasActiveService: response.data.has_active_service,
+        activeServiceType: response.data.active_service_type,
+        existingDeviceName: response.data.existing_device_name,
+        canLogin: response.data.can_login,
+        requiresOtp: response.data.requires_otp || false,
+      };
+    } catch (error) {
+      console.error('[AuthService] Check session status error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Request OTP for device transfer
+   * POST /api/auth/request-device-transfer-otp/
+   *
+   * Sends OTP to user's phone for transferring session to new device.
+   * Only allowed when user has existing session but NO active service.
+   *
+   * @param phone - User's phone number
+   * @param deviceId - New device's unique ID
+   */
+  async requestDeviceTransferOTP(phone: string, deviceId: string): Promise<{
+    message: string;
+    otpSent: boolean;
+  }> {
+    try {
+      const response = await apiClient.post<{
+        message: string;
+        otp_sent: boolean;
+      }>(AUTH_ENDPOINTS.REQUEST_DEVICE_TRANSFER_OTP, {
+        phone,
+        device_id: deviceId,
+      });
+
+      return {
+        message: response.data.message,
+        otpSent: response.data.otp_sent,
+      };
+    } catch (error) {
+      console.error('[AuthService] Request device transfer OTP error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Verify OTP and transfer session to new device
+   * POST /api/auth/verify-device-transfer/
+   *
+   * Verifies OTP and completes session transfer.
+   * Old device will be force logged out and receive push notification.
+   *
+   * @param params - Transfer verification parameters
+   * @returns Login response with tokens and user data
+   */
+  async verifyDeviceTransfer(params: {
+    phone: string;
+    code: string;
+    password: string;
+    deviceId: string;
+    deviceName: string;
+    pushToken?: string | null;
+  }): Promise<{
+    access: string;
+    refresh: string;
+    user: Customer | Vendor;
+    isVerified: boolean;
+    isOnboardingComplete: boolean;
+    transferredFromDevice: string | null;
+  }> {
+    try {
+      const response = await apiClient.post<{
+        access: string;
+        refresh: string;
+        user: UserAPI;
+        is_verified: boolean;
+        is_onboarding_complete: boolean;
+        transferred_from_device: string | null;
+      }>(AUTH_ENDPOINTS.VERIFY_DEVICE_TRANSFER, {
+        phone: params.phone,
+        code: params.code,
+        password: params.password,
+        device_id: params.deviceId,
+        device_name: params.deviceName,
+        push_token: params.pushToken,
+      });
+
+      // Convert API user to frontend format
+      const user = convertAPIUserToFrontend(response.data.user);
+
+      return {
+        access: response.data.access,
+        refresh: response.data.refresh,
+        user,
+        isVerified: response.data.is_verified,
+        isOnboardingComplete: response.data.is_onboarding_complete,
+        transferredFromDevice: response.data.transferred_from_device,
+      };
+    } catch (error) {
+      console.error('[AuthService] Verify device transfer error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Register push token with backend
+   * POST /api/auth/register-push-token/
+   *
+   * Registers the device's push token for receiving notifications
+   * about login attempts and force logouts.
+   *
+   * @param pushToken - Expo push token
+   * @param deviceId - Device's unique ID
+   */
+  async registerPushToken(pushToken: string, deviceId: string): Promise<void> {
+    try {
+      await apiClient.post(AUTH_ENDPOINTS.REGISTER_PUSH_TOKEN, {
+        push_token: pushToken,
+        device_id: deviceId,
+      });
+
+      if (__DEV__) {
+        console.log('[AuthService] Push token registered successfully');
+      }
+    } catch (error) {
+      console.error('[AuthService] Register push token error:', error);
+      // Don't throw - push token registration is best-effort
+    }
+  }
+
+  /**
+   * Login with device tracking
+   * POST /api/auth/login/
+   *
+   * Updated login method that includes device information for session tracking.
+   *
+   * @param phone - Phone number
+   * @param password - Password
+   * @param deviceId - Device's unique ID
+   * @param deviceName - Human-readable device name
+   * @param pushToken - Expo push token (optional)
+   * @param forceLogoutOther - Force logout other devices (only after OTP verification)
+   */
+  async loginWithDevice(
+    phone: string,
+    password: string,
+    deviceId: string,
+    deviceName: string,
+    pushToken?: string | null,
+    forceLogoutOther?: boolean
+  ): Promise<{
+    access: string;
+    refresh: string;
+    user: Customer | Vendor;
+    isVerified: boolean;
+    isOnboardingComplete: boolean;
+    // Session conflict info (if any)
+    hasExistingSession?: boolean;
+    hasActiveService?: boolean;
+    activeServiceType?: string;
+    existingDeviceName?: string;
+    requiresOtp?: boolean;
+  }> {
+    try {
+      const response = await apiClient.post<LoginResponse & {
+        error?: string;
+        has_existing_session?: boolean;
+        has_active_service?: boolean;
+        active_service_type?: string;
+        existing_device_name?: string;
+        requires_otp?: boolean;
+      }>(AUTH_ENDPOINTS.LOGIN, {
+        phone,
+        password,
+        device_id: deviceId,
+        device_name: deviceName,
+        push_token: pushToken,
+        force_logout_other: forceLogoutOther || false,
+      });
+
+      // Convert API user to frontend format
+      const user = convertAPIUserToFrontend(response.data.user);
+
+      return {
+        access: response.data.access,
+        refresh: response.data.refresh,
+        user,
+        isVerified: response.data.is_verified,
+        isOnboardingComplete: response.data.is_onboarding_complete,
+      };
+    } catch (error: any) {
+      // Check if this is a session conflict error
+      if (error.response?.status === 409 || error.response?.status === 403) {
+        const data = error.response.data;
+        if (data.error === 'existing_session' || data.error === 'active_service_blocking') {
+          // Return the conflict info instead of throwing
+          throw {
+            isSessionConflict: true,
+            hasExistingSession: data.has_existing_session,
+            hasActiveService: data.has_active_service,
+            activeServiceType: data.active_service_type,
+            existingDeviceName: data.existing_device_name,
+            requiresOtp: data.requires_otp,
+            message: data.message,
+          };
+        }
+      }
+      console.error('[AuthService] Login with device error:', error);
       throw error;
     }
   }

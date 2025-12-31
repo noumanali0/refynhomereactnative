@@ -49,11 +49,34 @@ interface BackendFavoriteVendor {
 }
 
 /**
- * Backend LIST response: { count, results }
+ * Backend LIST response with pagination: { count, next, previous, page, total_pages, results }
  */
 interface ListFavoritesBackendResponse {
   count: number;
+  next: string | null;
+  previous: string | null;
+  page?: number;
+  total_pages?: number;
   results: BackendFavoriteVendor[];
+}
+
+/**
+ * Pagination filters for fetching favorites
+ */
+export interface FavoritePaginationFilters {
+  page?: number;
+  page_size?: number;
+}
+
+/**
+ * Paginated response for favorites
+ */
+export interface PaginatedFavoritesResponse {
+  favorites: FavoriteVendor[];
+  count: number;
+  page: number;
+  totalPages: number;
+  hasMore: boolean;
 }
 
 /**
@@ -156,9 +179,10 @@ function transformToFavoriteVendor(backendVendor: BackendFavoriteVendor): Favori
 // ============================================================================
 
 /**
- * Get list of favorite vendors for current customer
+ * Get list of favorite vendors for current customer (simple - no pagination)
  * Backend returns: { count, results: BackendFavoriteVendor[] }
  * We transform to: FavoriteVendor[]
+ * @deprecated Use getFavoriteVendorsPaginated for new implementations
  */
 export async function getFavoriteVendors(): Promise<FavoriteVendor[]> {
   try {
@@ -174,6 +198,55 @@ export async function getFavoriteVendors(): Promise<FavoriteVendor[]> {
   } catch (error) {
     if (__DEV__) {
       console.error('[FavoriteService] getFavoriteVendors error:', error);
+    }
+    throw new Error(getErrorMessage(error));
+  }
+}
+
+/**
+ * Get paginated list of favorite vendors for current customer
+ * Backend returns: { count, next, previous, page, total_pages, results }
+ * We transform to: PaginatedFavoritesResponse
+ */
+export async function getFavoriteVendorsPaginated(
+  filters?: FavoritePaginationFilters
+): Promise<PaginatedFavoritesResponse> {
+  try {
+    const params = new URLSearchParams();
+    if (filters?.page) params.append('page', filters.page.toString());
+    if (filters?.page_size) params.append('page_size', filters.page_size.toString());
+
+    const url = params.toString()
+      ? `${FAVORITE_ENDPOINTS.LIST}?${params.toString()}`
+      : FAVORITE_ENDPOINTS.LIST;
+
+    const response = await apiClient.get<ListFavoritesBackendResponse>(url);
+
+    // Handle edge case: backend might return empty results
+    if (!response.data?.results || !Array.isArray(response.data.results)) {
+      return {
+        favorites: [],
+        count: 0,
+        page: 1,
+        totalPages: 1,
+        hasMore: false,
+      };
+    }
+
+    const favorites = response.data.results.map(transformToFavoriteVendor);
+    const currentPage = response.data.page || 1;
+    const totalPages = response.data.total_pages || 1;
+
+    return {
+      favorites,
+      count: response.data.count,
+      page: currentPage,
+      totalPages,
+      hasMore: currentPage < totalPages,
+    };
+  } catch (error) {
+    if (__DEV__) {
+      console.error('[FavoriteService] getFavoriteVendorsPaginated error:', error);
     }
     throw new Error(getErrorMessage(error));
   }
@@ -269,6 +342,7 @@ export async function toggleFavoriteVendor(vendorId: number): Promise<boolean> {
 
 export const favoriteService = {
   getAll: getFavoriteVendors,
+  getPaginated: getFavoriteVendorsPaginated,
   add: addFavoriteVendor,
   remove: removeFavoriteVendor,
   check: checkIsFavorite,

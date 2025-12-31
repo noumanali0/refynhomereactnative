@@ -21,22 +21,28 @@ interface ServiceHistoryState {
   requests: ServiceHistoryRequest[];
   selectedRequest: ServiceHistoryRequest | null;
   isLoading: boolean;
+  isLoadingMore: boolean;  // Separate loading state for load more
   isRefreshing: boolean;
   error: string | null;
   filter: HistoryFilter;
   hasMore: boolean;
   page: number;
+  totalCount: number;      // Total records in database
+  totalPages: number;      // Total pages available
 }
 
 const initialState: ServiceHistoryState = {
   requests: [],
   selectedRequest: null,
   isLoading: false,
+  isLoadingMore: false,
   isRefreshing: false,
   error: null,
   filter: 'all',
   hasMore: true,
   page: 1,
+  totalCount: 0,
+  totalPages: 0,
 };
 
 // ============================================================================
@@ -54,6 +60,9 @@ export const fetchServiceHistory = createAsyncThunk(
       return {
         requests: response.results,
         hasMore: response.next !== null,
+        totalCount: response.count,
+        totalPages: response.total_pages || Math.ceil(response.count / 10),
+        page: response.page || 1,
       };
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : 'Failed to fetch history');
@@ -68,10 +77,12 @@ export const refreshServiceHistory = createAsyncThunk(
   'serviceHistory/refresh',
   async (_, { rejectWithValue }) => {
     try {
-      const response = await serviceHistoryService.getHistory({ page: 1, page_size: 20 });
+      const response = await serviceHistoryService.getHistory({ page: 1, page_size: 10 });
       return {
         requests: response.results,
         hasMore: response.next !== null,
+        totalCount: response.count,
+        totalPages: response.total_pages || Math.ceil(response.count / 10),
       };
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : 'Failed to refresh history');
@@ -86,10 +97,12 @@ export const loadMoreHistory = createAsyncThunk(
   'serviceHistory/loadMore',
   async (page: number, { rejectWithValue }) => {
     try {
-      const response = await serviceHistoryService.getHistory({ page, page_size: 20 });
+      const response = await serviceHistoryService.getHistory({ page, page_size: 10 });
       return {
         requests: response.results,
         hasMore: response.next !== null,
+        totalCount: response.count,
+        totalPages: response.total_pages || Math.ceil(response.count / 10),
         page,
       };
     } catch (error) {
@@ -134,6 +147,8 @@ const serviceHistorySlice = createSlice({
       state.requests = [];
       state.page = 1;
       state.hasMore = true;
+      state.totalCount = 0;
+      state.totalPages = 0;
     },
   },
   extraReducers: (builder) => {
@@ -147,7 +162,9 @@ const serviceHistorySlice = createSlice({
         state.isLoading = false;
         state.requests = action.payload.requests;
         state.hasMore = action.payload.hasMore;
-        state.page = 1;
+        state.totalCount = action.payload.totalCount;
+        state.totalPages = action.payload.totalPages;
+        state.page = action.payload.page;
       })
       .addCase(fetchServiceHistory.rejected, (state, action) => {
         state.isLoading = false;
@@ -164,6 +181,8 @@ const serviceHistorySlice = createSlice({
         state.isRefreshing = false;
         state.requests = action.payload.requests;
         state.hasMore = action.payload.hasMore;
+        state.totalCount = action.payload.totalCount;
+        state.totalPages = action.payload.totalPages;
         state.page = 1;
       })
       .addCase(refreshServiceHistory.rejected, (state, action) => {
@@ -174,16 +193,18 @@ const serviceHistorySlice = createSlice({
     // Load more
     builder
       .addCase(loadMoreHistory.pending, (state) => {
-        state.isLoading = true;
+        state.isLoadingMore = true;  // Use separate loading state
       })
       .addCase(loadMoreHistory.fulfilled, (state, action) => {
-        state.isLoading = false;
+        state.isLoadingMore = false;
         state.requests = [...state.requests, ...action.payload.requests];
         state.hasMore = action.payload.hasMore;
+        state.totalCount = action.payload.totalCount;
+        state.totalPages = action.payload.totalPages;
         state.page = action.payload.page;
       })
       .addCase(loadMoreHistory.rejected, (state, action) => {
-        state.isLoading = false;
+        state.isLoadingMore = false;
         state.error = action.payload as string;
       });
 
@@ -220,6 +241,9 @@ export const selectServiceHistory = (state: { serviceHistory: ServiceHistoryStat
 export const selectCurrentFilter = (state: { serviceHistory: ServiceHistoryState }) =>
   state.serviceHistory.filter;
 
+export const selectTotalCount = (state: { serviceHistory: ServiceHistoryState }) =>
+  state.serviceHistory.totalCount;
+
 // Memoized selector for filtered history - prevents unnecessary recalculations
 export const selectFilteredHistory = createSelector(
   [selectServiceHistory, selectCurrentFilter],
@@ -245,8 +269,8 @@ export const selectFilteredHistory = createSelector(
 );
 
 export const selectHistoryStats = createSelector(
-  [selectServiceHistory],
-  (requests) => {
+  [selectServiceHistory, selectTotalCount],
+  (requests, totalCount) => {
     // Calculate this month's completed services
     const now = new Date();
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -262,7 +286,7 @@ export const selectHistoryStats = createSelector(
     const completedCount = requests.filter(r => r.status === 'completed').length;
 
     return {
-      total: requests.length,
+      total: totalCount || requests.length,  // Use DB total count, fallback to fetched records
       // New field names expected by UI
       totalActive: activeCount,
       totalCompleted: completedCount,
@@ -292,6 +316,12 @@ export const selectHasMore = (state: { serviceHistory: ServiceHistoryState }) =>
 
 export const selectCurrentPage = (state: { serviceHistory: ServiceHistoryState }) =>
   state.serviceHistory.page;
+
+export const selectTotalPages = (state: { serviceHistory: ServiceHistoryState }) =>
+  state.serviceHistory.totalPages;
+
+export const selectIsLoadingMore = (state: { serviceHistory: ServiceHistoryState }) =>
+  state.serviceHistory.isLoadingMore;
 
 // ============================================================================
 // EXPORTS

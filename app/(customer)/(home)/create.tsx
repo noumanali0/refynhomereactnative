@@ -30,9 +30,10 @@ import {
     getServiceCategories,
     ServiceCategory,
 } from "@/services/serviceRequestApi";
-import { saveCustomerActiveService } from "@/services/customerActiveServiceService";
+import { saveCustomerActiveService, syncCustomerActiveServiceFromBackend } from "@/services/customerActiveServiceService";
 import { useAppDispatch } from "@/hooks/useAppDispatch";
 import { setCustomerActiveService } from "@/store/slices/dispatchSlice";
+import { useToast } from "@/contexts/ToastContext";
 
 // ============================================================================
 // Error Boundary Component
@@ -286,7 +287,9 @@ function useServiceCategories() {
                 const data = await getServiceCategories(signal);
                 // Check if aborted before updating state
                 if (!signal.aborted) {
-                    setCategories(data);
+                    // Handle both array and paginated response formats
+                    const categoriesArray = Array.isArray(data) ? data : ((data as any)?.results ?? []);
+                    setCategories(categoriesArray);
                 }
             } catch (error: unknown) {
                 // Handle abort gracefully - don't update state if cancelled
@@ -313,13 +316,14 @@ function useServiceCategories() {
     }, []);
 
     // Memoized category items for dropdown
-    const categoryItems = useMemo(() =>
-        (categories ?? []).map(c => ({
+    const categoryItems = useMemo(() => {
+        // Defensive check - ensure categories is always an array
+        const safeCategories = Array.isArray(categories) ? categories : [];
+        return safeCategories.map(c => ({
             label: c.name,
             value: c.id.toString(),
-        })),
-        [categories]
-    );
+        }));
+    }, [categories]);
 
     return { categories, categoryItems, loadingCategories };
 }
@@ -820,6 +824,7 @@ const FormContent = memo(function FormContent({
 const RequestServiceScreen = () => {
     const [showAddressSearch, setShowAddressSearch] = useState(false);
     const dispatch = useAppDispatch();
+    const { showToast } = useToast();
 
     // Custom hooks for data fetching and image picking
     const { categories, categoryItems, loadingCategories } = useServiceCategories();
@@ -1029,6 +1034,40 @@ const RequestServiceScreen = () => {
         const signal = submitAbortControllerRef.current.signal;
 
         try {
+            // Pre-creation backend check (multi-device duplicate prevention)
+            // This prevents creating duplicate requests if another device already created one
+            if (__DEV__) {
+                console.log('[CreateRequest] Checking backend for existing active request...');
+            }
+
+            const { hasActive, activeService } = await syncCustomerActiveServiceFromBackend();
+
+            if (hasActive && activeService) {
+                if (__DEV__) {
+                    console.log('[CreateRequest] Found existing active request:', activeService.requestId);
+                }
+
+                Alert.alert(
+                    'Active Request Exists',
+                    'You already have an active service request. Please complete or cancel it before creating a new one.',
+                    [
+                        {
+                            text: 'View Request',
+                            onPress: () => {
+                                router.replace({
+                                    pathname: '/(customer)/(home)/live-offers',
+                                    params: { requestId: activeService.requestId.toString() },
+                                });
+                            },
+                        },
+                        { text: 'OK', style: 'cancel' },
+                    ]
+                );
+                formikHelpers.setSubmitting(false);
+                isSubmittingRef.current = false;
+                return;
+            }
+
             const selectedCategory = findCategory(values.selectedService, categories);
 
             if (!selectedCategory) {
@@ -1114,7 +1153,7 @@ const RequestServiceScreen = () => {
             isSubmittingRef.current = false;
             // Formik handles setSubmitting(false) automatically when promise resolves
         }
-    }, [categories, findCategory, navigateToLiveOffers]);
+    }, [categories, findCategory, navigateToLiveOffers, showToast]);
 
     const goBack = useCallback(() => {
         // Cancel any ongoing submission

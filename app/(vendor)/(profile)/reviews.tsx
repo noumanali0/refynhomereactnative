@@ -11,6 +11,7 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
     View,
     ScrollView,
+    FlatList,
     TouchableOpacity,
     StyleSheet,
     ActivityIndicator,
@@ -29,12 +30,16 @@ import { ReviewCard } from '@/components/vendor/ReviewCard';
 import { COLORS } from '@/constants/colors';
 import {
     fetchVendorReviews,
+    loadMoreVendorReviews,
+    refreshVendorReviews,
     selectVendorReviews,
     selectIsLoadingVendorReviews,
+    selectIsLoadingMoreReviews,
     selectVendorReviewsError,
     selectVendorReviewsCount,
     selectVendorReviewsDistribution,
     selectVendorAverageRating,
+    selectVendorReviewsHasMore,
     clearVendorReviews,
 } from '@/store/slices/reviewSlice';
 
@@ -62,10 +67,12 @@ export default function ReviewsScreen() {
     // Get vendor reviews from Redux
     const vendorReviews = useSelector(selectVendorReviews);
     const isLoading = useSelector(selectIsLoadingVendorReviews);
+    const isLoadingMore = useSelector(selectIsLoadingMoreReviews);
     const error = useSelector(selectVendorReviewsError);
     const totalCount = useSelector(selectVendorReviewsCount);
     const distribution = useSelector(selectVendorReviewsDistribution);
     const averageRating = useSelector(selectVendorAverageRating);
+    const hasMore = useSelector(selectVendorReviewsHasMore);
 
     // Extract vendor ID from user data
     const vendorId = useMemo(() => {
@@ -124,11 +131,26 @@ export default function ReviewsScreen() {
     }, [vendorReviews]);
 
     // Handle refresh
-    const onRefresh = async () => {
+    const onRefresh = useCallback(async () => {
+        if (!vendorId) return;
         setRefreshing(true);
-        await fetchReviews();
+        await dispatch(refreshVendorReviews({
+            vendorId,
+            stars: filterByStar === 'all' ? undefined : filterByStar,
+            sort: sortBy,
+        }));
         setRefreshing(false);
-    };
+    }, [dispatch, vendorId, filterByStar, sortBy]);
+
+    // Handle load more (infinite scroll)
+    const handleLoadMore = useCallback(() => {
+        if (!vendorId || isLoadingMore || !hasMore) return;
+        dispatch(loadMoreVendorReviews({
+            vendorId,
+            stars: filterByStar === 'all' ? undefined : filterByStar,
+            sort: sortBy,
+        }));
+    }, [dispatch, vendorId, isLoadingMore, hasMore, filterByStar, sortBy]);
 
     // Handle filter by star
     const handleStarFilter = (star: number) => {
@@ -186,6 +208,32 @@ export default function ReviewsScreen() {
             </TouchableOpacity>
         );
     };
+
+    // Render list footer (pagination info and loading indicator)
+    const renderListFooter = useCallback(() => {
+        if (processedReviews.length === 0) return null;
+
+        if (isLoadingMore) {
+            return (
+                <View style={styles.footerContainer}>
+                    <ActivityIndicator size="small" color={COLORS.primary} />
+                    <Text type="body2" style={styles.footerText}>Loading more...</Text>
+                </View>
+            );
+        }
+
+        if (!hasMore && processedReviews.length > 0) {
+            return (
+                <View style={styles.footerContainer}>
+                    <Text type="body2" style={styles.footerText}>
+                        Showing {vendorReviews.length} of {totalCount} reviews
+                    </Text>
+                </View>
+            );
+        }
+
+        return null;
+    }, [isLoadingMore, hasMore, processedReviews.length, vendorReviews.length, totalCount]);
 
     // Render empty state
     const renderEmptyState = () => (
@@ -334,14 +382,22 @@ export default function ReviewsScreen() {
                             </TouchableOpacity>
                         </View>
                     ) : processedReviews.length > 0 ? (
-                        processedReviews.map((review) => (
-                            <ReviewCard
-                                key={review.id}
-                                review={review}
-                                showReadMore={true}
-                                maxLines={3}
-                            />
-                        ))
+                        <FlatList
+                            data={processedReviews}
+                            keyExtractor={(item) => item.id.toString()}
+                            renderItem={({ item: review }) => (
+                                <ReviewCard
+                                    review={review}
+                                    showReadMore={true}
+                                    maxLines={3}
+                                />
+                            )}
+                            ListFooterComponent={renderListFooter}
+                            onEndReached={handleLoadMore}
+                            onEndReachedThreshold={0.5}
+                            scrollEnabled={false}
+                            nestedScrollEnabled={true}
+                        />
                     ) : (
                         renderEmptyState()
                     )}
@@ -599,5 +655,17 @@ const styles = StyleSheet.create({
         fontSize: moderateScale(14),
         fontWeight: '600',
         color: COLORS.white,
+    },
+
+    // Footer (pagination)
+    footerContainer: {
+        paddingVertical: verticalScale(16),
+        alignItems: 'center',
+        justifyContent: 'center',
+        flexDirection: 'row',
+        gap: scale(8),
+    },
+    footerText: {
+        color: COLORS.gray500,
     },
 });

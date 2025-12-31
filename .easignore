@@ -1,0 +1,3 @@
+# Ignore local native folders - EAS will generate fresh ones
+android/
+ios/

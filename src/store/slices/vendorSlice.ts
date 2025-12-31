@@ -13,8 +13,14 @@ interface VendorState {
   favoriteVendorIds: number[];
   favoriteVendors: FavoriteVendor[];
   isLoadingFavorites: boolean;
+  isLoadingMoreFavorites: boolean;
   isAddingFavorite: boolean;
   favoriteError: string | null;
+  // Pagination state for favorites
+  favoritesPage: number;
+  favoritesHasMore: boolean;
+  favoritesTotalCount: number;
+  favoritesTotalPages: number;
 }
 
 const initialState: VendorState = {
@@ -23,8 +29,14 @@ const initialState: VendorState = {
   favoriteVendorIds: [],
   favoriteVendors: [],
   isLoadingFavorites: false,
+  isLoadingMoreFavorites: false,
   isAddingFavorite: false,
   favoriteError: null,
+  // Pagination defaults
+  favoritesPage: 1,
+  favoritesHasMore: false,
+  favoritesTotalCount: 0,
+  favoritesTotalPages: 1,
 };
 
 // ============================================================================
@@ -32,16 +44,54 @@ const initialState: VendorState = {
 // ============================================================================
 
 /**
- * Fetch all favorite vendors from API
+ * Fetch favorite vendors from API (paginated - page 1)
  */
 export const fetchFavoriteVendors = createAsyncThunk(
   'vendor/fetchFavorites',
   async (_, { rejectWithValue }) => {
     try {
-      const favorites = await favoriteService.getAll();
-      return favorites;
+      const response = await favoriteService.getPaginated({ page: 1, page_size: 10 });
+      return response;
     } catch (error) {
       return rejectWithValue(error instanceof Error ? error.message : 'Failed to fetch favorites');
+    }
+  }
+);
+
+/**
+ * Load more favorite vendors (next page)
+ */
+export const loadMoreFavorites = createAsyncThunk(
+  'vendor/loadMoreFavorites',
+  async (_, { getState, rejectWithValue }) => {
+    try {
+      const state = getState() as { vendor: VendorState };
+      const nextPage = state.vendor.favoritesPage + 1;
+
+      // Don't load if no more pages
+      if (!state.vendor.favoritesHasMore) {
+        return null;
+      }
+
+      const response = await favoriteService.getPaginated({ page: nextPage, page_size: 10 });
+      return response;
+    } catch (error) {
+      return rejectWithValue(error instanceof Error ? error.message : 'Failed to load more favorites');
+    }
+  }
+);
+
+/**
+ * Refresh favorite vendors (pull to refresh)
+ */
+export const refreshFavorites = createAsyncThunk(
+  'vendor/refreshFavorites',
+  async (_, { rejectWithValue }) => {
+    try {
+      const response = await favoriteService.getPaginated({ page: 1, page_size: 10 });
+      return response;
+    } catch (error) {
+      return rejectWithValue(error instanceof Error ? error.message : 'Failed to refresh favorites');
     }
   }
 );
@@ -131,7 +181,7 @@ const vendorSlice = createSlice({
     },
   },
   extraReducers: (builder) => {
-    // Fetch favorites
+    // Fetch favorites (initial load - page 1)
     builder
       .addCase(fetchFavoriteVendors.pending, (state) => {
         state.isLoadingFavorites = true;
@@ -139,10 +189,64 @@ const vendorSlice = createSlice({
       })
       .addCase(fetchFavoriteVendors.fulfilled, (state, action) => {
         state.isLoadingFavorites = false;
-        state.favoriteVendors = action.payload;
-        state.favoriteVendorIds = action.payload.map(f => f.vendor_id);
+        state.favoriteVendors = action.payload.favorites;
+        state.favoriteVendorIds = action.payload.favorites.map(f => f.vendor_id);
+        state.favoritesPage = action.payload.page;
+        state.favoritesHasMore = action.payload.hasMore;
+        state.favoritesTotalCount = action.payload.count;
+        state.favoritesTotalPages = action.payload.totalPages;
       })
       .addCase(fetchFavoriteVendors.rejected, (state, action) => {
+        state.isLoadingFavorites = false;
+        state.favoriteError = action.payload as string;
+      });
+
+    // Load more favorites (next page)
+    builder
+      .addCase(loadMoreFavorites.pending, (state) => {
+        state.isLoadingMoreFavorites = true;
+        state.favoriteError = null;
+      })
+      .addCase(loadMoreFavorites.fulfilled, (state, action) => {
+        state.isLoadingMoreFavorites = false;
+        if (action.payload) {
+          // Append new favorites, avoiding duplicates
+          const existingIds = new Set(state.favoriteVendorIds);
+          const newFavorites = action.payload.favorites.filter(
+            f => !existingIds.has(f.vendor_id)
+          );
+          state.favoriteVendors = [...state.favoriteVendors, ...newFavorites];
+          state.favoriteVendorIds = [
+            ...state.favoriteVendorIds,
+            ...newFavorites.map(f => f.vendor_id)
+          ];
+          state.favoritesPage = action.payload.page;
+          state.favoritesHasMore = action.payload.hasMore;
+          state.favoritesTotalCount = action.payload.count;
+          state.favoritesTotalPages = action.payload.totalPages;
+        }
+      })
+      .addCase(loadMoreFavorites.rejected, (state, action) => {
+        state.isLoadingMoreFavorites = false;
+        state.favoriteError = action.payload as string;
+      });
+
+    // Refresh favorites (pull to refresh)
+    builder
+      .addCase(refreshFavorites.pending, (state) => {
+        state.isLoadingFavorites = true;
+        state.favoriteError = null;
+      })
+      .addCase(refreshFavorites.fulfilled, (state, action) => {
+        state.isLoadingFavorites = false;
+        state.favoriteVendors = action.payload.favorites;
+        state.favoriteVendorIds = action.payload.favorites.map(f => f.vendor_id);
+        state.favoritesPage = action.payload.page;
+        state.favoritesHasMore = action.payload.hasMore;
+        state.favoritesTotalCount = action.payload.count;
+        state.favoritesTotalPages = action.payload.totalPages;
+      })
+      .addCase(refreshFavorites.rejected, (state, action) => {
         state.isLoadingFavorites = false;
         state.favoriteError = action.payload as string;
       });
@@ -256,6 +360,10 @@ export const selectIsVendorFavorite = (vendorId: number) => (state: { vendor: Ve
   state.vendor.favoriteVendorIds.includes(vendorId);
 export const selectIsAddingFavorite = (state: { vendor: VendorState }) => state.vendor.isAddingFavorite;
 export const selectFavoriteError = (state: { vendor: VendorState }) => state.vendor.favoriteError;
+export const selectIsLoadingFavorites = (state: { vendor: VendorState }) => state.vendor.isLoadingFavorites;
+export const selectIsLoadingMoreFavorites = (state: { vendor: VendorState }) => state.vendor.isLoadingMoreFavorites;
+export const selectFavoritesHasMore = (state: { vendor: VendorState }) => state.vendor.favoritesHasMore;
+export const selectFavoritesTotalCount = (state: { vendor: VendorState }) => state.vendor.favoritesTotalCount;
 
 // ============================================================================
 // EXPORTS

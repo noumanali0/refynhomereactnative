@@ -31,6 +31,10 @@ export interface SocketVendor {
   profile_photo_url: string | null;
   service_radius_km: number;
   distance_km: number;
+  // Category-specific stats (for the service category being requested)
+  category_average_rating?: number;
+  category_total_reviews?: number;
+  category_completed_jobs?: number;
 }
 
 export interface SocketCategory {

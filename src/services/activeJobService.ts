@@ -13,6 +13,8 @@
  */
 
 import * as SecureStore from 'expo-secure-store';
+import { apiClient } from '@/api/client';
+import { VENDOR_ENDPOINTS, buildUrl } from '@/api/endpoints';
 
 // ============================================================================
 // Constants
@@ -149,6 +151,158 @@ export async function hasActiveJob(): Promise<boolean> {
 }
 
 // ============================================================================
+// Multi-Device Sync Functions
+// ============================================================================
+
+/**
+ * Result of vendor backend sync operation
+ */
+export interface VendorSyncResult {
+  /** Whether vendor has an active job or pending proposal */
+  hasActive: boolean;
+  /** Active job data if found */
+  activeJob: ActiveJobData | null;
+  /** Type of active state: 'active' (en_route/in_progress) or 'pending' (waiting for customer) */
+  jobType: 'active' | 'pending' | null;
+  /** Source of the data */
+  source: 'backend' | 'local' | null;
+}
+
+/**
+ * Backend response for vendor service requests
+ */
+interface VendorServiceRequestResponse {
+  count: number;
+  results: Array<{
+    id: number;
+    status: string;
+    accepted_proposal?: {
+      id: number;
+      vendor?: {
+        id: number;
+      };
+    } | null;
+    vendor_proposal?: {
+      id: number;
+    } | null;
+  }>;
+  type: string;
+}
+
+/**
+ * Sync vendor's active job from backend (for multi-device support)
+ *
+ * Call this on vendor app launch to detect if another device has an active job.
+ * This ensures Device B knows about a job accepted on Device A.
+ *
+ * Flow:
+ * 1. Check for active jobs (en_route, in_progress)
+ * 2. If not found, check for pending proposals (waiting for customer)
+ * 3. If found: save to local SecureStore and return
+ * 4. If not found: clear stale local data
+ * 5. On error: fall back to local storage
+ */
+export async function syncVendorActiveJobFromBackend(): Promise<VendorSyncResult> {
+  try {
+    if (__DEV__) {
+      console.log('[ActiveJobService] Starting backend sync...');
+    }
+
+    // Step 1: Check for active jobs (en_route, in_progress)
+    const activeUrl = buildUrl(VENDOR_ENDPOINTS.SERVICE_REQUESTS, { type: 'active' });
+    const activeResponse = await apiClient.get<VendorServiceRequestResponse>(activeUrl);
+
+    if (activeResponse.data.results && activeResponse.data.results.length > 0) {
+      const job = activeResponse.data.results[0];
+      const proposalId = job.accepted_proposal?.id || job.vendor_proposal?.id;
+
+      if (__DEV__) {
+        console.log('[ActiveJobService] Found active job from backend:', {
+          jobId: job.id,
+          proposalId,
+          status: job.status,
+        });
+      }
+
+      if (proposalId) {
+        const activeJob: ActiveJobData = {
+          jobId: job.id,
+          proposalId,
+          status: 'accepted',
+        };
+
+        // Save to local storage
+        await saveActiveJob(activeJob);
+
+        return { hasActive: true, activeJob, jobType: 'active', source: 'backend' };
+      }
+    }
+
+    // Step 2: Check for pending proposals (waiting for customer response)
+    const pendingUrl = buildUrl(VENDOR_ENDPOINTS.SERVICE_REQUESTS, { type: 'pending' });
+    const pendingResponse = await apiClient.get<VendorServiceRequestResponse>(pendingUrl);
+
+    if (pendingResponse.data.results && pendingResponse.data.results.length > 0) {
+      const job = pendingResponse.data.results[0];
+      const proposalId = job.vendor_proposal?.id || job.accepted_proposal?.id;
+
+      if (__DEV__) {
+        console.log('[ActiveJobService] Found pending proposal from backend:', {
+          jobId: job.id,
+          proposalId,
+          status: job.status,
+        });
+      }
+
+      if (proposalId) {
+        const activeJob: ActiveJobData = {
+          jobId: job.id,
+          proposalId,
+          status: 'pending',
+        };
+
+        // Save to local storage
+        await saveActiveJob(activeJob);
+
+        return { hasActive: true, activeJob, jobType: 'pending', source: 'backend' };
+      }
+    }
+
+    // No active job found on backend - clear local if stale
+    if (__DEV__) {
+      console.log('[ActiveJobService] No active job found on backend');
+    }
+
+    const localJob = await getActiveJob();
+    if (localJob) {
+      // Clear stale local data only if it's 'pending' (might be outdated)
+      // Keep 'accepted' as it might be an offline scenario
+      if (localJob.status !== 'accepted') {
+        await clearActiveJob();
+        if (__DEV__) {
+          console.log('[ActiveJobService] Cleared stale local data');
+        }
+      }
+    }
+
+    return { hasActive: false, activeJob: null, jobType: null, source: null };
+  } catch (error) {
+    if (__DEV__) {
+      console.error('[ActiveJobService] Backend sync failed, falling back to local:', error);
+    }
+
+    // On error, fall back to local storage
+    const localJob = await getActiveJob();
+    return {
+      hasActive: !!localJob,
+      activeJob: localJob,
+      jobType: localJob?.status === 'accepted' ? 'active' : (localJob?.status === 'pending' ? 'pending' : null),
+      source: localJob ? 'local' : null,
+    };
+  }
+}
+
+// ============================================================================
 // Export Service Object
 // ============================================================================
 
@@ -158,6 +312,7 @@ export const activeJobService = {
   get: getActiveJob,
   clear: clearActiveJob,
   has: hasActiveJob,
+  syncFromBackend: syncVendorActiveJobFromBackend,
 };
 
 export default activeJobService;
