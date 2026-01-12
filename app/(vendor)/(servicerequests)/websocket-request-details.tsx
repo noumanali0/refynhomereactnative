@@ -19,6 +19,7 @@ import {
     AppStateStatus,
     InteractionManager,
     Platform,
+    TextInput,
 } from 'react-native';
 import Text from '@/components/common/Text';
 import CancelJobModal from '@/components/vendor/CancelJobModal';
@@ -41,10 +42,12 @@ import {
     cleanupCompletedService,
     selectCancelledService,
     clearServiceCancelled,
+    removeServiceRequest,
 } from '@/store/slices/dispatchSlice';
 import { COLORS } from '@/constants/colors';
 import type { Coordinates } from '@/types/socket';
 import { serviceRequestApi, type VendorCancelReasonCode } from '@/services/serviceRequestApi';
+import { socketService } from '@/services/socketService';
 import { useToast } from '@/contexts/ToastContext';
 import {
     startBackgroundLocationTracking,
@@ -205,6 +208,7 @@ export default function WebSocketRequestDetailsScreen() {
     const [proposalMessage, setProposalMessage] = useState<string>('');
     const [isLoading, setIsLoading] = useState(true);
     const [timeLeft, setTimeLeft] = useState(0);
+    const [proposalExpired, setProposalExpired] = useState(false);
 
     // Cancel job modal state
     const [showCancelModal, setShowCancelModal] = useState(false);
@@ -215,6 +219,9 @@ export default function WebSocketRequestDetailsScreen() {
     // Track if service was cancelled by customer (prevents stale UI)
     const [serviceCancelledByCustomer, setServiceCancelledByCustomer] = useState(false);
     const [cancelRedirectCountdown, setCancelRedirectCountdown] = useState<number>(5);
+
+    // Track if arrival toast has been shown (prevents duplicate toasts)
+    const [hasShownArrivalToast, setHasShownArrivalToast] = useState(false);
 
     // Refs
     const locationWatchRef = useRef<Location.LocationSubscription | null>(null);
@@ -286,12 +293,30 @@ export default function WebSocketRequestDetailsScreen() {
         };
     }, []);
 
+    // Find vendor's pending proposal (for proposal expiry timer)
+    // Note: SocketProposal has 'status' field, not 'vendor_status'
+    const pendingProposal = useMemo(() => {
+        return proposals.find(p => p.status === 'pending');
+    }, [proposals]);
+
     // Timer effect - calculate from absolute expiry time for accuracy
+    // Uses PROPOSAL expiry when waiting for customer response, REQUEST expiry otherwise
     useEffect(() => {
-        if (!request?.expires_at) return;
+        // Determine which expiry to use
+        const isWaitingForCustomerResponse = request?.already_sent && request?.vendor_status === 'pending';
+
+        // Use proposal expiry when waiting for customer response
+        let expirySource: string | null = null;
+        if (isWaitingForCustomerResponse && pendingProposal?.acceptance_expires_at) {
+            expirySource = pendingProposal.acceptance_expires_at;
+        } else if (request?.expires_at) {
+            expirySource = request.expires_at;
+        }
+
+        if (!expirySource) return;
 
         const calculateTimeLeft = () => {
-            const expiresAt = new Date(request.expires_at).getTime();
+            const expiresAt = new Date(expirySource!).getTime();
             const now = Date.now();
             return Math.max(0, Math.floor((expiresAt - now) / 1000));
         };
@@ -315,23 +340,50 @@ export default function WebSocketRequestDetailsScreen() {
                 timerIntervalRef.current = null;
             }
         };
-    }, [request?.expires_at]);
+    }, [request?.expires_at, request?.already_sent, request?.vendor_status, pendingProposal?.acceptance_expires_at]);
 
-    // Handle request expiry - navigate away when timer ends
+    // Handle request expiry - INDEPENDENT check with its own interval
+    // This runs independently of timeLeft (which may track proposal expiry)
+    // Ensures request disappears when request.expires_at is reached
     useEffect(() => {
-        if (timeLeft === 0 && request) {
-            // Only navigate away if not in active service (accepted but not completed)
-            const isActiveService = request.vendor_status === 'accepted' && request.status !== 'completed';
+        if (!request) return;
 
-            // if (!isActiveService) {
-            //     Alert.alert(
-            //         'Request Expired',
-            //         'This service request has expired.',
-            //         [{ text: 'OK', onPress: () => router.back() }]
-            //     );
-            // }
+        const checkRequestExpiry = () => {
+            const now = Date.now();
+            const requestExpiresAt = new Date(request.expires_at).getTime();
+
+            if (requestExpiresAt <= now) {
+                // Don't remove if it's an accepted/active service
+                const isActiveService = request.vendor_status === 'accepted' ||
+                    request.status === 'en_route' ||
+                    request.status === 'in_progress';
+
+                if (!isActiveService) {
+                    if (__DEV__) {
+                        console.log('[VendorDetails] Request expired, removing:', request.id);
+                    }
+                    // Remove from Redux - this makes request undefined
+                    // The existing "Request not found" screen with "Go Home" button will appear
+                    dispatch(removeServiceRequest(request.id));
+                }
+            }
+        };
+
+        // Check immediately
+        checkRequestExpiry();
+
+        // Check every second (independent of timeLeft)
+        const interval = setInterval(checkRequestExpiry, 1000);
+
+        return () => clearInterval(interval);
+    }, [request?.id, request?.expires_at, request?.vendor_status, request?.status, dispatch]);
+
+    // Detect when proposal expires (timer hits 0 while waiting for customer response)
+    useEffect(() => {
+        if (timeLeft === 0 && request?.already_sent && request?.vendor_status === 'pending') {
+            setProposalExpired(true);
         }
-    }, [timeLeft, request, router]);
+    }, [timeLeft, request?.already_sent, request?.vendor_status]);
 
     // Determine if screen is locked (vendor cannot navigate away)
     const isLocked = useMemo(() => {
@@ -355,7 +407,7 @@ export default function WebSocketRequestDetailsScreen() {
                 if (request?.already_sent && request?.vendor_status === 'pending') {
                     Alert.alert(
                         'Cannot Leave',
-                        'Please wait for customer response or until the request expires.',
+                        'Please wait for customer response or until the proposal expires.',
                         [{ text: 'OK' }]
                     );
                 } else if (isAccepted) {
@@ -387,7 +439,7 @@ export default function WebSocketRequestDetailsScreen() {
             if (request?.already_sent && request?.vendor_status === 'pending') {
                 Alert.alert(
                     'Cannot Leave',
-                    'Please wait for customer response or until the request expires.',
+                    'Please wait for customer response or until the proposal expires.',
                     [{ text: 'OK' }]
                 );
             } else if (isAccepted) {
@@ -511,6 +563,27 @@ export default function WebSocketRequestDetailsScreen() {
             subscription.remove();
         };
     }, []);
+
+    // Stop location tracking when vendor arrives (status becomes in_progress)
+    // Battery optimization: No need to track location when vendor is already at customer's place
+    // Backend also stops broadcasting location to customer in IN_PROGRESS status
+    useEffect(() => {
+        if (request?.status === 'in_progress') {
+            // Stop foreground location watcher
+            if (locationWatchRef.current) {
+                locationWatchRef.current.remove();
+                locationWatchRef.current = null;
+            }
+            // Stop background location tracking
+            if (isBackgroundTrackingActiveRef.current) {
+                stopBackgroundLocationTracking();
+                isBackgroundTrackingActiveRef.current = false;
+            }
+            if (__DEV__) {
+                console.log('[VendorDetails] Stopped location tracking - vendor arrived (in_progress)');
+            }
+        }
+    }, [request?.status]);
 
     /**
      * Start location tracking - uses background tracking for persistence
@@ -758,10 +831,13 @@ export default function WebSocketRequestDetailsScreen() {
 
     // Handle send proposal
     const handleSendProposal = useCallback(async () => {
-        if (!proposalAmount || proposalAmount < 100) {
-            Alert.alert('Invalid Amount', 'Please enter a valid proposal amount (minimum PKR 100)');
+        if (!proposalAmount || proposalAmount < 300) {
+            Alert.alert('Invalid Amount', 'Please enter a valid proposal amount (minimum PKR 300)');
             return;
         }
+
+        // Reset expired state when sending new proposal
+        setProposalExpired(false);
 
         try {
             await dispatch(sendProposal({
@@ -873,16 +949,16 @@ export default function WebSocketRequestDetailsScreen() {
             // Stop all location tracking first
             await stopLocationTracking();
 
-            // Cancel on backend with reason
-            await serviceRequestApi.cancel({
-                id: requestId,
-                cancelled_by: 'vendor',
+            // Cancel via WebSocket (realtime, broadcasts to customer immediately)
+            // Backend resets request to PENDING and re-broadcasts to other vendors
+            socketService.send('service.cancel', {
+                service_request_id: requestId,
                 reason_code: reasonCode,
                 reason: customReason,
             });
 
             if (__DEV__) {
-                console.log('[VendorDetails] Job cancelled:', requestId, reasonCode);
+                console.log('[VendorDetails] Job cancelled via WebSocket:', requestId, reasonCode);
             }
 
             // Clean up Redux state
@@ -930,6 +1006,33 @@ export default function WebSocketRequestDetailsScreen() {
             router.replace('/(vendor)/(servicerequests)');
         }
     }, [router]);
+
+    // Check if vendor is within 100 meters of customer location
+    // Using straight-line (Haversine) distance for accurate proximity check
+    // 0.1 km = 100 meters (must be before early returns for hooks)
+    const isWithinRange = straightLineDistanceKm !== null ? straightLineDistanceKm <= 0.1 : false;
+
+    // Show toast when vendor reaches customer location (within 100m)
+    useEffect(() => {
+        if (isWithinRange && !hasShownArrivalToast && isAccepted) {
+            showToast({
+                type: 'success',
+                title: 'Reached Destination',
+                message: 'You have arrived at the customer location.',
+                duration: 5000,
+            });
+            setHasShownArrivalToast(true);
+
+            if (__DEV__) {
+                console.log('[VendorDetails] Vendor arrived within 100m - showing arrival toast');
+            }
+        }
+    }, [isWithinRange, hasShownArrivalToast, isAccepted, showToast]);
+
+    // Reset arrival toast when request changes
+    useEffect(() => {
+        setHasShownArrivalToast(false);
+    }, [requestId]);
 
     // Request not found - check early
     // Use router.replace instead of back() for persisted screens with no history
@@ -1011,12 +1114,20 @@ export default function WebSocketRequestDetailsScreen() {
     });
 
     const isUrgent = timeLeft <= 30;
-    const canSendProposal = !request?.already_sent && request?.status === 'pending';
 
-    // Check if vendor is within 100 meters of customer location
-    // Using straight-line (Haversine) distance for accurate proximity check
-    // 0.1 km = 100 meters
-    const isWithinRange = straightLineDistanceKm !== null ? straightLineDistanceKm <= 0.1 : false;
+    // Check if waiting for customer response (proposal sent, timer running)
+    const isWaitingForResponse = request?.already_sent &&
+        request?.vendor_status === 'pending' &&
+        timeLeft > 0;
+
+    // Can show proposal form when request is pending (not yet accepted)
+    const canShowProposalForm = request?.status === 'pending' && !isAccepted;
+
+    // Button disabled while waiting or sending
+    const isButtonDisabled = isWaitingForResponse || isPendingProposal;
+
+    // Legacy - keep for timer bar visibility
+    const canSendProposal = !request?.already_sent && request?.status === 'pending';
 
     return (
         <View style={styles.container}>
@@ -1195,31 +1306,52 @@ export default function WebSocketRequestDetailsScreen() {
                             </View>
 
                             <Text type="subtitle2" style={styles.proposalLabel}>Visit Charges (PKR)</Text>
-                            <View style={styles.proposalInputContainer}>
+                            <View style={[styles.proposalInputContainer, isButtonDisabled && { opacity: 0.6 }]}>
                                 <TouchableOpacity
                                     style={styles.proposalButton}
-                                    onPress={() => setProposalAmount((prev) => Math.max(100, prev - 100))}
-                                    disabled={isPendingProposal}
+                                    onPress={() => setProposalAmount((prev) => Math.max(300, prev - 100))}
+                                    disabled={isButtonDisabled}
                                 >
                                     <Ionicons name="remove" size={24} color={COLORS.white} />
                                 </TouchableOpacity>
 
                                 <View style={styles.proposalAmountContainer}>
                                     <Text type="body" style={styles.currencySymbol}>PKR</Text>
-                                    <Text type="title" style={styles.proposalAmount}>{proposalAmount}</Text>
+                                    <TextInput
+                                        style={styles.proposalAmountInput}
+                                        value={proposalAmount.toString()}
+                                        onChangeText={(text) => {
+                                            const num = parseInt(text.replace(/[^0-9]/g, ''), 10);
+                                            if (!isNaN(num)) {
+                                                setProposalAmount(num);
+                                            } else if (text === '') {
+                                                setProposalAmount(0);
+                                            }
+                                        }}
+                                        onBlur={() => {
+                                            // Enforce minimum on blur
+                                            if (proposalAmount < 300) {
+                                                setProposalAmount(300);
+                                            }
+                                        }}
+                                        keyboardType="numeric"
+                                        editable={!isButtonDisabled}
+                                        selectTextOnFocus
+                                        maxLength={6}
+                                    />
                                 </View>
 
                                 <TouchableOpacity
                                     style={styles.proposalButton}
                                     onPress={() => setProposalAmount((prev) => prev + 100)}
-                                    disabled={isPendingProposal}
+                                    disabled={isButtonDisabled}
                                 >
                                     <Ionicons name="add" size={24} color={COLORS.white} />
                                 </TouchableOpacity>
                             </View>
 
                             {/* Quick amount presets */}
-                            <View style={styles.presetsContainer}>
+                            <View style={[styles.presetsContainer, isButtonDisabled && { opacity: 0.6 }]}>
                                 {[300, 500, 800, 1000].map((amount) => (
                                     <TouchableOpacity
                                         key={amount}
@@ -1228,7 +1360,7 @@ export default function WebSocketRequestDetailsScreen() {
                                             proposalAmount === amount && styles.presetButtonActive,
                                         ]}
                                         onPress={() => setProposalAmount(amount)}
-                                        disabled={isPendingProposal}
+                                        disabled={isButtonDisabled}
                                     >
                                         <Text
                                             type="body"
@@ -1244,12 +1376,12 @@ export default function WebSocketRequestDetailsScreen() {
                             </View>
 
                             <TouchableOpacity
-                                style={[styles.sendProposalButton, isPendingProposal && styles.buttonDisabled]}
+                                style={[styles.sendProposalButton, isButtonDisabled && styles.buttonDisabled]}
                                 onPress={handleSendProposal}
-                                disabled={isPendingProposal}
+                                disabled={isButtonDisabled}
                             >
                                 <LinearGradient
-                                    colors={isPendingProposal ? [COLORS.gray400, COLORS.gray500] : [COLORS.primary, COLORS.accent]}
+                                    colors={isButtonDisabled ? [COLORS.gray400, COLORS.gray500] : [COLORS.primary, COLORS.accent]}
                                     start={{ x: 0, y: 0 }}
                                     end={{ x: 1, y: 0 }}
                                     style={styles.gradientButton}
@@ -1267,16 +1399,26 @@ export default function WebSocketRequestDetailsScreen() {
                                     )}
                                 </LinearGradient>
                             </TouchableOpacity>
-                        </View>
-                    )}
 
-                    {/* Proposal Sent Status */}
-                    {request?.already_sent && request?.vendor_status === 'pending' && (
-                        <View style={styles.proposalSentContainer}>
-                            <Ionicons name="hourglass" size={24} color={COLORS.warning} />
-                            <Text type="bodySemiBold" style={styles.proposalSentText}>
-                                Waiting for customer response...
-                            </Text>
+                            {/* Waiting banner - show when waiting for customer response */}
+                            {isWaitingForResponse && (
+                                <View style={styles.waitingBanner}>
+                                    <Ionicons name="time-outline" size={18} color={COLORS.warning} />
+                                    <Text type="body" style={styles.waitingText}>
+                                        Waiting for customer response... {timeLeft}s
+                                    </Text>
+                                </View>
+                            )}
+
+                            {/* Expired banner - show when proposal expired */}
+                            {proposalExpired && !isWaitingForResponse && (
+                                <View style={[styles.waitingBanner, styles.expiredBanner]}>
+                                    <Ionicons name="close-circle-outline" size={18} color={COLORS.error} />
+                                    <Text type="body" style={[styles.waitingText, { color: COLORS.error }]}>
+                                        Proposal expired. You can send a new proposal.
+                                    </Text>
+                                </View>
+                            )}
                         </View>
                     )}
 
@@ -1589,6 +1731,14 @@ const styles = StyleSheet.create({
         fontSize: moderateScale(32),
         color: COLORS.gray900,
     },
+    proposalAmountInput: {
+        fontSize: moderateScale(32),
+        color: COLORS.gray900,
+        fontWeight: 'bold',
+        textAlign: 'center',
+        minWidth: scale(100),
+        padding: 0,
+    },
     presetsContainer: {
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -1643,6 +1793,24 @@ const styles = StyleSheet.create({
     },
     proposalSentText: {
         color: COLORS.warning,
+    },
+    waitingBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: scale(8),
+        paddingVertical: verticalScale(10),
+        paddingHorizontal: scale(12),
+        backgroundColor: COLORS.warning + '20',
+        borderRadius: moderateScale(8),
+        marginTop: verticalScale(12),
+    },
+    expiredBanner: {
+        backgroundColor: COLORS.error + '20',
+    },
+    waitingText: {
+        color: COLORS.warning,
+        fontSize: moderateScale(14),
+        flex: 1,
     },
     actionButton: {
         borderRadius: moderateScale(12),

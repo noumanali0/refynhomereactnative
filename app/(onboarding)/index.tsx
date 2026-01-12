@@ -332,7 +332,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   slideGradient: {
-    flex: 0.55,
+    flex: 0.45,  // Reduced from 0.55 to give more space for content
     justifyContent: 'center',
     alignItems: 'center',
     borderBottomLeftRadius: moderateScale(40),
@@ -375,9 +375,10 @@ const styles = StyleSheet.create({
     left: -moderateScale(40),
   },
   contentCard: {
-    flex: 0.45,
+    flex: 0.55,  // Increased from 0.45 for more text space
     paddingHorizontal: scale(32),
-    paddingTop: verticalScale(40),
+    paddingTop: verticalScale(32),
+    paddingBottom: verticalScale(120),  // Space for bottomSection overlay
     alignItems: 'center',
   },
   title: {
@@ -397,7 +398,7 @@ const styles = StyleSheet.create({
     color: COLORS.gray600,
     textAlign: 'center',
     lineHeight: moderateScale(24),
-    marginBottom: verticalScale(40),
+    marginBottom: verticalScale(16),  // Reduced from 40
   },
   bottomSection: {
     position: 'absolute',

@@ -13,8 +13,8 @@ const GOOGLE_PLACES_API_KEY = process.env.EXPO_PUBLIC_GOOGLE_PLACES_API_KEY || '
 const AUTOCOMPLETE_URL = 'https://maps.googleapis.com/maps/api/place/autocomplete/json';
 const DETAILS_URL = 'https://maps.googleapis.com/maps/api/place/details/json';
 
-// Request timeout (15 seconds - increased for slower networks)
-const TIMEOUT = 15000;
+// Request timeout (30 seconds - increased for emulator compatibility)
+const TIMEOUT = 30000;
 
 // Google Places API response types
 interface GooglePrediction {
@@ -75,20 +75,27 @@ class GooglePlacesService {
     }
 
     /**
-     * Fetch with timeout
+     * Fetch with timeout and retry logic for emulator resilience
      */
-    private async fetchWithTimeout(url: string, timeout: number = TIMEOUT): Promise<Response> {
-        const controller = new AbortController();
-        const id = setTimeout(() => controller.abort(), timeout);
+    private async fetchWithTimeout(url: string, timeout: number = TIMEOUT, retries: number = 2): Promise<Response> {
+        for (let attempt = 0; attempt <= retries; attempt++) {
+            const controller = new AbortController();
+            const id = setTimeout(() => controller.abort(), timeout);
 
-        try {
-            const response = await fetch(url, { signal: controller.signal });
-            clearTimeout(id);
-            return response;
-        } catch (error) {
-            clearTimeout(id);
-            throw error;
+            try {
+                const response = await fetch(url, { signal: controller.signal });
+                clearTimeout(id);
+                return response;
+            } catch (error) {
+                clearTimeout(id);
+                if (attempt === retries) {
+                    throw error;
+                }
+                // Wait 1 second before retry
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
         }
+        throw new Error('Max retries exceeded');
     }
 
     /**

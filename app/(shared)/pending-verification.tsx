@@ -198,7 +198,7 @@ export default function PendingVerification() {
                         </LinearGradient>
                     </View>
 
-                    {/* Refresh Button */}
+                    {/* Refresh Button - Commented out for now
                     <TouchableOpacity
                         onPress={handleRefreshStatus}
                         disabled={isRefreshing}
@@ -221,6 +221,7 @@ export default function PendingVerification() {
                             </Text>
                         </LinearGradient>
                     </TouchableOpacity>
+                    */}
 
                     {/* Logout Link */}
                     <TouchableOpacity

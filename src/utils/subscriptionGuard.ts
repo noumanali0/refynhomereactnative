@@ -71,20 +71,3 @@ export function checkRequestLimit(requestsRemaining: number | null): boolean {
     return true;
 }
 
-// ============================================================================
-// HOC for Component Protection
-// ============================================================================
-
-/**
- * Higher-order function to protect a screen with feature access check
- */
-export function withFeatureAccess<T extends object>(
-    Component: React.ComponentType<T>,
-    featureId: SubscriptionFeatureId
-) {
-    return function GuardedComponent(props: T) {
-        // This would be implemented with hooks in actual usage
-        // For now, just return the component
-        return <Component {...props} />;
-    };
-}

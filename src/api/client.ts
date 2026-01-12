@@ -19,7 +19,7 @@ import { isRetryableError, calculateDelay } from '@/utils/apiRetry';
 
 // API Base URL from environment variable (set in .env file)
 // Falls back to localhost for development if not set
-const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'http://localhost:8000/api';
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://refynhomedjango.onrender.com/api';
 
 // Log API base URL in development
 if (__DEV__) {

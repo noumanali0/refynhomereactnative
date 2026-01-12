@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "488724473538",
+    "project_id": "rfhome-5f2a9",
+    "storage_bucket": "rfhome-5f2a9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:488724473538:android:11b44481ed80ea65da7d5b",
+        "android_client_info": {
+          "package_name": "com.masood9798.refynhome"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBRTWLMQJsMSY9UgYaMLHH42mt17DPzwFk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:488724473538:android:b04bc9a8a3c0e399da7d5b",
+        "android_client_info": {
+          "package_name": "com.masood979899.RefynHome"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBRTWLMQJsMSY9UgYaMLHH42mt17DPzwFk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

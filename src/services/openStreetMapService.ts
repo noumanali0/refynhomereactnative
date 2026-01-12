@@ -10,8 +10,8 @@ import type { Address, MapboxError } from '@/types/mapbox';
 
 const BASE_URL = 'https://nominatim.openstreetmap.org';
 
-// Request timeout (10 seconds)
-const TIMEOUT = 10000;
+// Request timeout (30 seconds - increased for emulator compatibility)
+const TIMEOUT = 30000;
 
 // Nominatim API response types
 interface NominatimResult {
@@ -43,6 +43,22 @@ class OpenStreetMapService {
       'User-Agent': 'RefynHome/1.0', // Required by Nominatim
     },
   });
+
+  /**
+   * Retry logic for emulator resilience
+   */
+  private async withRetry<T>(request: () => Promise<T>, retries: number = 2): Promise<T> {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await request();
+      } catch (error) {
+        if (attempt === retries) throw error;
+        // Wait 1 second before retry
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    throw new Error('Max retries exceeded');
+  }
 
   /**
    * Forward Geocoding - Search for addresses by query string
@@ -81,9 +97,9 @@ class OpenStreetMapService {
         params.bounded = 0; // Allow results outside viewbox but prioritize inside
       }
 
-      const response = await this.axiosInstance.get<NominatimResult[]>('/search', {
-        params,
-      });
+      const response = await this.withRetry(() =>
+        this.axiosInstance.get<NominatimResult[]>('/search', { params })
+      );
 
       return this.parseNominatimResults(response.data);
     } catch (error) {
@@ -110,9 +126,9 @@ class OpenStreetMapService {
         'accept-language': 'en', // Force English results
       };
 
-      const response = await this.axiosInstance.get<NominatimResult>('/reverse', {
-        params,
-      });
+      const response = await this.withRetry(() =>
+        this.axiosInstance.get<NominatimResult>('/reverse', { params })
+      );
 
       if (!response.data || !response.data.display_name) {
         return null;

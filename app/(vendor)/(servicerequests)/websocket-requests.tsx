@@ -31,6 +31,7 @@ import {
     selectIsConnected,
     selectServiceRequests,
     updateLocation,
+    removeServiceRequest,
 } from '@/store/slices/dispatchSlice';
 import { WebSocketRequestCard } from '@/components/vendor/WebSocketRequestCard';
 import { SocketStatusIndicator } from '@/components/common/SocketStatusIndicator';
@@ -249,6 +250,38 @@ export default function WebSocketServiceRequestsScreen() {
             newRequestTimersRef.current.clear();
         };
     }, []);
+
+    // ========================================================================
+    // Frontend-based Request Expiry Cleanup
+    // ========================================================================
+    // Backend expiry detection is not real-time - it only triggers when ServiceRequest
+    // model is queried. When vendor sends proposal, subsequent activity queries
+    // ServiceProposal instead, so request expiry events may not arrive.
+    // This periodic cleanup ensures requests disappear from UI when timer reaches 0.
+    useEffect(() => {
+        const cleanupExpiredRequests = () => {
+            const now = Date.now();
+            serviceRequests.forEach((request) => {
+                const expiresAt = new Date(request.expires_at).getTime();
+                // Only remove if truly expired (timer reached 0)
+                // Don't remove accepted requests (vendor_status === 'accepted')
+                if (expiresAt <= now && request.vendor_status !== 'accepted') {
+                    if (__DEV__) {
+                        console.log('[WebSocketRequests] Removing expired request locally:', request.id);
+                    }
+                    dispatch(removeServiceRequest(request.id));
+                }
+            });
+        };
+
+        // Run cleanup every second (aligned with timer updates in cards)
+        const interval = setInterval(cleanupExpiredRequests, 1000);
+
+        // Also run immediately on mount/when requests change
+        cleanupExpiredRequests();
+
+        return () => clearInterval(interval);
+    }, [serviceRequests, dispatch]);
 
     // ========================================================================
     // Callbacks

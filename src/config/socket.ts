@@ -6,7 +6,7 @@
 
 // WebSocket base URL from environment variable (set in .env file)
 // Falls back to localhost for development if not set
-export const WS_BASE_URL = process.env.EXPO_PUBLIC_SOCKET_URL || 'ws://localhost:8000';
+export const WS_BASE_URL = process.env.EXPO_PUBLIC_SOCKET_URL || 'wss://refynhomedjango.onrender.com';
 
 // Ping interval in milliseconds (keep alive)
 // Backend expects ping every ~30s, we use 25s for safety margin

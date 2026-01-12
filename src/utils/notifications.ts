@@ -91,6 +91,15 @@ export async function setupAndRegisterPushToken(): Promise<string | null> {
         try {
             const { store } = await import("@/store");
             const { registerPushToken } = await import("@/store/slices/authSlice");
+
+            // IMPORTANT: Check if user is still authenticated before registering
+            // This prevents continuous 401 retries after logout/device transfer
+            const state = store.getState();
+            if (!state.auth.isAuthenticated) {
+                console.log("📱 Skipping push token registration - user not authenticated");
+                return token;
+            }
+
             await store.dispatch(registerPushToken({ pushToken: token })).unwrap();
             console.log("✅ Push token registered with backend");
         } catch (error) {

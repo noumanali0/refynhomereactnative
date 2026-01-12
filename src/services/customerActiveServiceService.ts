@@ -23,6 +23,14 @@ import { serviceRequestApi } from './serviceRequestApi';
 /** Active status values that indicate customer has an ongoing request */
 const ACTIVE_STATUSES = ['pending', 'accepted', 'en_route', 'in_progress'];
 
+/**
+ * Status values that BLOCK creating new requests.
+ * Note: 'in_progress' is NOT included - customer CAN create new request
+ * when vendor is already working (in_progress status).
+ * This allows customer to book multiple vendors for different tasks.
+ */
+const BLOCKING_STATUSES = ['pending', 'accepted', 'en_route'];
+
 /** Single storage key for atomic operations */
 const STORAGE_KEY = 'customer_active_service';
 
@@ -36,7 +44,7 @@ export const REQUEST_TIMEOUT_SECONDS = 300;
 // Types
 // ============================================================================
 
-export type ActiveServiceStatus = 'pending' | 'accepted' | 'expired';
+export type ActiveServiceStatus = 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'expired';
 
 export interface CustomerActiveServiceData {
     /** Request ID - mandatory */
@@ -198,6 +206,39 @@ export async function markCustomerActiveServiceExpired(): Promise<void> {
     } catch (error) {
         console.error('[CustomerActiveService] Failed to mark as expired:', error);
         throw error;
+    }
+}
+
+/**
+ * Update customer's active service status
+ * Called when service status changes (e.g., to 'in_progress' when vendor arrives)
+ */
+export async function updateCustomerActiveServiceStatus(
+    status: 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'expired'
+): Promise<void> {
+    try {
+        const existing = await getCustomerActiveService();
+        if (!existing) {
+            if (__DEV__) {
+                console.log('[CustomerActiveService] No active service to update status');
+            }
+            return;
+        }
+
+        const updated: CustomerActiveServiceData = {
+            ...existing,
+            status,
+            updatedAt: new Date().toISOString(),
+        };
+
+        await SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(updated));
+
+        if (__DEV__) {
+            console.log('[CustomerActiveService] Updated status to:', status);
+        }
+    } catch (error) {
+        console.error('[CustomerActiveService] Failed to update status:', error);
+        // Don't throw - this is a non-critical operation
     }
 }
 
@@ -421,11 +462,17 @@ export interface SyncResult {
  * Map backend status to local status type
  */
 function mapBackendStatusToLocal(backendStatus: string): ActiveServiceStatus {
-    if (['accepted', 'en_route', 'in_progress'].includes(backendStatus)) {
-        return 'accepted';
-    }
     if (backendStatus === 'pending') {
         return 'pending';
+    }
+    if (['accepted', 'assigned', 'waiting'].includes(backendStatus)) {
+        return 'accepted';
+    }
+    if (backendStatus === 'en_route') {
+        return 'en_route';
+    }
+    if (backendStatus === 'in_progress') {
+        return 'in_progress';
     }
     return 'expired';
 }
@@ -484,6 +531,9 @@ export async function syncCustomerActiveServiceFromBackend(): Promise<SyncResult
         }
 
         // Map backend response to local format
+        if (__DEV__) {
+            console.log('[CustomerActiveService] Mapping backend response, status:', activeRequest.status, '→', mapBackendStatusToLocal(activeRequest.status));
+        }
         const activeService: CustomerActiveServiceData = {
             requestId: activeRequest.id,
             expiresAt: activeRequest.expires_at,
@@ -498,6 +548,9 @@ export async function syncCustomerActiveServiceFromBackend(): Promise<SyncResult
             description: activeRequest.description,
             updatedAt: new Date().toISOString(),
         };
+        if (__DEV__) {
+            console.log('[CustomerActiveService] Created activeService object:', JSON.stringify(activeService, null, 2));
+        }
 
         // If proposal accepted, add vendor info
         if (activeRequest.accepted_proposal) {
@@ -514,6 +567,9 @@ export async function syncCustomerActiveServiceFromBackend(): Promise<SyncResult
         }
 
         // Save to local storage for offline access
+        if (__DEV__) {
+            console.log('[CustomerActiveService] About to save to SecureStore...');
+        }
         await SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(activeService));
 
         if (__DEV__) {
@@ -537,6 +593,200 @@ export async function syncCustomerActiveServiceFromBackend(): Promise<SyncResult
 }
 
 // ============================================================================
+// Sync With Retry (Production-grade error recovery)
+// ============================================================================
+
+export interface SyncWithRetryResult extends SyncResult {
+    /** Error message if all retries failed */
+    error?: string;
+    /** Number of attempts made */
+    attempts?: number;
+}
+
+/**
+ * Sync customer active service from backend with retry logic.
+ * Falls back to local storage if all retries fail.
+ *
+ * @param maxRetries - Maximum number of retry attempts (default: 3)
+ * @param retryDelayMs - Base delay between retries in ms (default: 1000)
+ * @returns SyncWithRetryResult with error info if failed
+ */
+export async function syncWithRetry(
+    maxRetries: number = 3,
+    retryDelayMs: number = 1000
+): Promise<SyncWithRetryResult> {
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            if (__DEV__) {
+                console.log(`[CustomerActiveService] Sync attempt ${attempt}/${maxRetries}...`);
+            }
+
+            const result = await syncCustomerActiveServiceFromBackend();
+            return { ...result, error: undefined, attempts: attempt };
+        } catch (error) {
+            lastError = error as Error;
+            if (__DEV__) {
+                console.warn(`[CustomerActiveService] Sync attempt ${attempt} failed:`, error);
+            }
+
+            // Exponential backoff between retries
+            if (attempt < maxRetries) {
+                await new Promise(resolve => setTimeout(resolve, retryDelayMs * attempt));
+            }
+        }
+    }
+
+    // All retries failed - fall back to local storage
+    if (__DEV__) {
+        console.error('[CustomerActiveService] All sync attempts failed, using local storage');
+    }
+
+    const localActive = await getCustomerActiveService();
+    return {
+        hasActive: !!localActive,
+        activeService: localActive,
+        source: localActive ? 'local' : null,
+        error: lastError?.message || 'Sync failed after retries',
+        attempts: maxRetries,
+    };
+}
+
+// ============================================================================
+// New Request Creation Check
+// ============================================================================
+
+/**
+ * Result of checking if customer can create a new request
+ */
+export interface CanCreateRequestResult {
+    /** Whether customer can create a new request */
+    canCreate: boolean;
+    /** Reason why creation is blocked (if any) */
+    reason: string | null;
+    /** Current blocking request ID (if any) */
+    blockingRequestId: number | null;
+    /** Current blocking status (if any) */
+    blockingStatus: string | null;
+}
+
+/**
+ * Check if customer can create a new service request.
+ *
+ * IMPORTANT: Customer CAN create new request when status is 'in_progress'
+ * because vendor is already working - customer might need another vendor.
+ *
+ * Blocking statuses: pending, accepted, en_route
+ * Non-blocking: in_progress, completed, cancelled, expired
+ *
+ * @returns Result with canCreate flag and blocking info
+ */
+export async function canCustomerCreateNewRequest(): Promise<CanCreateRequestResult> {
+    try {
+        if (__DEV__) {
+            console.log('[CustomerActiveService] Checking if customer can create new request...');
+        }
+
+        // First check local storage for quick response
+        const localActive = await getCustomerActiveService();
+
+        if (localActive) {
+            // Map local status to backend-like status for blocking check
+            // Local 'accepted' maps to backend 'accepted' or 'en_route'
+            const effectiveStatus = localActive.status === 'accepted' ? 'accepted' : localActive.status;
+
+            if (BLOCKING_STATUSES.includes(effectiveStatus) || localActive.status === 'pending') {
+                if (__DEV__) {
+                    console.log('[CustomerActiveService] Local check: Blocked by', localActive.status);
+                }
+                return {
+                    canCreate: false,
+                    reason: getBlockingReason(localActive.status),
+                    blockingRequestId: localActive.requestId,
+                    blockingStatus: localActive.status,
+                };
+            }
+        }
+
+        // Backend check for multi-device sync
+        const requests = await serviceRequestApi.getCustomerRequests();
+
+        // Find any request with blocking status
+        const blockingRequest = requests.find(r => BLOCKING_STATUSES.includes(r.status));
+
+        if (blockingRequest) {
+            if (__DEV__) {
+                console.log('[CustomerActiveService] Backend check: Blocked by request', blockingRequest.id, 'status:', blockingRequest.status);
+            }
+            return {
+                canCreate: false,
+                reason: getBlockingReason(blockingRequest.status),
+                blockingRequestId: blockingRequest.id,
+                blockingStatus: blockingRequest.status,
+            };
+        }
+
+        // Check for in_progress request (allowed but logged)
+        const inProgressRequest = requests.find(r => r.status === 'in_progress');
+        if (inProgressRequest && __DEV__) {
+            console.log('[CustomerActiveService] Found in_progress request', inProgressRequest.id, '- allowing new request creation');
+        }
+
+        if (__DEV__) {
+            console.log('[CustomerActiveService] Customer CAN create new request');
+        }
+
+        return {
+            canCreate: true,
+            reason: null,
+            blockingRequestId: null,
+            blockingStatus: null,
+        };
+    } catch (error) {
+        if (__DEV__) {
+            console.error('[CustomerActiveService] Error checking create permission:', error);
+        }
+
+        // On error, fall back to local storage check only
+        const localActive = await getCustomerActiveService();
+
+        if (localActive && (localActive.status === 'pending' || localActive.status === 'accepted')) {
+            return {
+                canCreate: false,
+                reason: getBlockingReason(localActive.status),
+                blockingRequestId: localActive.requestId,
+                blockingStatus: localActive.status,
+            };
+        }
+
+        // Allow creation if we can't verify (better UX - backend will reject if invalid)
+        return {
+            canCreate: true,
+            reason: null,
+            blockingRequestId: null,
+            blockingStatus: null,
+        };
+    }
+}
+
+/**
+ * Get human-readable reason for blocking
+ */
+function getBlockingReason(status: string): string {
+    switch (status) {
+        case 'pending':
+            return 'You have a pending request waiting for vendor proposals. Please wait for it to expire or cancel it first.';
+        case 'accepted':
+            return 'You have an accepted service. Please wait for the vendor to arrive or cancel if needed.';
+        case 'en_route':
+            return 'A vendor is on the way to your location. Please wait for them to arrive.';
+        default:
+            return 'You have an active service request. Please complete or cancel it first.';
+    }
+}
+
+// ============================================================================
 // Export Service Object
 // ============================================================================
 
@@ -552,6 +802,8 @@ export const customerActiveServiceService = {
     canCancel: canCancelService,
     getCancelRemaining: getCancelDisableRemaining,
     syncFromBackend: syncCustomerActiveServiceFromBackend,
+    syncWithRetry: syncWithRetry,
+    canCreateNewRequest: canCustomerCreateNewRequest,
 };
 
 export default customerActiveServiceService;

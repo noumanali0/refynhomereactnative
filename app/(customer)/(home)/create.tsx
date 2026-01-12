@@ -30,9 +30,12 @@ import {
     getServiceCategories,
     ServiceCategory,
 } from "@/services/serviceRequestApi";
-import { saveCustomerActiveService, syncCustomerActiveServiceFromBackend } from "@/services/customerActiveServiceService";
-import { useAppDispatch } from "@/hooks/useAppDispatch";
-import { setCustomerActiveService } from "@/store/slices/dispatchSlice";
+import { saveCustomerActiveService, canCustomerCreateNewRequest } from "@/services/customerActiveServiceService";
+import { useAppDispatch, useAppSelector } from "@/hooks/useAppDispatch";
+import {
+    setCustomerActiveService,
+    selectCanCustomerCreateRequest,
+} from "@/store/slices/dispatchSlice";
 import { useToast } from "@/contexts/ToastContext";
 
 // ============================================================================
@@ -712,7 +715,7 @@ const FormContent = memo(function FormContent({
                     <Text type="body" style={styles.errorText}>{errors.description}</Text>
                 )}
 
-                {/* Photo Upload */}
+                {/* Photo Upload - Commented out for now
                 <SectionTitle title="Photos (Optional)" />
                 <TouchableOpacity
                     onPress={handlePickImage}
@@ -751,6 +754,7 @@ const FormContent = memo(function FormContent({
                         </TouchableOpacity>
                     </View>
                 )}
+                */}
 
                 {/* Info Section */}
                 <InfoList items={INFO_ITEMS} />
@@ -825,6 +829,8 @@ const RequestServiceScreen = () => {
     const [showAddressSearch, setShowAddressSearch] = useState(false);
     const dispatch = useAppDispatch();
     const { showToast } = useToast();
+    // Check if customer can create new request (excludes in_progress status - vendor working)
+    const canCreateRequestCheck = useAppSelector(selectCanCustomerCreateRequest);
 
     // Custom hooks for data fetching and image picking
     const { categories, categoryItems, loadingCategories } = useServiceCategories();
@@ -1034,29 +1040,64 @@ const RequestServiceScreen = () => {
         const signal = submitAbortControllerRef.current.signal;
 
         try {
-            // Pre-creation backend check (multi-device duplicate prevention)
-            // This prevents creating duplicate requests if another device already created one
-            if (__DEV__) {
-                console.log('[CreateRequest] Checking backend for existing active request...');
-            }
-
-            const { hasActive, activeService } = await syncCustomerActiveServiceFromBackend();
-
-            if (hasActive && activeService) {
+            // Quick Redux check first (instant, no network)
+            // Only blocks pending/accepted/en_route - allows creating new requests when in_progress
+            if (!canCreateRequestCheck.canCreate && canCreateRequestCheck.blockingRequestId) {
                 if (__DEV__) {
-                    console.log('[CreateRequest] Found existing active request:', activeService.requestId);
+                    console.log('[CreateRequest] Blocked by Redux - status:', canCreateRequestCheck.blockingStatus, 'request:', canCreateRequestCheck.blockingRequestId);
                 }
 
                 Alert.alert(
                     'Active Request Exists',
-                    'You already have an active service request. Please complete or cancel it before creating a new one.',
+                    canCreateRequestCheck.reason || 'You have an active service request that needs attention.',
                     [
                         {
                             text: 'View Request',
                             onPress: () => {
                                 router.replace({
                                     pathname: '/(customer)/(home)/live-offers',
-                                    params: { requestId: activeService.requestId.toString() },
+                                    params: { requestId: canCreateRequestCheck.blockingRequestId!.toString() },
+                                });
+                            },
+                        },
+                        { text: 'OK', style: 'cancel' },
+                    ]
+                );
+                formikHelpers.setSubmitting(false);
+                isSubmittingRef.current = false;
+                return;
+            }
+
+            // Pre-creation backend check (multi-device duplicate prevention)
+            // This prevents creating duplicate requests if another device already created one
+            // Only blocks pending/accepted/en_route - allows in_progress
+            if (__DEV__) {
+                console.log('[CreateRequest] Checking backend for blocking requests...');
+            }
+
+            const backendCheck = await canCustomerCreateNewRequest();
+
+            if (!backendCheck.canCreate && backendCheck.blockingRequestId) {
+                if (__DEV__) {
+                    console.log('[CreateRequest] Blocked by backend - status:', backendCheck.blockingStatus, 'request:', backendCheck.blockingRequestId);
+                }
+
+                // Update Redux with blocking request info
+                dispatch(setCustomerActiveService({
+                    requestId: backendCheck.blockingRequestId,
+                    status: backendCheck.blockingStatus as 'pending' | 'accepted' | 'en_route',
+                }));
+
+                Alert.alert(
+                    'Active Request Exists',
+                    backendCheck.reason || 'You have an active service request that needs attention.',
+                    [
+                        {
+                            text: 'View Request',
+                            onPress: () => {
+                                router.replace({
+                                    pathname: '/(customer)/(home)/live-offers',
+                                    params: { requestId: backendCheck.blockingRequestId!.toString() },
                                 });
                             },
                         },
@@ -1076,12 +1117,13 @@ const RequestServiceScreen = () => {
                 return;
             }
 
-            // Validate coordinates before parsing
             const lat = values.latitude ? parseFloat(values.latitude) : null;
             const lng = values.longitude ? parseFloat(values.longitude) : null;
 
             if (lat === null || lng === null || isNaN(lat) || isNaN(lng)) {
                 showToast({ type: 'error', title: 'Invalid Location', message: 'Please select a valid address' });
+                formikHelpers.setSubmitting(false);
+                isSubmittingRef.current = false;
                 return;
             }
 

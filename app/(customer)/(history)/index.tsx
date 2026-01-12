@@ -247,7 +247,11 @@ export default function CustomerHistoryScreen() {
             <FlatList
                 data={filteredServices}
                 renderItem={({ item }) => (
-                    <ServiceHistoryCard request={item} disablePress />
+                    <ServiceHistoryCard
+                        request={item}
+                        disablePress
+                        onReviewSubmit={onRefresh}
+                    />
                 )}
                 keyExtractor={(item) => item.id.toString()}
                 contentContainerStyle={styles.listContent}

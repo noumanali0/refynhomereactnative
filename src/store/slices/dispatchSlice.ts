@@ -12,6 +12,7 @@
  */
 
 import { createSlice, createAsyncThunk, PayloadAction, createSelector } from '@reduxjs/toolkit';
+import * as SecureStore from 'expo-secure-store';
 import { socketService } from '@/services/socketService';
 import {
   sendServiceRequestNotification,
@@ -50,7 +51,7 @@ const VENDOR_DISTANCE_THRESHOLD_M = 1000; // 1km
  * Frontend uses 10 minutes as a fallback/safety margin.
  * The backend 'vendor_stationary' event is the authoritative source.
  */
-const VENDOR_STATIONARY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes (frontend fallback)
+const VENDOR_STATIONARY_THRESHOLD_MS = 20 * 60 * 1000; // 20 minutes (production)
 
 /** Minimum movement in meters to consider vendor as "moving" */
 const SIGNIFICANT_MOVEMENT_M = 20; // 20 meters
@@ -206,10 +207,18 @@ interface DispatchState {
     expiredRequestBatchTimeout: number | null; // Store timeout ID as number
   };
 
-  // Customer Active Service (for logout restriction)
+  // Customer Active Service (for logout restriction and home screen card)
   customerActiveService: {
     requestId: number | null;
-    status: 'pending' | 'accepted' | 'expired' | null;
+    status: 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'expired' | null;
+    // Display fields for OngoingServiceCard
+    categoryName?: string;
+    problemTitle?: string;
+    vendorName?: string;
+    expiresAt?: string;
+    // Sync tracking
+    lastSyncAt?: number;
+    syncError?: string | null;
   };
 }
 
@@ -278,10 +287,16 @@ const initialState: DispatchState = {
     expiredRequestBatchTimeout: null,
   },
 
-  // Customer Active Service (for logout restriction)
+  // Customer Active Service (for logout restriction and home screen card)
   customerActiveService: {
     requestId: null,
     status: null,
+    categoryName: undefined,
+    problemTitle: undefined,
+    vendorName: undefined,
+    expiresAt: undefined,
+    lastSyncAt: undefined,
+    syncError: null,
   },
 };
 
@@ -483,6 +498,95 @@ export const connectSocket = createAsyncThunk(
         });
 
         dispatch(syncCustomerRequests(transformedRequests as Array<SocketServiceRequest & { proposals: SocketProposal[] }>));
+
+        // DEBUG: Log all requests and their statuses
+        if (__DEV__) {
+          console.log('[Dispatch] proposals.synced: Total requests:', transformedRequests.length);
+          transformedRequests.forEach((r, i) => {
+            console.log(`[Dispatch] proposals.synced: Request[${i}] id=${r.id}, status="${r.status}", proposals=${r.proposals?.length || 0}`);
+          });
+        }
+
+        // NEW: Update customerActiveService if there's an active request
+        // This ensures OngoingServiceCard shows after app restart
+        // Note: Backend sends 'assigned' status after proposal acceptance (not 'accepted')
+        const activeRequest = transformedRequests.find(r =>
+          ['pending', 'accepted', 'assigned', 'en_route', 'in_progress', 'waiting'].includes(r.status)
+        );
+
+        if (activeRequest) {
+          const acceptedProposal = activeRequest.proposals?.find((p: SocketProposal) => p.status === 'accepted');
+          const categoryName = (activeRequest as SocketServiceRequest & { category_detail?: { name: string } }).category_detail?.name;
+
+          // Map backend status to OngoingServiceCard status
+          // Backend sends: pending, assigned, en_route, in_progress, waiting
+          // OngoingServiceCard expects: pending, accepted, en_route, in_progress
+          const mapStatus = (backendStatus: string): 'pending' | 'accepted' | 'en_route' | 'in_progress' => {
+            if (backendStatus === 'pending') return 'pending';
+            if (['assigned', 'waiting', 'accepted'].includes(backendStatus)) return 'accepted';
+            if (backendStatus === 'en_route') return 'en_route';
+            if (backendStatus === 'in_progress') return 'in_progress';
+            return 'pending'; // fallback
+          };
+
+          if (__DEV__) {
+            console.log('[Dispatch] proposals.synced: Found activeRequest:', {
+              id: activeRequest.id,
+              status: activeRequest.status,
+              mappedStatus: mapStatus(activeRequest.status),
+              problem_title: activeRequest.problem_title,
+              acceptedProposal: acceptedProposal ? { id: acceptedProposal.id, vendor: acceptedProposal.vendor?.full_name } : null,
+            });
+          }
+
+          dispatch(setCustomerActiveServiceFull({
+            requestId: activeRequest.id,
+            status: mapStatus(activeRequest.status),
+            categoryName,
+            problemTitle: activeRequest.problem_title,
+            vendorName: acceptedProposal?.vendor?.full_name,
+            expiresAt: activeRequest.expires_at,
+          }));
+
+          // Update vendor distance tracking from backend flags
+          // This is the source of truth for cancel button visibility
+          // Check both request-level flags and proposal-level inactive flag
+          const vendorHasCovered1km = (activeRequest as any).vendor_has_covered_1km === true;
+          // Backend sends 'inactive' on the accepted proposal (true = vendor inactive for 20+ min)
+          const proposalInactive = (acceptedProposal as any)?.inactive === true;
+          // Also check request-level flag for backward compatibility
+          const vendorIsStationary = (activeRequest as any).vendor_is_stationary === true || proposalInactive;
+
+          if (vendorHasCovered1km) {
+            dispatch(setVendorReached1km({
+              distanceTowardsLocationKm: 1.0, // Backend confirmed 1km covered
+              currentDistanceKm: 0,
+              initialDistanceKm: 0,
+            }));
+            if (vendorIsStationary) {
+              dispatch(setVendorStationary());
+            }
+            if (__DEV__) {
+              console.log('[Dispatch] proposals.synced: Vendor distance state from backend:', {
+                hasReached1km: vendorHasCovered1km,
+                isStationary: vendorIsStationary,
+                proposalInactive,
+              });
+            }
+          } else {
+            // Reset distance tracking if vendor hasn't covered 1km
+            dispatch(resetVendorDistanceTracking());
+          }
+
+          if (__DEV__) {
+            console.log('[Dispatch] proposals.synced: Set customerActiveService for request', activeRequest.id, 'status:', activeRequest.status);
+          }
+        } else {
+          dispatch(clearCustomerActiveServiceState());
+          if (__DEV__) {
+            console.log('[Dispatch] proposals.synced: No active request found in statuses [pending, accepted, en_route, in_progress]');
+          }
+        }
       })
     );
 
@@ -610,6 +714,36 @@ export const connectSocket = createAsyncThunk(
           }
         }
 
+        // Handle service started (in_progress status)
+        // Update customerActiveService status when vendor arrives and service starts
+        if (request.status === 'in_progress') {
+          const state = getState() as RootState;
+          const isCustomerRequest = !!state.dispatch.customerRequestsById[request.id];
+          const isCurrentRequest = state.dispatch.currentCustomerRequestId === request.id;
+          // Also check customerActiveService.requestId - most reliable as it persists
+          // even after navigating away from live-offers screen
+          const isActiveService = state.dispatch.customerActiveService.requestId === request.id;
+
+          if (isCustomerRequest || isCurrentRequest || isActiveService) {
+            // Update Redux state
+            dispatch(setCustomerActiveService({
+              requestId: request.id,
+              status: 'in_progress',
+            }));
+
+            // Also persist to SecureStore for create screen check
+            // This ensures canCustomerCreateNewRequest() knows status is in_progress
+            const { updateCustomerActiveServiceStatus } = require('@/services/customerActiveServiceService');
+            updateCustomerActiveServiceStatus('in_progress').catch((err: Error) => {
+              if (__DEV__) console.warn('[Dispatch] Failed to persist in_progress status:', err);
+            });
+
+            if (__DEV__) {
+              console.log('[Dispatch] Service started - status changed to in_progress:', request.id);
+            }
+          }
+        }
+
         dispatch(updateServiceRequest(request));
       })
     );
@@ -656,13 +790,13 @@ export const connectSocket = createAsyncThunk(
     // This event is sent when vendor cancels an accepted job
     // Backend resets request to PENDING and re-broadcasts to other vendors
     activeUnsubscribers.push(
-      socketService.on('service.cancelled', (data: { service_request_id: number; status: string }) => {
+      socketService.on('service.cancelled', (data: { event: string; payload: { service_request_id: number; status: string } }) => {
         if (__DEV__) console.log('[Dispatch] service.cancelled:', data);
 
-        const requestId = data.service_request_id;
+        const requestId = data.payload.service_request_id;
 
         // Only handle when status is 'pending' (vendor cancelled, request reset)
-        if (data.status === 'pending') {
+        if (data.payload.status === 'pending') {
           // Set vendor cancelled flag for UI toast
           dispatch(setVendorCancelledAndReset(requestId));
 
@@ -672,8 +806,75 @@ export const connectSocket = createAsyncThunk(
           // Clear all proposals for this request (they're now invalid)
           dispatch(clearProposalsForRequest(requestId));
 
+          // Clear customer active service state so OngoingServiceCard hides
+          dispatch(clearCustomerActiveServiceState());
+
+          // Reset vendor distance tracking
+          dispatch(resetVendorDistanceTracking());
+
           if (__DEV__) {
             console.log('[Dispatch] Vendor cancelled, request reset to pending:', requestId);
+          }
+        }
+      })
+    );
+
+    // Customer cancelled request - remove from vendor's list
+    // This event is sent when customer cancels a request before accepting any proposal
+    // Backend broadcasts to ALL vendors who received this request
+    activeUnsubscribers.push(
+      socketService.on('vendor.cancelled', (data: { event: string; payload: { service_request_id: number; status: string } }) => {
+        if (__DEV__) console.log('[Dispatch] vendor.cancelled:', data);
+
+        const requestId = data.payload.service_request_id;
+
+        if (data.payload.status === 'cancelled') {
+          // Remove request from vendor's list
+          dispatch(removeServiceRequest(requestId));
+
+          // Clear all proposals for this request
+          dispatch(clearProposalsForRequest(requestId));
+
+          // Remove notification for this request
+          removeServiceRequestNotification(requestId);
+
+          // Clear active job if it was this request
+          const state = getState() as RootState;
+          if (state.dispatch.activeJobId === requestId) {
+            dispatch(clearActiveJob());
+
+            // Clear persisted active job from SecureStore
+            clearActiveJobStorage().catch((error) => {
+              if (__DEV__) console.error('[Dispatch] Failed to clear job on customer cancel:', error);
+            });
+          }
+
+          if (__DEV__) {
+            console.log('[Dispatch] Request cancelled by customer, removed from vendor list:', requestId);
+          }
+        }
+      })
+    );
+
+    // Service requests now in vendor's radius (after radius change)
+    // When vendor updates their service radius, backend re-evaluates and sends
+    // requests that are now within the new radius
+    activeUnsubscribers.push(
+      socketService.on('servicereq.inradius', (data: {
+        payload: SocketServiceRequest[];
+        count: number;
+      }) => {
+        if (__DEV__) {
+          console.log('[Dispatch] servicereq.inradius received:', data.count, 'new requests');
+        }
+
+        // Merge new requests with existing ones (avoid duplicates)
+        if (data.payload && data.payload.length > 0) {
+          // Use slice action directly to avoid TypeScript hoisting issue
+          dispatch({ type: 'dispatch/mergeIncomingRequests', payload: data.payload });
+
+          if (__DEV__) {
+            console.log('[Dispatch] Merged', data.payload.length, 'requests from radius change');
           }
         }
       })
@@ -860,6 +1061,7 @@ export const connectSocket = createAsyncThunk(
         };
       }) => {
         const payload = data.payload || data;
+
         if (__DEV__) {
           console.log('[Dispatch] Backend event: Vendor reached 1km towards customer:', payload);
         }
@@ -901,6 +1103,26 @@ export const connectSocket = createAsyncThunk(
     activeUnsubscribers.push(
       socketService.on('auth.failed', () => {
         dispatch(setError({ key: 'auth', message: 'Authentication failed' }));
+      })
+    );
+
+    // Session force logout - triggered when user logs in from another device
+    // This event is sent by backend when device transfer occurs
+    activeUnsubscribers.push(
+      socketService.on('session.force_logout', async (data: { reason?: string }) => {
+        if (__DEV__) {
+          console.log('[Dispatch] Received force logout event:', data);
+        }
+
+        // Use dynamic import to avoid circular dependency with authSlice
+        const { logoutUser } = await import('./authSlice');
+        dispatch(logoutUser());
+
+        // Note: The logoutUser thunk will handle:
+        // - Disconnecting WebSocket
+        // - Resetting all Redux slices
+        // - Clearing SecureStore tokens
+        // - Stopping background location tracking
       })
     );
 
@@ -1367,40 +1589,162 @@ const dispatchSlice = createSlice({
       state.serviceRequestIds = state.serviceRequestIds.filter((id) => !requestIds.includes(id));
     },
 
+    // Vendor: Merge incoming requests (from radius change)
+    // When vendor changes service radius, backend sends new requests that are now within range
+    // This merges them with existing requests without duplicates
+    mergeIncomingRequests: (state, action: PayloadAction<SocketServiceRequest[]>) => {
+      const newRequests = action.payload;
+      const existingIds = new Set(state.serviceRequestIds);
+
+      const now = Date.now();
+      newRequests.forEach((request) => {
+        // Skip if already exists
+        if (existingIds.has(request.id)) {
+          return;
+        }
+
+        // Skip expired requests
+        const expiresAt = new Date(request.expires_at).getTime();
+        if (expiresAt <= now || request.remaining_expiry_time <= 0) {
+          return;
+        }
+
+        // Add to state
+        state.serviceRequestsById[request.id] = request;
+        state.serviceRequestIds.unshift(request.id); // Add to beginning
+      });
+    },
+
     // Customer: Sync requests with proposals
+    // IMPORTANT: Merge instead of clear to preserve proposals that arrived during sync
     syncCustomerRequests: (
       state,
       action: PayloadAction<Array<SocketServiceRequest & { proposals: SocketProposal[] }>>
     ) => {
-      state.customerRequestsById = {};
-      state.customerRequestIds = [];
-      state.proposalsById = {};
-      state.proposalIdsByRequest = {};
+      // Track synced request IDs to clean up old ones
+      const syncedRequestIds = new Set<number>();
 
       action.payload.forEach((request) => {
-        state.customerRequestsById[request.id] = request;
-        state.customerRequestIds.push(request.id);
+        syncedRequestIds.add(request.id);
 
-        // Index proposals
-        state.proposalIdsByRequest[request.id] = [];
+        // Update request (merge, don't overwrite completely)
+        state.customerRequestsById[request.id] = request;
+
+        if (!state.customerRequestIds.includes(request.id)) {
+          state.customerRequestIds.push(request.id);
+        }
+
+        // Process proposals - MERGE with existing to preserve new arrivals
+        if (!state.proposalIdsByRequest[request.id]) {
+          state.proposalIdsByRequest[request.id] = [];
+        }
+
         request.proposals.forEach((proposal) => {
+          // Update proposal data
           state.proposalsById[proposal.id] = proposal;
-          state.proposalIdsByRequest[request.id].push(proposal.id);
+
+          // Add to request's proposal list if not already there
+          if (!state.proposalIdsByRequest[request.id].includes(proposal.id)) {
+            state.proposalIdsByRequest[request.id].push(proposal.id);
+          }
         });
+      });
+
+      // Clean up requests that are no longer in sync (completed/cancelled)
+      // BUT keep any proposals that may have arrived after sync started
+      state.customerRequestIds = state.customerRequestIds.filter((id) =>
+        syncedRequestIds.has(id)
+      );
+
+      // Clean up customerRequestsById for removed requests
+      Object.keys(state.customerRequestsById).forEach((idStr) => {
+        const id = Number(idStr);
+        if (!syncedRequestIds.has(id)) {
+          delete state.customerRequestsById[id];
+          // Also clean up proposals for removed requests
+          const proposalIds = state.proposalIdsByRequest[id] || [];
+          proposalIds.forEach((proposalId) => {
+            delete state.proposalsById[proposalId];
+          });
+          delete state.proposalIdsByRequest[id];
+        }
       });
     },
 
     // Customer: Update proposal
     updateProposal: (state, action: PayloadAction<SocketProposal>) => {
       const proposal = action.payload;
-      state.proposalsById[proposal.id] = proposal;
-      // Ensure it's in the request's proposal list
-      if (!state.proposalIdsByRequest[proposal.service_request_id]) {
-        state.proposalIdsByRequest[proposal.service_request_id] = [];
+      const requestId = proposal.service_request_id;
+      const vendorId = proposal.vendor?.id;
+      const now = Date.now();
+
+      // Remove old expired/declined proposals from the same vendor
+      // This ensures customer sees the new proposal instead of the old expired one
+      // Check BOTH status-expired AND time-expired!
+      if (vendorId && state.proposalIdsByRequest[requestId]) {
+        const existingIds = state.proposalIdsByRequest[requestId];
+        const idsToRemove: number[] = [];
+
+        existingIds.forEach((existingId) => {
+          const existingProposal = state.proposalsById[existingId];
+          // Skip if not same vendor or same proposal
+          if (
+            !existingProposal ||
+            existingProposal.vendor?.id !== vendorId ||
+            existingProposal.id === proposal.id
+          ) {
+            return;
+          }
+
+          // Check if proposal should be removed:
+          // 1. Status is explicitly expired or declined
+          const isStatusExpired =
+            existingProposal.status === 'expired' || existingProposal.status === 'declined';
+
+          // 2. OR status is pending but time has expired (acceptance_expires_at in past)
+          const isTimeExpired =
+            existingProposal.status === 'pending' &&
+            existingProposal.acceptance_expires_at &&
+            new Date(existingProposal.acceptance_expires_at).getTime() <= now;
+
+          if (isStatusExpired || isTimeExpired) {
+            idsToRemove.push(existingId);
+            delete state.proposalsById[existingId];
+          }
+        });
+
+        // Update the ID list to remove old proposals
+        if (idsToRemove.length > 0) {
+          state.proposalIdsByRequest[requestId] = existingIds.filter(
+            (id) => !idsToRemove.includes(id)
+          );
+        }
       }
 
-      if (!state.proposalIdsByRequest[proposal.service_request_id].includes(proposal.id)) {
-        state.proposalIdsByRequest[proposal.service_request_id].push(proposal.id);
+      // Now add/update the new proposal
+      state.proposalsById[proposal.id] = proposal;
+
+      // Ensure it's in the request's proposal list
+      if (!state.proposalIdsByRequest[requestId]) {
+        state.proposalIdsByRequest[requestId] = [];
+      }
+
+      if (!state.proposalIdsByRequest[requestId].includes(proposal.id)) {
+        state.proposalIdsByRequest[requestId].push(proposal.id);
+      }
+
+      // When proposal is declined or expired, reset vendor's already_sent flag
+      // This allows vendor to send a new proposal immediately
+      if (proposal.status === 'declined' || proposal.status === 'expired') {
+        const requestId = proposal.service_request_id;
+        const request = state.serviceRequestsById[requestId];
+        if (request && request.already_sent) {
+          state.serviceRequestsById[requestId] = {
+            ...request,
+            already_sent: false,
+            vendor_status: 'request', // Reset back to initial state
+          };
+        }
       }
     },
 
@@ -1684,21 +2028,63 @@ const dispatchSlice = createSlice({
       state.vendorLocation = null;
     },
 
-    // Customer Active Service (for logout restriction)
+    // Customer Active Service (for logout restriction and home screen card)
     setCustomerActiveService: (
       state,
-      action: PayloadAction<{ requestId: number; status: 'pending' | 'accepted' | 'expired' }>
+      action: PayloadAction<{ requestId: number; status: 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'expired' }>
+    ) => {
+      state.customerActiveService = {
+        ...state.customerActiveService,
+        requestId: action.payload.requestId,
+        status: action.payload.status,
+        lastSyncAt: Date.now(),
+        syncError: null,
+      };
+    },
+
+    // Set all customer active service fields (for display on home screen)
+    setCustomerActiveServiceFull: (
+      state,
+      action: PayloadAction<{
+        requestId: number;
+        status: 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'expired';
+        categoryName?: string;
+        problemTitle?: string;
+        vendorName?: string;
+        expiresAt?: string;
+      }>
     ) => {
       state.customerActiveService = {
         requestId: action.payload.requestId,
         status: action.payload.status,
+        categoryName: action.payload.categoryName,
+        problemTitle: action.payload.problemTitle,
+        vendorName: action.payload.vendorName,
+        expiresAt: action.payload.expiresAt,
+        lastSyncAt: Date.now(),
+        syncError: null,
       };
+    },
+
+    // Set sync error for customer active service
+    setCustomerActiveServiceSyncError: (
+      state,
+      action: PayloadAction<string>
+    ) => {
+      state.customerActiveService.syncError = action.payload;
+      state.customerActiveService.lastSyncAt = Date.now();
     },
 
     clearCustomerActiveServiceState: (state) => {
       state.customerActiveService = {
         requestId: null,
         status: null,
+        categoryName: undefined,
+        problemTitle: undefined,
+        vendorName: undefined,
+        expiresAt: undefined,
+        lastSyncAt: undefined,
+        syncError: null,
       };
     },
 
@@ -1777,6 +2163,7 @@ export const {
   updateServiceRequest,
   removeServiceRequest,
   removeServiceRequestsBatch,
+  mergeIncomingRequests,
   syncCustomerRequests,
   updateProposal,
   removeProposal,
@@ -1805,6 +2192,8 @@ export const {
   resetDispatchState,
   cleanupCompletedService,
   setCustomerActiveService,
+  setCustomerActiveServiceFull,
+  setCustomerActiveServiceSyncError,
   clearCustomerActiveServiceState,
   markProposalSent,
 } = dispatchSlice.actions;
@@ -2057,17 +2446,114 @@ export const selectCustomerHasActiveJob = (state: RootState): {
     };
   }
 
-  // Block logout for 'accepted' status (proposal accepted, service in progress)
-  if (customerActiveService.status === 'accepted') {
+  // Block logout for 'accepted', 'en_route', 'in_progress' status (service in progress)
+  if (customerActiveService.status === 'accepted' ||
+      customerActiveService.status === 'en_route' ||
+      customerActiveService.status === 'in_progress') {
     return {
       hasActiveJob: true,
       reason: 'You have an active service in progress. Please complete or cancel it before logging out.',
-      status: 'accepted'
+      status: customerActiveService.status
     };
   }
 
   // 'expired' status or any other - allow logout
   return { hasActiveJob: false, reason: null, status: customerActiveService.status };
+};
+
+/**
+ * Selector to get customer active service for display on home screen
+ * Returns null if no active service or if expired
+ * Used by OngoingServiceCard component
+ */
+export const selectCustomerActiveServiceForDisplay = (state: RootState) => {
+  const { customerActiveService } = state.dispatch;
+
+  // No active service
+  if (!customerActiveService.requestId || !customerActiveService.status) {
+    return null;
+  }
+
+  // Don't show expired status on home screen
+  if (customerActiveService.status === 'expired') {
+    return null;
+  }
+
+  return {
+    requestId: customerActiveService.requestId,
+    status: customerActiveService.status as 'pending' | 'accepted' | 'en_route' | 'in_progress',
+    categoryName: customerActiveService.categoryName,
+    problemTitle: customerActiveService.problemTitle,
+    vendorName: customerActiveService.vendorName,
+    expiresAt: customerActiveService.expiresAt,
+    lastSyncAt: customerActiveService.lastSyncAt,
+    syncError: customerActiveService.syncError,
+  };
+};
+
+/**
+ * Selector to check if customer can create a NEW service request.
+ *
+ * IMPORTANT: This is different from selectCustomerHasActiveJob which is for logout.
+ *
+ * Customer CAN create new request when:
+ * - No active service
+ * - Status is 'expired'
+ * - Status is 'in_progress' (vendor is working, customer might need another vendor)
+ *
+ * Customer CANNOT create new request when:
+ * - Status is 'pending' (waiting for proposals)
+ * - Status is 'accepted' (vendor assigned)
+ * - Status is 'en_route' (vendor on the way)
+ *
+ * This allows customers to book multiple vendors when one is already working.
+ */
+export const selectCanCustomerCreateRequest = (state: RootState): {
+  canCreate: boolean;
+  reason: string | null;
+  blockingRequestId: number | null;
+  blockingStatus: string | null;
+} => {
+  const { customerActiveService } = state.dispatch;
+
+  // No active service - can create
+  if (!customerActiveService.requestId || !customerActiveService.status) {
+    return { canCreate: true, reason: null, blockingRequestId: null, blockingStatus: null };
+  }
+
+  const status = customerActiveService.status;
+
+  // Blocking statuses - CANNOT create new request
+  if (status === 'pending') {
+    return {
+      canCreate: false,
+      reason: 'You have a pending request waiting for vendor proposals. Please wait for it to expire or cancel it first.',
+      blockingRequestId: customerActiveService.requestId,
+      blockingStatus: status,
+    };
+  }
+
+  if (status === 'accepted') {
+    return {
+      canCreate: false,
+      reason: 'You have an accepted service. Please wait for the vendor to arrive or cancel if needed.',
+      blockingRequestId: customerActiveService.requestId,
+      blockingStatus: status,
+    };
+  }
+
+  if (status === 'en_route') {
+    return {
+      canCreate: false,
+      reason: 'A vendor is on the way to your location. Please wait for them to arrive.',
+      blockingRequestId: customerActiveService.requestId,
+      blockingStatus: status,
+    };
+  }
+
+  // Non-blocking statuses: 'in_progress', 'expired', or any other - CAN create
+  // 'in_progress' means vendor is already working, customer can book another vendor
+  return { canCreate: true, reason: null, blockingRequestId: null, blockingStatus: null };
 };
 
 // UI State

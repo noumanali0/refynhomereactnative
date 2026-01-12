@@ -299,6 +299,7 @@ export default function Signup() {
                                         />
                                         <TextInput
                                             placeholder="Enter your first name"
+                                            placeholderTextColor="#94a3b8"
                                             value={formData.firstName}
                                             onChangeText={(text) =>
                                                 setFormData({ ...formData, firstName: text })
@@ -321,6 +322,7 @@ export default function Signup() {
                                         />
                                         <TextInput
                                             placeholder="Enter your last name"
+                                            placeholderTextColor="#94a3b8"
                                             value={formData.lastName}
                                             onChangeText={(text) =>
                                                 setFormData({ ...formData, lastName: text })
@@ -343,6 +345,7 @@ export default function Signup() {
                                         />
                                         <TextInput
                                             placeholder="+92 300 1234567"
+                                            placeholderTextColor="#94a3b8"
                                             value={formData.phoneNumber}
                                             onChangeText={(text) =>
                                                 setFormData({ ...formData, phoneNumber: text })
@@ -368,6 +371,7 @@ export default function Signup() {
                                                 />
                                                 <TextInput
                                                     placeholder="Enter your address"
+                                                    placeholderTextColor="#94a3b8"
                                                     value={formData.address}
                                                     onChangeText={(text) =>
                                                         setFormData({ ...formData, address: text })
@@ -390,6 +394,7 @@ export default function Signup() {
                                                 />
                                                 <TextInput
                                                     placeholder="Enter your city"
+                                                    placeholderTextColor="#94a3b8"
                                                     value={formData.city}
                                                     onChangeText={(text) =>
                                                         setFormData({ ...formData, city: text })

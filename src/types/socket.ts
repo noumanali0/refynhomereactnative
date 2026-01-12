@@ -161,6 +161,8 @@ export type SocketAction =
   | 'route.start'
   | 'route.arrive'
   | 'route.complete'
+  | 'service.start'
+  | 'vendor.cancel'
   | 'proposal.check_expiry'
   | 'service_request.check_expiry';
 

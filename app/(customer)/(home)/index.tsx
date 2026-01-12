@@ -20,6 +20,7 @@ import AppHeader from '@/components/common/AppHeader';
 import { AppButton } from '@/components/common/AppButton';
 import { LinearGradient } from "expo-linear-gradient";
 import { ServiceHistoryCard } from '@/components/customer/ServiceHistoryCard';
+import { OngoingServiceCard } from '@/components/customer/OngoingServiceCard';
 import { useCurrentLocation } from '@/hooks/useCurrentLocation';
 import { updateProfile, fetchUserProfile } from '@/store/slices/authSlice';
 import { fetchServiceHistory, selectServiceHistory, selectIsLoading as selectHistoryLoading } from '@/store/slices/serviceHistorySlice';
@@ -29,7 +30,12 @@ import {
   isActiveServiceExpired,
   syncCustomerActiveServiceFromBackend,
 } from '@/services/customerActiveServiceService';
-import { clearCustomerActiveServiceState, setCustomerActiveService } from '@/store/slices/dispatchSlice';
+import {
+  clearCustomerActiveServiceState,
+  setCustomerActiveService,
+  setCustomerActiveServiceFull,
+  selectCustomerActiveServiceForDisplay,
+} from '@/store/slices/dispatchSlice';
 // import { useAppSelector } from '@/store/hooks';
 // import { useGetServiceHistoryQuery } from '@/services/customerApi';
 // import { SERVICE_TYPES } from '@/utils/constants';
@@ -41,6 +47,8 @@ export default function CustomerHomeScreen() {
   const { user } = useAppSelector((state) => state.auth);
   const recentServices = useAppSelector(selectServiceHistory);
   const historyLoading = useAppSelector(selectHistoryLoading);
+  // Subscribe to active service for fallback card display
+  const activeServiceForDisplay = useAppSelector(selectCustomerActiveServiceForDisplay);
   const [refreshing, setRefreshing] = useState(false);
   const [checkingActiveService, setCheckingActiveService] = useState(true);
   const hasCheckedActiveService = useRef(false);
@@ -104,7 +112,10 @@ export default function CustomerHomeScreen() {
   useEffect(() => {
     const checkActiveService = async () => {
       // Only check once per mount
-      if (hasCheckedActiveService.current) return;
+      if (hasCheckedActiveService.current) {
+        console.log("ye block chal raha hai ===>>>>")
+        return
+      };
       hasCheckedActiveService.current = true;
 
       try {
@@ -118,7 +129,14 @@ export default function CustomerHomeScreen() {
 
         if (hasActive && activeService) {
           // Check if request has already expired (based on stored expiresAt)
+          if (__DEV__) {
+            console.log('[CustomerHome] Checking expiry, activeService.status:', activeService.status, 'typeof:', typeof activeService.status);
+          }
           const isExpired = await isActiveServiceExpired();
+          if (__DEV__) {
+            console.log('[CustomerHome] isExpired:', isExpired, 'activeService.status !== accepted:', activeService.status !== 'accepted');
+            console.log('[CustomerHome] Condition result:', isExpired && activeService.status !== 'accepted');
+          }
 
           if (isExpired && activeService.status !== 'accepted') {
             // Request expired and no proposal was accepted - clear storage
@@ -131,10 +149,14 @@ export default function CustomerHomeScreen() {
             return;
           }
 
-          // Update Redux state for logout restriction
-          dispatch(setCustomerActiveService({
+          // Update Redux state with full display fields (for OngoingServiceCard fallback)
+          dispatch(setCustomerActiveServiceFull({
             requestId: activeService.requestId,
-            status: activeService.status,
+            status: activeService.status as 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'expired',
+            categoryName: activeService.problemTitle ? undefined : undefined, // TODO: Get from category
+            problemTitle: activeService.problemTitle,
+            vendorName: activeService.acceptedVendor?.full_name,
+            expiresAt: activeService.expiresAt,
           }));
 
           if (__DEV__) {
@@ -142,22 +164,39 @@ export default function CustomerHomeScreen() {
           }
 
           // Auto-navigate to live offers (no alert)
-          if (__DEV__) {
-            console.log('[CustomerHome] Auto-navigating to live-offers for active request');
+          // If navigation fails, OngoingServiceCard will show as fallback
+          try {
+            if (__DEV__) {
+              console.log('[CustomerHome] Auto-navigating to live-offers for active request');
+            }
+            navigateToLiveOffers(activeService);
+          } catch (navError) {
+            if (__DEV__) {
+              console.error('[CustomerHome] Navigation failed, showing fallback card:', navError);
+            }
+            // Don't return - let the home screen show with OngoingServiceCard
+            setCheckingActiveService(false);
           }
-          navigateToLiveOffers(activeService);
           return;
         }
 
-        // No active request found
+        // No active request found from API
+        // BUT don't clear if WebSocket already set valid data (race condition protection)
+        if (__DEV__) {
+          console.log('[CustomerHome] API returned no active service, checking if WebSocket already set data...');
+        }
+        // Small delay to let WebSocket sync complete if it's in progress
+        await new Promise(resolve => setTimeout(resolve, 500));
         setCheckingActiveService(false);
+        // Note: We intentionally don't clear Redux state here anymore
+        // WebSocket sync (proposals.synced) is the source of truth for active services
       } catch (error) {
         if (__DEV__) {
           console.error('[CustomerHome] Error checking active service:', error);
         }
-        // Clear potentially corrupted data
+        // On error, don't clear Redux - WebSocket sync is source of truth
+        // Only clear SecureStore if it's corrupted
         await clearCustomerActiveService().catch(() => { });
-        dispatch(clearCustomerActiveServiceState());
         setCheckingActiveService(false);
       }
     };
@@ -275,6 +314,31 @@ export default function CustomerHomeScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
+        {/* Ongoing Service Card - Fallback when navigation to live-offers fails */}
+        {activeServiceForDisplay && (
+          <OngoingServiceCard
+            requestId={activeServiceForDisplay.requestId}
+            status={activeServiceForDisplay.status}
+            categoryName={activeServiceForDisplay.categoryName}
+            problemTitle={activeServiceForDisplay.problemTitle}
+            vendorName={activeServiceForDisplay.vendorName}
+            expiresAt={activeServiceForDisplay.expiresAt}
+            onPress={() => {
+              // Navigate to live-offers with request ID
+              router.push({
+                pathname: '/(customer)/(home)/live-offers',
+                params: {
+                  requestId: activeServiceForDisplay.requestId.toString(),
+                  ...(activeServiceForDisplay.expiresAt && {
+                    expiresAt: activeServiceForDisplay.expiresAt,
+                  }),
+                  restoredStatus: activeServiceForDisplay.status,
+                },
+              });
+            }}
+          />
+        )}
+
         {/* Quick Request Card */}
 
         <LinearGradient

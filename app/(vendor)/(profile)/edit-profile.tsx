@@ -88,8 +88,10 @@ export default function VendorEditProfileScreen() {
     const fetchCategories = async () => {
       try {
         setIsLoadingCategories(true);
-        const cats = await serviceRequestApi.getCategories();
-        setCategories(cats); // Don't filter - API returns only active categories
+        const response = await serviceRequestApi.getCategories();
+        // Handle both paginated response { results: [...] } and direct array [...]
+        const cats = Array.isArray(response) ? response : (response as any)?.results || [];
+        setCategories(cats);
       } catch (error) {
         console.error('[VendorEditProfile] Failed to load categories:', error);
         showToast({ type: "error", message: 'Failed to load service categories' });

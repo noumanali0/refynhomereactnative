@@ -792,8 +792,16 @@ export const verifyDeviceTransfer = createAsyncThunk(
  */
 export const registerPushToken = createAsyncThunk(
   'auth/registerPushToken',
-  async ({ pushToken }: { pushToken: string }, { rejectWithValue }) => {
+  async ({ pushToken }: { pushToken: string }, { rejectWithValue, getState }) => {
     try {
+      // IMPORTANT: Check if user is still authenticated before making API call
+      // This prevents continuous 401 retries after logout/device transfer
+      const state = getState() as { auth: AuthState };
+      if (!state.auth.isAuthenticated) {
+        console.log('[Auth] Skipping push token registration - user not authenticated');
+        return { success: false };
+      }
+
       const deviceId = await deviceService.getOrCreateDeviceId();
       await authService.registerPushToken(pushToken, deviceId);
       return { success: true };

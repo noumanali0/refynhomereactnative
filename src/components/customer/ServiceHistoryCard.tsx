@@ -5,7 +5,7 @@
  * Shows different UI based on service status (active, completed, cancelled).
  */
 
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -20,6 +20,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { router } from 'expo-router';
 
 import Text from '@/components/common/Text';
+import RatingModal from '@/components/common/RatingModal';
 import { COLORS } from '@/constants/colors';
 import { ServiceHistoryRequest } from '@/services/serviceHistoryService';
 import { addToFavorites, removeFromFavorites, selectFavoriteVendorIds, selectIsAddingFavorite } from '@/store/slices/vendorSlice';
@@ -34,6 +35,7 @@ interface ServiceHistoryCardProps {
   request: ServiceHistoryRequest;
   onPress?: (requestId: number) => void;
   disablePress?: boolean;
+  onReviewSubmit?: () => void; // Callback after review is submitted to refresh history
 }
 
 // ============================================================================
@@ -87,11 +89,15 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
   request,
   onPress,
   disablePress = false,
+  onReviewSubmit,
 }) => {
   const dispatch = useDispatch<AppDispatch>();
   const { showToast } = useToast();
   const favoriteVendorIds = useSelector(selectFavoriteVendorIds);
   const isAddingFavorite = useSelector(selectIsAddingFavorite);
+
+  // Review modal state
+  const [showRatingModal, setShowRatingModal] = useState(false);
 
   const statusConfig = useMemo(() => getStatusConfig(request.status), [request.status]);
 
@@ -347,16 +353,58 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
                 </Text>
               </View>
             )}
+
+            {/* Review Section */}
+            {request.has_review && request.review ? (
+              // Show existing review
+              <View style={styles.reviewSection}>
+                <View style={styles.reviewHeader}>
+                  <Text style={styles.reviewLabel}>Your Review</Text>
+                  <View style={styles.reviewStars}>
+                    {[1, 2, 3, 4, 5].map((star) => (
+                      <Ionicons
+                        key={star}
+                        name={star <= request.review!.stars ? 'star' : 'star-outline'}
+                        size={14}
+                        color={COLORS.warning}
+                      />
+                    ))}
+                  </View>
+                </View>
+                {request.review.feedback && (
+                  <Text style={styles.reviewFeedback} numberOfLines={2}>
+                    "{request.review.feedback}"
+                  </Text>
+                )}
+              </View>
+            ) : (
+              // Show Add Review button
+              <TouchableOpacity
+                style={styles.addReviewButton}
+                onPress={() => setShowRatingModal(true)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="star-outline" size={16} color={COLORS.primary} />
+                <Text style={styles.addReviewText}>Add Review</Text>
+              </TouchableOpacity>
+            )}
           </LinearGradient>
         </View>
       )}
 
-      {/* View Details Arrow - Only show when card is clickable */}
-      {!disablePress && (
-        <View style={styles.viewDetailsRow}>
-          <Text style={styles.viewDetailsText}>View Details</Text>
-          <Ionicons name="chevron-forward" size={16} color={COLORS.primary} />
-        </View>
+      {/* Rating Modal */}
+      {showVendorSection && (
+        <RatingModal
+          visible={showRatingModal}
+          onClose={() => setShowRatingModal(false)}
+          onSuccess={() => {
+            setShowRatingModal(false);
+            // Call refresh callback to update history list
+            onReviewSubmit?.();
+          }}
+          serviceRequestId={request.id}
+          vendorName={vendor?.full_name || 'Vendor'}
+        />
       )}
     </CardWrapper>
   );
@@ -625,10 +673,20 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: COLORS.gray100,
   },
+  reviewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: verticalScale(6),
+  },
+  reviewLabel: {
+    fontSize: moderateScale(12),
+    color: COLORS.gray500,
+    fontWeight: '500',
+  },
   reviewStars: {
     flexDirection: 'row',
     gap: scale(2),
-    marginBottom: verticalScale(6),
   },
   reviewFeedback: {
     fontSize: moderateScale(12),
@@ -649,21 +707,6 @@ const styles = StyleSheet.create({
     fontSize: moderateScale(13),
     color: COLORS.primary,
     fontWeight: '500',
-  },
-  viewDetailsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'flex-end',
-    marginTop: verticalScale(12),
-    paddingTop: verticalScale(10),
-    borderTopWidth: 1,
-    borderTopColor: COLORS.gray100,
-  },
-  viewDetailsText: {
-    fontSize: moderateScale(13),
-    color: COLORS.primary,
-    fontWeight: '500',
-    marginRight: scale(4),
   },
 });
 

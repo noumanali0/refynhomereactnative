@@ -41,6 +41,7 @@ import CancelRequestModal from "@/components/customer/CancelRequestModal";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { COLORS } from "@/constants/colors";
 import { serviceRequestApi, type CreateServiceRequestParams, type CustomerCancelReasonCode } from "@/services/serviceRequestApi";
+import { socketService } from "@/services/socketService";
 import type { AppDispatch, RootState } from "@/store";
 import type { SocketProposal, Coordinates } from "@/types/socket";
 import {
@@ -67,6 +68,8 @@ import {
     setVendorLocation,
     setCustomerActiveService,
     clearCustomerActiveServiceState,
+    setVendorReached1km,
+    selectCustomerActiveService,
 } from "@/store/slices/dispatchSlice";
 import { clearReviewState } from "@/store/slices/reviewSlice";
 import { useVendorProximity } from "@/hooks/useVendorProximity";
@@ -161,7 +164,16 @@ const ProposalCard = React.memo(({
     isAccepting,
     isDeclining,
 }: ProposalCardProps) => {
-    const [timeLeft, setTimeLeft] = useState(proposal.remaining_expiry_time);
+    // Calculate initial time from acceptance_expires_at (more reliable than remaining_expiry_time)
+    const calculateTimeLeft = useCallback(() => {
+        if (!proposal.acceptance_expires_at) {
+            return proposal.remaining_expiry_time || 0;
+        }
+        const expiresAt = new Date(proposal.acceptance_expires_at).getTime();
+        return Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+    }, [proposal.acceptance_expires_at, proposal.remaining_expiry_time]);
+
+    const [timeLeft, setTimeLeft] = useState(calculateTimeLeft);
     const pulseAnim = useRef(new Animated.Value(1)).current;
     const progressAnim = useRef(new Animated.Value(1)).current;
     const isMountedRef = useRef(true);
@@ -178,19 +190,22 @@ const ProposalCard = React.memo(({
         };
     }, []);
 
-    // Timer effect with mounted check
+    // Timer effect - use acceptance_expires_at for accurate time calculation
+    // This ensures new proposals always show correct timer even if remaining_expiry_time is stale
     useEffect(() => {
-        setTimeLeft(proposal.remaining_expiry_time);
         if (proposal.status !== 'pending') return;
+
+        // Calculate and set time left immediately
+        setTimeLeft(calculateTimeLeft());
 
         const interval = setInterval(() => {
             if (isMountedRef.current) {
-                setTimeLeft((prev) => Math.max(0, prev - 1));
+                setTimeLeft(calculateTimeLeft());
             }
         }, 1000);
 
         return () => clearInterval(interval);
-    }, [proposal.remaining_expiry_time, proposal.status]);
+    }, [proposal.id, proposal.acceptance_expires_at, proposal.status, calculateTimeLeft]);
 
     // Pulse animation - with proper cleanup to prevent memory leak on unmount
     useEffect(() => {
@@ -566,9 +581,11 @@ const ProposalCard = React.memo(({
     );
 }, (prevProps, nextProps) => {
     // Check all critical props to prevent stale renders
+    // IMPORTANT: Include acceptance_expires_at to detect when same proposal ID is updated with new expiry
     return (
         prevProps.proposal.id === nextProps.proposal.id &&
         prevProps.proposal.status === nextProps.proposal.status &&
+        prevProps.proposal.acceptance_expires_at === nextProps.proposal.acceptance_expires_at &&
         prevProps.proposal.remaining_expiry_time === nextProps.proposal.remaining_expiry_time &&
         prevProps.isAccepting === nextProps.isAccepting &&
         prevProps.isDeclining === nextProps.isDeclining &&
@@ -636,8 +653,22 @@ export default function LiveOffersScreen() {
     );
 
     // Filter active proposals (pending or accepted)
+    // Also exclude pending proposals that are time-expired (backup check)
     const activeProposals = useMemo(() => {
-        return proposals.filter(p => p.status === 'pending' || p.status === 'accepted');
+        const now = Date.now();
+        return proposals.filter(p => {
+            // Must be pending or accepted
+            if (p.status !== 'pending' && p.status !== 'accepted') return false;
+
+            // For pending proposals, also check if actually expired by time
+            // This handles cases where backend hasn't sent the expired status yet
+            if (p.status === 'pending' && p.acceptance_expires_at) {
+                const expiresAt = new Date(p.acceptance_expires_at).getTime();
+                if (expiresAt <= now) return false; // Expired by time, filter out
+            }
+
+            return true;
+        });
     }, [proposals]);
 
     const acceptedProposal = useMemo(() => {
@@ -652,6 +683,12 @@ export default function LiveOffersScreen() {
     const [requestTimeLeft, setRequestTimeLeft] = useState<number>(CONSTANTS.REQUEST_TIMEOUT_SECONDS);
     const [requestExpired, setRequestExpired] = useState<boolean>(false);
     const [isRetrying, setIsRetrying] = useState<boolean>(false);
+
+    // Track if vendor arrival toast has been shown (prevents duplicate toasts)
+    const [hasShownArrivalToast, setHasShownArrivalToast] = useState(false);
+
+    // Track auto-started requests to prevent duplicate service.start sends
+    const autoStartedRequestIdsRef = useRef<Set<number>>(new Set());
 
     // =========================================================================
     // STAGED INITIALIZATION - Prevents crash on first mount
@@ -838,9 +875,11 @@ export default function LiveOffersScreen() {
     // This is critical for preventing crash on low-end devices
     // IMPORTANT: Only enable after staged initialization is complete
     // Disable when vendor cancels to clear route from map
+    // Disable when status is 'in_progress' (vendor has arrived, no need for routes)
     const isRouteTrackingEnabled = useMemo(() => {
-        return initStage === 'ready' && !!acceptedProposal && !!vendorLocation && !!serviceLocation && !serviceCancelledByVendor;
-    }, [initStage, acceptedProposal, vendorLocation, serviceLocation, serviceCancelledByVendor]);
+        const isInProgress = currentRequest?.status === 'in_progress';
+        return initStage === 'ready' && !!acceptedProposal && !!vendorLocation && !!serviceLocation && !serviceCancelledByVendor && !isInProgress;
+    }, [initStage, acceptedProposal, vendorLocation, serviceLocation, serviceCancelledByVendor, currentRequest?.status]);
 
     const {
         routeCoords,
@@ -922,6 +961,44 @@ export default function LiveOffersScreen() {
             console.log('[LiveOffers] Vendor arrived within 100m');
         },
     });
+
+    // Send service.start action and show toast when vendor arrives within 100m
+    useEffect(() => {
+        if (vendorHasArrived && !hasShownArrivalToast && acceptedProposal && effectiveRequestId) {
+            // Prevent duplicate sends
+            if (autoStartedRequestIdsRef.current.has(effectiveRequestId)) {
+                return;
+            }
+
+            // Send service.start action via WebSocket
+            // This will change status to 'in_progress' on the backend
+            socketService.send('service.start', {
+                service_request_id: effectiveRequestId,
+            });
+
+            // Mark as auto-started to prevent duplicate triggers
+            autoStartedRequestIdsRef.current.add(effectiveRequestId);
+
+            // Show toast notification
+            showToast({
+                type: 'success',
+                title: 'Service Started',
+                message: `${acceptedProposal.vendor?.full_name || 'Vendor'} has arrived. Service started automatically.`,
+                duration: 5000,
+            });
+            setHasShownArrivalToast(true);
+
+            if (__DEV__) {
+                console.log('[LiveOffers] Vendor arrived - sending service.start action');
+            }
+        }
+    }, [vendorHasArrived, hasShownArrivalToast, acceptedProposal, effectiveRequestId, showToast]);
+
+    // Reset arrival toast and auto-started tracking when request changes
+    useEffect(() => {
+        setHasShownArrivalToast(false);
+        autoStartedRequestIdsRef.current.clear();
+    }, [effectiveRequestId]);
 
     // Animation for waiting state
     const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -1301,6 +1378,8 @@ export default function LiveOffersScreen() {
         if (completedService && completedService.requestId === effectiveRequestId) {
             clearCustomerActiveService().catch(() => { });
             dispatch(clearCustomerActiveServiceState());
+            // Reset vendor distance tracking
+            dispatch(resetVendorDistanceTracking());
         }
     }, [completedService, effectiveRequestId, dispatch]);
 
@@ -1338,7 +1417,10 @@ export default function LiveOffersScreen() {
     // Handle vendor cancellation with request reset to pending (new flow)
     // Backend resets request to PENDING and re-broadcasts to other vendors
     useEffect(() => {
-        if (vendorCancelledRequest === effectiveRequestId) {
+        // Check if vendor cancelled - handle even if effectiveRequestId is null
+        // This can happen when proposals are cleared before currentRequest is re-evaluated
+        if (vendorCancelledRequest &&
+            (vendorCancelledRequest === effectiveRequestId || !effectiveRequestId)) {
             // Show toast - request is still active, searching for new vendors
             showToast({
                 type: 'info',
@@ -1357,10 +1439,13 @@ export default function LiveOffersScreen() {
                 console.log('[LiveOffers] Vendor cancelled, request reset to pending - waiting for new proposals');
             }
 
-            // NOTE: Don't navigate away - user stays on this screen
-            // Backend will re-broadcast request and new proposals will arrive
+            // If no active request anymore, navigate back to home/search
+            if (!effectiveRequestId) {
+                router.replace('/(customer)/(home)');
+            }
+            // Otherwise stay on this screen - backend will re-broadcast request and new proposals will arrive
         }
-    }, [vendorCancelledRequest, effectiveRequestId, dispatch, showToast]);
+    }, [vendorCancelledRequest, effectiveRequestId, dispatch, showToast, router]);
 
     // =========================================================================
     // Periodic Stationary Check Timer
@@ -1373,7 +1458,7 @@ export default function LiveOffersScreen() {
         if (!vendorDistanceTracking.hasReached1km) return;
         if (vendorDistanceTracking.isVendorStationary) return; // Already marked stationary
 
-        const STATIONARY_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+        const STATIONARY_THRESHOLD_MS = 20 * 60 * 1000; // 20 minutes (production)
         const CHECK_INTERVAL_MS = 30 * 1000; // Check every 30 seconds
 
         const checkStationaryInterval = setInterval(() => {
@@ -1830,40 +1915,107 @@ export default function LiveOffersScreen() {
         try {
             setIsCancelling(true);
 
-            // Cancel on backend with reason
-            await serviceRequestApi.cancel({
-                id: effectiveRequestId,
-                cancelled_by: 'customer',
-                reason_code: reasonCode,
-                reason: customReason,
+            // Set up a one-time error listener to catch backend rejection
+            let errorHandled = false;
+            const errorTimeout = setTimeout(() => {
+                // If no error after 3 seconds, assume success
+                if (!errorHandled) {
+                    handleCancelSuccess();
+                }
+            }, 3000);
+
+            const handleCancelSuccess = async () => {
+                if (errorHandled) return;
+                errorHandled = true;
+                clearTimeout(errorTimeout);
+
+                if (__DEV__) {
+                    console.log('[LiveOffers] Request cancelled via WebSocket:', effectiveRequestId, reasonCode);
+                }
+
+                // Clear persisted active service
+                await clearCustomerActiveService().catch(() => { });
+                dispatch(clearCustomerActiveServiceState());
+
+                // Reset vendor distance tracking for next request
+                dispatch(resetVendorDistanceTracking());
+
+                // Close modal
+                setShowCancelModal(false);
+                setIsCancelling(false);
+
+                // Navigate away
+                if (router.canGoBack()) {
+                    router.back();
+                } else {
+                    router.replace('/(customer)/(home)/');
+                }
+            };
+
+            // Listen for error event from WebSocket
+            const unsubscribe = socketService.on('error', (data: {
+                code?: string;
+                message?: string;
+                details?: {
+                    distance_covered_km?: number;
+                    inactive_minutes?: number;
+                    required_inactive_minutes?: number;
+                };
+            }) => {
+                if (errorHandled) return;
+
+                // Check if this is the cancel rejection error
+                if (data.code === 'cancel_not_allowed_vendor_nearby') {
+                    errorHandled = true;
+                    clearTimeout(errorTimeout);
+                    unsubscribe();
+                    setIsCancelling(false);
+
+                    // Update local state to hide cancel button
+                    dispatch(setVendorReached1km({
+                        distanceTowardsLocationKm: data.details?.distance_covered_km || 1.0,
+                        currentDistanceKm: 0,
+                        initialDistanceKm: 0,
+                    }));
+
+                    // Show informative alert
+                    const remainingMinutes = Math.ceil(
+                        (data.details?.required_inactive_minutes || 20) - (data.details?.inactive_minutes || 0)
+                    );
+                    Alert.alert(
+                        'Cannot Cancel',
+                        `The vendor has traveled ${data.details?.distance_covered_km?.toFixed(1) || '1.0'}km towards you. ` +
+                        `Cancellation will be available after ${remainingMinutes} more minutes if the vendor is inactive.`,
+                        [{ text: 'OK', onPress: () => setShowCancelModal(false) }]
+                    );
+                }
             });
 
-            if (__DEV__) {
-                console.log('[LiveOffers] Request cancelled on backend:', effectiveRequestId, reasonCode);
-            }
+            // Listen for successful cancellation acknowledgment
+            const unsubscribeAck = socketService.on('vendor.cancelled.ack', () => {
+                if (!errorHandled) {
+                    handleCancelSuccess();
+                }
+                unsubscribeAck();
+            });
 
-            // Clear persisted active service
-            await clearCustomerActiveService().catch(() => { });
-            dispatch(clearCustomerActiveServiceState());
+            // Send cancel request via WebSocket
+            socketService.send('vendor.cancel', {
+                service_request_id: effectiveRequestId,
+                reason: customReason || undefined,
+            });
 
-            // Reset vendor distance tracking for next request
-            dispatch(resetVendorDistanceTracking());
+            // Clean up error listener after timeout or success
+            setTimeout(() => {
+                unsubscribe();
+                unsubscribeAck();
+            }, 5000);
 
-            // Close modal
-            setShowCancelModal(false);
-
-            // Navigate away
-            if (router.canGoBack()) {
-                router.back();
-            } else {
-                router.replace('/(customer)/(home)/');
-            }
         } catch (error) {
             if (__DEV__) {
-                console.error('[LiveOffers] Cancel API failed:', error);
+                console.error('[LiveOffers] Cancel WebSocket failed:', error);
             }
             Alert.alert('Error', 'Failed to cancel request. Please try again.');
-        } finally {
             setIsCancelling(false);
         }
     }, [effectiveRequestId, router, dispatch]);
@@ -1956,7 +2108,9 @@ export default function LiveOffersScreen() {
         </ErrorBoundary>
     ), [handleAcceptProposal, handleDeclineProposal, handleVendorProfileTap, acceptingId, decliningId]);
 
-    const keyExtractor = useCallback((item: SocketProposal) => item.id.toString(), []);
+    // Include acceptance_expires_at in key so FlatList treats updated proposals as new items
+    const keyExtractor = useCallback((item: SocketProposal) =>
+        `${item.id}-${item.acceptance_expires_at || ''}`, []);
 
     const getItemLayout = useCallback((_: ArrayLike<SocketProposal> | null | undefined, index: number) => ({
         length: CONSTANTS.PROPOSAL_CARD_HEIGHT,
@@ -2062,8 +2216,8 @@ export default function LiveOffersScreen() {
                         shouldReplaceMapContent={true}
                     />
                 )} */}
-                {/* Hide route when vendor cancels */}
-                {routeCoords.length > 0 && !serviceCancelledByVendor && (
+                {/* Hide route when vendor cancels OR when vendor has arrived (in_progress) */}
+                {routeCoords.length > 0 && !serviceCancelledByVendor && currentRequest?.status !== 'in_progress' && (
                     <Polyline
                         coordinates={routeCoords}
                         strokeColor={COLORS.primary}
@@ -2077,56 +2231,70 @@ export default function LiveOffersScreen() {
             {/* Vendor Tracking Info (when route is being tracked) - hide when vendor cancels */}
             {acceptedProposal && vendorLocation && !serviceCancelledByVendor && (
                 <View style={styles.trackingInfoCard}>
-                    <View style={styles.trackingInfoRow}>
-                        <View style={styles.trackingInfoItem}>
-                            <Ionicons name="navigate" size={18} color={COLORS.primary} />
-                            <Text style={styles.trackingInfoLabel}>Distance</Text>
-                            <Text type="bodySemiBold" style={styles.trackingInfoValue}>
-                                {formattedDistance || 'Calculating...'}
-                            </Text>
-                        </View>
-                        {isRouteLoading && (
-                            <ActivityIndicator size="small" color={COLORS.primary} style={styles.routeLoader} />
-                        )}
-                        <TouchableOpacity onPress={refreshRoute} style={styles.refreshButton}>
-                            <Ionicons name="refresh" size={18} color={COLORS.primary} />
-                        </TouchableOpacity>
-                    </View>
-
-                    {/* Location staleness indicator + manual refresh */}
-                    {locationAge > 2 * 60 * 1000 && (
-                        <View style={styles.locationAgeRow}>
-                            <View style={[
-                                styles.locationAgeBadge,
-                                locationAge > 30 * 60 * 1000 && styles.locationAgeBadgeStale
-                            ]}>
-                                <Ionicons
-                                    name="time-outline"
-                                    size={14}
-                                    color={locationAge > 30 * 60 * 1000 ? COLORS.error : COLORS.warning}
-                                />
-                                <Text style={[
-                                    styles.locationAgeText,
-                                    locationAge > 30 * 60 * 1000 && styles.locationAgeTextStale
-                                ]}>
-                                    {Math.floor(locationAge / 60000)} min ago
+                    {/* Show "Vendor has arrived" when status is in_progress */}
+                    {currentRequest?.status === 'in_progress' ? (
+                        <View style={styles.trackingInfoRow}>
+                            <View style={styles.trackingInfoItem}>
+                                <Ionicons name="checkmark-circle" size={22} color={COLORS.success} />
+                                <Text type="bodySemiBold" style={[styles.trackingInfoValue, { color: COLORS.success, marginLeft: scale(8) }]}>
+                                    Vendor has arrived
                                 </Text>
                             </View>
-                            <TouchableOpacity
-                                onPress={handleRefreshVendorLocation}
-                                style={styles.refreshLocationButton}
-                                disabled={isRefreshingLocation}
-                            >
-                                {isRefreshingLocation ? (
-                                    <ActivityIndicator size="small" color={COLORS.primary} />
-                                ) : (
-                                    <>
-                                        <Ionicons name="location" size={14} color={COLORS.primary} />
-                                        <Text style={styles.refreshLocationText}>Update</Text>
-                                    </>
-                                )}
-                            </TouchableOpacity>
                         </View>
+                    ) : (
+                        <>
+                            <View style={styles.trackingInfoRow}>
+                                <View style={styles.trackingInfoItem}>
+                                    <Ionicons name="navigate" size={18} color={COLORS.primary} />
+                                    <Text style={styles.trackingInfoLabel}>Distance</Text>
+                                    <Text type="bodySemiBold" style={styles.trackingInfoValue}>
+                                        {formattedDistance || 'Calculating...'}
+                                    </Text>
+                                </View>
+                                {isRouteLoading && (
+                                    <ActivityIndicator size="small" color={COLORS.primary} style={styles.routeLoader} />
+                                )}
+                                <TouchableOpacity onPress={refreshRoute} style={styles.refreshButton}>
+                                    <Ionicons name="refresh" size={18} color={COLORS.primary} />
+                                </TouchableOpacity>
+                            </View>
+
+                            {/* Location staleness indicator + manual refresh */}
+                            {locationAge > 2 * 60 * 1000 && (
+                                <View style={styles.locationAgeRow}>
+                                    <View style={[
+                                        styles.locationAgeBadge,
+                                        locationAge > 30 * 60 * 1000 && styles.locationAgeBadgeStale
+                                    ]}>
+                                        <Ionicons
+                                            name="time-outline"
+                                            size={14}
+                                            color={locationAge > 30 * 60 * 1000 ? COLORS.error : COLORS.warning}
+                                        />
+                                        <Text style={[
+                                            styles.locationAgeText,
+                                            locationAge > 30 * 60 * 1000 && styles.locationAgeTextStale
+                                        ]}>
+                                            {Math.floor(locationAge / 60000)} min ago
+                                        </Text>
+                                    </View>
+                                    <TouchableOpacity
+                                        onPress={handleRefreshVendorLocation}
+                                        style={styles.refreshLocationButton}
+                                        disabled={isRefreshingLocation}
+                                    >
+                                        {isRefreshingLocation ? (
+                                            <ActivityIndicator size="small" color={COLORS.primary} />
+                                        ) : (
+                                            <>
+                                                <Ionicons name="location" size={14} color={COLORS.primary} />
+                                                <Text style={styles.refreshLocationText}>Update</Text>
+                                            </>
+                                        )}
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                        </>
                     )}
                 </View>
             )}
@@ -2184,7 +2352,8 @@ export default function LiveOffersScreen() {
                             </ErrorBoundary>
 
                             {/* Cancel Request Button - Shows based on vendor distance and time logic */}
-                            {canCustomerCancel && (
+                            {/* Also hide when vendor has arrived (within 100m) */}
+                            {canCustomerCancel && !vendorHasArrived && (
                                 <TouchableOpacity
                                     style={styles.cancelButtonInSheetAccepted}
                                     onPress={handleCancelRequest}
@@ -2344,6 +2513,7 @@ export default function LiveOffersScreen() {
                                 data={activeProposals}
                                 renderItem={renderProposalItem}
                                 keyExtractor={keyExtractor}
+                                extraData={activeProposals.map(p => `${p.id}-${p.acceptance_expires_at}`).join(',')}
                                 showsVerticalScrollIndicator={false}
                                 contentContainerStyle={styles.proposalsList}
                                 removeClippedSubviews={true}
