@@ -406,10 +406,7 @@ export default function CustomerHomeScreen() {
             <ServiceHistoryCard
               key={service.id}
               request={service}
-              onPress={() => router.push({
-                pathname: '/(customer)/(history)/service-details',
-                params: { id: service.id.toString() },
-              })}
+              disablePress={true}
             />
           ))
         ) : (
