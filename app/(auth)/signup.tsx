@@ -13,8 +13,6 @@ import {
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { InputField } from '@/components/common/InputField';
 import { moderateScale } from 'react-native-size-matters';
 import Text from '@/components/common/Text';
 import { useAppDispatch, useAppSelector } from '@/hooks/useAppDispatch';
@@ -22,7 +20,6 @@ import { signupUser, clearError } from '@/store/slices/authSlice';
 import { normalizePhoneNumber } from '@/utils/validation';
 import { getErrorMessage } from '@/api/client';
 import PasswordInput from '@/components/common/PasswordInput';
-import { UserRole } from '@/types';
 
 type Role = 'customer' | 'vendor' | null;
 

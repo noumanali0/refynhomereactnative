@@ -96,6 +96,12 @@ export interface CustomerActiveServiceData {
     /** Description - for Search Again functionality */
     description?: string;
 
+    /** Vendor has reached 1km milestone - for cancel button logic */
+    vendorHasReached1km?: boolean;
+
+    /** Timestamp when vendor reached 1km */
+    vendorReached1kmAt?: string;
+
     /** Timestamp when data was last updated */
     updatedAt: string;
 }
@@ -411,6 +417,38 @@ export async function updateVendorLocation(
         await SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(updated));
     } catch (error) {
         console.error('[CustomerActiveService] Failed to update vendor location:', error);
+    }
+}
+
+/**
+ * Update vendor 1km reached state
+ * Called when vendor.distance.1km.reached event is received
+ * Persists for app kill recovery
+ */
+export async function updateVendorReached1km(reached: boolean): Promise<void> {
+    try {
+        const existing = await getCustomerActiveService();
+        if (!existing) {
+            if (__DEV__) {
+                console.log('[CustomerActiveService] No active service to update 1km state');
+            }
+            return;
+        }
+
+        const updated: CustomerActiveServiceData = {
+            ...existing,
+            vendorHasReached1km: reached,
+            vendorReached1kmAt: reached ? new Date().toISOString() : undefined,
+            updatedAt: new Date().toISOString(),
+        };
+
+        await SecureStore.setItemAsync(STORAGE_KEY, JSON.stringify(updated));
+
+        if (__DEV__) {
+            console.log('[CustomerActiveService] Persisted vendorHasReached1km:', reached);
+        }
+    } catch (error) {
+        console.error('[CustomerActiveService] Failed to update 1km state:', error);
     }
 }
 

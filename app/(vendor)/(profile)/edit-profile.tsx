@@ -34,9 +34,9 @@ import Text from '@/components/common/Text';
 import { useAppSelector } from '@/hooks/useAppDispatch';
 import { updateUserProfile } from '@/store/slices/authSlice';
 import { useToast } from '@/contexts/ToastContext';
-import { serviceRequestApi } from '@/services/serviceRequestApi';
+import { serviceRequestApi, ServiceCategory } from '@/services/serviceRequestApi';
 import type { AppDispatch } from '@/store';
-import type { UpdateProfileRequest, ServiceCategory } from '@/types/api';
+import type { UpdateProfileRequest } from '@/types/api';
 
 export default function VendorEditProfileScreen() {
   const router = useRouter();
@@ -94,7 +94,7 @@ export default function VendorEditProfileScreen() {
         setCategories(cats);
       } catch (error) {
         console.error('[VendorEditProfile] Failed to load categories:', error);
-        showToast({ type: "error", message: 'Failed to load service categories' });
+        showToast({ type: "error", title: "Error", message: 'Failed to load service categories' });
       } finally {
         setIsLoadingCategories(false);
       }
@@ -352,7 +352,7 @@ export default function VendorEditProfileScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.content}
       >
-        <ScrollView showsVerticalScrollIndicator={false}>
+        <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {/* Profile Photo */}
           <View style={styles.photoSection}>
             <TouchableOpacity onPress={pickImage} style={styles.photoContainer}>

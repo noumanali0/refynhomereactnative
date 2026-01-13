@@ -285,6 +285,7 @@ export default function Login() {
                 <ScrollView
                     showsVerticalScrollIndicator={false}
                     contentContainerStyle={styles.scrollContent}
+                    keyboardShouldPersistTaps="handled"
                 >
                     <Animated.View style={[styles.formCard, { opacity: fadeAnim }]}>
                         {/* Welcome Text */}

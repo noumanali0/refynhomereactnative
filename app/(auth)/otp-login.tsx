@@ -189,6 +189,7 @@ export default function OTPVerification() {
                 <ScrollView
                     showsVerticalScrollIndicator={false}
                     contentContainerStyle={styles.scrollContent}
+                    keyboardShouldPersistTaps="handled"
                 >
                     <Animated.View style={[styles.formCard, { opacity: fadeAnim }]}>
                         {/* Welcome Text */}
@@ -207,20 +208,15 @@ export default function OTPVerification() {
                         {/* OTP Input */}
                         <View style={styles.inputContainer}>
                             <Text type='body2' style={styles.inputLabel}>Enter OTP</Text>
-                            <View style={styles.inputWrapper}>
-                                <Ionicons
-                                    name="lock-closed-outline"
-                                    size={20}
-                                    color="#F97316"
-                                    style={styles.inputIcon}
-                                />
+                            <View style={styles.otpInputWrapper}>
                                 <TextInput
                                     placeholder="Enter 6-digit OTP"
+                                    placeholderTextColor="#94a3b8"
                                     value={otp}
                                     onChangeText={setOtp}
                                     keyboardType="number-pad"
                                     maxLength={6}
-                                    style={styles.input}
+                                    style={styles.otpInput}
                                     autoFocus
                                 />
                             </View>
@@ -410,6 +406,27 @@ const styles = StyleSheet.create({
         fontSize: moderateScale(16),
         color: '#0f172a',
         letterSpacing: 2,
+        textAlign: 'center',
+    },
+    otpInputWrapper: {
+        width: "100%",
+        height: moderateScale(56),
+        borderRadius: 16,
+        backgroundColor: '#f8fafc',
+        borderWidth: 1.6,
+        borderColor: '#e2e8f0',
+        paddingHorizontal: 16,
+        shadowColor: '#000',
+        shadowOpacity: 0.05,
+        shadowOffset: { width: 0, height: 2 },
+        shadowRadius: 6,
+        elevation: 2,
+        justifyContent: 'center',
+    },
+    otpInput: {
+        fontSize: moderateScale(18),
+        color: '#0f172a',
+        letterSpacing: 8,
         textAlign: 'center',
     },
     resendContainer: {

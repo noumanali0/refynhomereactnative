@@ -504,6 +504,8 @@ export const connectSocket = createAsyncThunk(
           console.log('[Dispatch] proposals.synced: Total requests:', transformedRequests.length);
           transformedRequests.forEach((r, i) => {
             console.log(`[Dispatch] proposals.synced: Request[${i}] id=${r.id}, status="${r.status}", proposals=${r.proposals?.length || 0}`);
+            // DEBUG: Check if vendor_has_covered_1km field is coming from backend
+            console.log(`[Dispatch] proposals.synced: Request[${i}] vendor_has_covered_1km=${(r as any).vendor_has_covered_1km}, vendor_is_stationary=${(r as any).vendor_is_stationary}, vendor_total_distance_km=${(r as any).vendor_total_distance_km}`);
           });
         }
 
@@ -551,32 +553,58 @@ export const connectSocket = createAsyncThunk(
           // Update vendor distance tracking from backend flags
           // This is the source of truth for cancel button visibility
           // Check both request-level flags and proposal-level inactive flag
-          const vendorHasCovered1km = (activeRequest as any).vendor_has_covered_1km === true;
+          const vendorHasCovered1kmBackend = (activeRequest as any).vendor_has_covered_1km === true;
           // Backend sends 'inactive' on the accepted proposal (true = vendor inactive for 20+ min)
           const proposalInactive = (acceptedProposal as any)?.inactive === true;
           // Also check request-level flag for backward compatibility
           const vendorIsStationary = (activeRequest as any).vendor_is_stationary === true || proposalInactive;
 
-          if (vendorHasCovered1km) {
-            dispatch(setVendorReached1km({
-              distanceTowardsLocationKm: 1.0, // Backend confirmed 1km covered
-              currentDistanceKm: 0,
-              initialDistanceKm: 0,
-            }));
-            if (vendorIsStationary) {
-              dispatch(setVendorStationary());
+          // Check SecureStore for persisted 1km state (handles app kill recovery)
+          // This runs async but we dispatch immediately if found
+          (async () => {
+            try {
+              const { getCustomerActiveService } = require('@/services/customerActiveServiceService');
+              const persistedData = await getCustomerActiveService();
+              const vendorHasCovered1kmPersisted = persistedData?.vendorHasReached1km === true;
+
+              // Use persisted state if backend doesn't have the field
+              const vendorHasCovered1km = vendorHasCovered1kmBackend || vendorHasCovered1kmPersisted;
+
+              if (vendorHasCovered1km) {
+                dispatch(setVendorReached1km({
+                  distanceTowardsLocationKm: 1.0, // Backend or SecureStore confirmed 1km covered
+                  currentDistanceKm: 0,
+                  initialDistanceKm: 0,
+                }));
+                if (vendorIsStationary) {
+                  dispatch(setVendorStationary());
+                }
+                if (__DEV__) {
+                  console.log('[Dispatch] proposals.synced: Vendor 1km state restored:', {
+                    fromBackend: vendorHasCovered1kmBackend,
+                    fromSecureStore: vendorHasCovered1kmPersisted,
+                    isStationary: vendorIsStationary,
+                    proposalInactive,
+                  });
+                }
+              } else if (__DEV__) {
+                console.log('[Dispatch] proposals.synced: No 1km state found in backend or SecureStore');
+              }
+            } catch (err) {
+              if (__DEV__) console.warn('[Dispatch] Failed to check SecureStore for 1km state:', err);
+              // Fallback to backend-only check if SecureStore fails
+              if (vendorHasCovered1kmBackend) {
+                dispatch(setVendorReached1km({
+                  distanceTowardsLocationKm: 1.0,
+                  currentDistanceKm: 0,
+                  initialDistanceKm: 0,
+                }));
+              }
             }
-            if (__DEV__) {
-              console.log('[Dispatch] proposals.synced: Vendor distance state from backend:', {
-                hasReached1km: vendorHasCovered1km,
-                isStationary: vendorIsStationary,
-                proposalInactive,
-              });
-            }
-          } else {
-            // Reset distance tracking if vendor hasn't covered 1km
-            dispatch(resetVendorDistanceTracking());
-          }
+          })();
+          // NOTE: Removed resetVendorDistanceTracking() here - it was causing
+          // cancel button to reappear after app kill. State is now preserved
+          // across app restarts. Resets happen on service complete/cancel instead.
 
           if (__DEV__) {
             console.log('[Dispatch] proposals.synced: Set customerActiveService for request', activeRequest.id, 'status:', activeRequest.status);
@@ -645,6 +673,22 @@ export const connectSocket = createAsyncThunk(
           } else if (__DEV__) {
             console.warn('[Dispatch] Service completed but no accepted proposal found for request:', request.id);
           }
+
+          // Reset vendor distance tracking for fresh state on next service
+          dispatch(resetVendorDistanceTracking());
+
+          // Clear customer active service since job is done
+          dispatch(clearCustomerActiveServiceState());
+
+          // Clear from SecureStore
+          const { clearCustomerActiveService } = require('@/services/customerActiveServiceService');
+          clearCustomerActiveService().catch((err: Error) => {
+            if (__DEV__) console.warn('[Dispatch] Failed to clear SecureStore on complete:', err);
+          });
+
+          if (__DEV__) {
+            console.log('[Dispatch] Service completed - cleared distance tracking and active service state');
+          }
         }
 
         // Check if service was cancelled - notify the other party
@@ -710,6 +754,20 @@ export const connectSocket = createAsyncThunk(
             // Clear active job if it was the cancelled one
             if (isActiveJob) {
               dispatch(clearActiveJob());
+            }
+
+            // Reset distance tracking and clear active service for fresh state on next service
+            dispatch(resetVendorDistanceTracking());
+            dispatch(clearCustomerActiveServiceState());
+
+            // Clear from SecureStore
+            const { clearCustomerActiveService } = require('@/services/customerActiveServiceService');
+            clearCustomerActiveService().catch((err: Error) => {
+              if (__DEV__) console.warn('[Dispatch] Failed to clear SecureStore on cancel:', err);
+            });
+
+            if (__DEV__) {
+              console.log('[Dispatch] Service cancelled - cleared distance tracking and active service state');
             }
           }
         }
@@ -1071,6 +1129,12 @@ export const connectSocket = createAsyncThunk(
           currentDistanceKm: (payload as any).current_distance_km || 0,
           initialDistanceKm: (payload as any).initial_distance_km || 0,
         }));
+
+        // Persist to SecureStore for app kill recovery
+        const { updateVendorReached1km } = require('@/services/customerActiveServiceService');
+        updateVendorReached1km(true).catch((err: Error) => {
+          if (__DEV__) console.warn('[Dispatch] Failed to persist 1km state:', err);
+        });
       })
     );
 
