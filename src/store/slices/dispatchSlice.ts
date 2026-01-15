@@ -420,32 +420,42 @@ export const connectSocket = createAsyncThunk(
           if (__DEV__) console.warn('[Dispatch] Failed to flush location queue:', error);
         }
 
-        // CRITICAL: If vendor has an active job and reconnects, immediately send current location
-        // This ensures customer gets vendor location when either side reconnects
+        // CRITICAL: Always fetch and send location for vendors on connect
+        // This ensures location is available for proposals (fixes first login bug)
+        // Previously only ran if activeJobId existed, but on first login there's no active job yet
         if (data.role === 'vendor') {
           const state = getState() as RootState;
-          if (state.dispatch.activeJobId) {
-            if (__DEV__) {
-              console.log('[Dispatch] Vendor reconnected with active job - sending immediate location update');
-            }
 
-            // Get current location and send it immediately
-            // This ensures customer sees vendor position right away after reconnect
-            try {
-              const currentLocation = await getCurrentLocation();
-              if (currentLocation) {
-                socketService.send('location.update', {
-                  latitude: currentLocation.latitude,
-                  longitude: currentLocation.longitude,
-                });
-                if (__DEV__) {
-                  console.log('[Dispatch] Sent immediate location update on reconnect:', currentLocation);
-                }
-              }
-            } catch (error) {
+          if (__DEV__) {
+            console.log('[Dispatch] Vendor connected - initializing location', {
+              hasActiveJob: !!state.dispatch.activeJobId,
+            });
+          }
+
+          // Always fetch and send location on connect for vendors
+          // This ensures vendorLocation is populated in Redux for proposals
+          try {
+            const currentLocation = await getCurrentLocation();
+            if (currentLocation) {
+              // Update Redux state so sendProposal has access to coordinates
+              dispatch(setVendorLocation({
+                latitude: currentLocation.latitude,
+                longitude: currentLocation.longitude,
+              }));
+
+              // Send to backend to update VendorProfile
+              socketService.send('location.update', {
+                latitude: currentLocation.latitude,
+                longitude: currentLocation.longitude,
+              });
+
               if (__DEV__) {
-                console.warn('[Dispatch] Failed to send immediate location on reconnect:', error);
+                console.log('[Dispatch] Vendor location initialized:', currentLocation);
               }
+            }
+          } catch (error) {
+            if (__DEV__) {
+              console.warn('[Dispatch] Failed to initialize vendor location on connect:', error);
             }
           }
         }
@@ -1233,7 +1243,8 @@ export const disconnectSocket = createAsyncThunk(
 export const sendProposal = createAsyncThunk(
   'dispatch/sendProposal',
   async (params: SendProposalParams, { dispatch }) => {
-    const { serviceRequestId, priceQuote, message, etaMinutes } = params;
+    console.log("🚀 ~ params:", params)
+    const { serviceRequestId, priceQuote, message, etaMinutes, vendorLatitude, vendorLongitude } = params;
     const pendingKey = `proposal_${serviceRequestId}`;
 
     dispatch(setPendingAction({ key: pendingKey, value: true }));
@@ -1266,6 +1277,9 @@ export const sendProposal = createAsyncThunk(
         price_quote: priceQuote,
         message,
         eta_minutes: etaMinutes,
+        // Include vendor location to ensure it's saved before proposal validation
+        vendor_latitude: vendorLatitude,
+        vendor_longitude: vendorLongitude,
       });
 
       // Wait for acknowledgment with timeout
