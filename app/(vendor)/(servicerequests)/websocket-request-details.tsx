@@ -23,6 +23,7 @@ import {
 } from 'react-native';
 import Text from '@/components/common/Text';
 import CancelJobModal from '@/components/vendor/CancelJobModal';
+import CompleteServiceModal from '@/components/vendor/CompleteServiceModal';
 import MapView, { Marker, Polyline, PROVIDER_DEFAULT, UrlTile } from 'react-native-maps';
 import * as Location from 'expo-location';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
@@ -213,8 +214,11 @@ export default function WebSocketRequestDetailsScreen() {
     // Cancel job modal state
     const [showCancelModal, setShowCancelModal] = useState(false);
     const [isCancelling, setIsCancelling] = useState(false);
-    // Completion state with retry support
+    // Completion modal and state with retry support
+    const [showCompleteModal, setShowCompleteModal] = useState(false);
     const [isCompleting, setIsCompleting] = useState(false);
+    // Track navigation state to show loader instead of "not found"
+    const [isCompletionNavigating, setIsCompletionNavigating] = useState(false);
 
     // Track if service was cancelled by customer (prevents stale UI)
     const [serviceCancelledByCustomer, setServiceCancelledByCustomer] = useState(false);
@@ -405,17 +409,17 @@ export default function WebSocketRequestDetailsScreen() {
             if (isLocked) {
                 // Determine which message to show
                 if (request?.already_sent && request?.vendor_status === 'pending') {
-                    Alert.alert(
-                        'Cannot Leave',
-                        'Please wait for customer response or until the proposal expires.',
-                        [{ text: 'OK' }]
-                    );
+                    showToast({
+                        type: 'warning',
+                        title: 'Cannot Leave',
+                        message: 'Please wait for customer response or until the proposal expires.',
+                    });
                 } else if (isAccepted) {
-                    Alert.alert(
-                        'Active Service',
-                        'You have an active service. Please complete it before leaving.',
-                        [{ text: 'OK' }]
-                    );
+                    showToast({
+                        type: 'warning',
+                        title: 'Active Service',
+                        message: 'You have an active service. Please complete it before leaving.',
+                    });
                 }
                 return true; // Prevent default back behavior
             }
@@ -425,7 +429,7 @@ export default function WebSocketRequestDetailsScreen() {
         const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
 
         return () => backHandler.remove();
-    }, [isLocked, request?.already_sent, request?.vendor_status, isAccepted]);
+    }, [isLocked, request?.already_sent, request?.vendor_status, isAccepted, showToast]);
 
     // Navigation interception using beforeRemove event (for swipe gestures, etc.)
     useEffect(() => {
@@ -435,24 +439,24 @@ export default function WebSocketRequestDetailsScreen() {
             // Prevent default behavior of leaving the screen
             e.preventDefault();
 
-            // Show appropriate alert
+            // Show appropriate toast
             if (request?.already_sent && request?.vendor_status === 'pending') {
-                Alert.alert(
-                    'Cannot Leave',
-                    'Please wait for customer response or until the proposal expires.',
-                    [{ text: 'OK' }]
-                );
+                showToast({
+                    type: 'warning',
+                    title: 'Cannot Leave',
+                    message: 'Please wait for customer response or until the proposal expires.',
+                });
             } else if (isAccepted) {
-                Alert.alert(
-                    'Active Service',
-                    'You have an active service. Please complete it before leaving.',
-                    [{ text: 'OK' }]
-                );
+                showToast({
+                    type: 'warning',
+                    title: 'Active Service',
+                    message: 'You have an active service. Please complete it before leaving.',
+                });
             }
         });
 
         return unsubscribe;
-    }, [navigation, isLocked, request?.already_sent, request?.vendor_status, isAccepted]);
+    }, [navigation, isLocked, request?.already_sent, request?.vendor_status, isAccepted, showToast]);
 
     // Progress animation
     useEffect(() => {
@@ -490,7 +494,11 @@ export default function WebSocketRequestDetailsScreen() {
 
                 const { status } = await Location.requestForegroundPermissionsAsync();
                 if (status !== 'granted') {
-                    Alert.alert('Permission Denied', 'Location permission is required');
+                    showToast({
+                        type: 'error',
+                        title: 'Permission Denied',
+                        message: 'Location permission is required',
+                    });
                     if (isMountedRef.current) setIsLoading(false);
                     return;
                 }
@@ -515,6 +523,32 @@ export default function WebSocketRequestDetailsScreen() {
                     };
                     setVendorLocation(coords);
                     setIsLoading(false);
+
+                    // Send location to backend immediately (required for proposal validation)
+                    // Wait for WebSocket connection if not connected
+                    const sendLocationToBackend = () => {
+                        if (socketService.isConnected()) {
+                            dispatch(updateLocation(coords));
+                            if (__DEV__) {
+                                console.log('[VendorDetails] Location sent to backend:', coords);
+                            }
+                        } else {
+                            if (__DEV__) {
+                                console.log('[VendorDetails] WebSocket not connected, waiting...');
+                            }
+                            // Wait for connection and send
+                            const unsubscribe = socketService.onStatusChange((status) => {
+                                if (status === 'connected' && isMountedRef.current) {
+                                    dispatch(updateLocation(coords));
+                                    if (__DEV__) {
+                                        console.log('[VendorDetails] Location sent after connection:', coords);
+                                    }
+                                    unsubscribe();
+                                }
+                            });
+                        }
+                    };
+                    sendLocationToBackend();
 
                     // Start watching location if en_route or already accepted
                     if (request?.status === 'en_route' || isAccepted) {
@@ -647,11 +681,12 @@ export default function WebSocketRequestDetailsScreen() {
                     console.log('[VendorDetails] Background permission denied, using foreground tracking');
                 }
 
-                Alert.alert(
-                    'Background Location',
-                    'Background location permission was denied. Location tracking will stop when you leave the app. For best experience, please enable background location in settings.',
-                    [{ text: 'OK' }]
-                );
+                showToast({
+                    type: 'warning',
+                    title: 'Background Location',
+                    message: 'Background location permission was denied. Location tracking will stop when you leave the app.',
+                    duration: 5000,
+                });
 
                 locationWatchRef.current = await Location.watchPositionAsync(
                     {
@@ -815,6 +850,26 @@ export default function WebSocketRequestDetailsScreen() {
         };
     }, [vendorLocation, customerLocation]);
 
+    // Auto-zoom to fit both markers when locations are available
+    useEffect(() => {
+        if (!vendorLocation || !customerLocation || !mapRef.current) return;
+
+        // Small delay to ensure map is ready
+        const timer = setTimeout(() => {
+            if (mapRef.current && isMountedRef.current) {
+                mapRef.current.fitToCoordinates(
+                    [vendorLocation, customerLocation],
+                    {
+                        edgePadding: { top: 120, right: 60, bottom: 350, left: 60 },
+                        animated: true,
+                    }
+                );
+            }
+        }, 500);
+
+        return () => clearTimeout(timer);
+    }, [vendorLocation, customerLocation]);
+
     // Format helpers
     const formatDistance = (meters: number): string => {
         if (meters < 1000) return `${Math.round(meters)}m`;
@@ -832,7 +887,11 @@ export default function WebSocketRequestDetailsScreen() {
     // Handle send proposal
     const handleSendProposal = useCallback(async () => {
         if (!proposalAmount || proposalAmount < 300) {
-            Alert.alert('Invalid Amount', 'Please enter a valid proposal amount (minimum PKR 300)');
+            showToast({
+                type: 'error',
+                title: 'Invalid Amount',
+                message: 'Please enter a valid proposal amount (minimum PKR 300)',
+            });
             return;
         }
 
@@ -845,16 +904,32 @@ export default function WebSocketRequestDetailsScreen() {
                 priceQuote: proposalAmount,
                 message: proposalMessage || undefined,
                 etaMinutes: routeInfo ? Math.round(routeInfo.duration / 60) : undefined,
+                // COMMENTED OUT for testing - location should be initialized on socket connect now
+                // vendorLatitude: vendorLocation?.latitude,
+                // vendorLongitude: vendorLocation?.longitude,
             })).unwrap();
 
-            Alert.alert('Success', 'Proposal sent successfully!');
+            showToast({
+                type: 'success',
+                title: 'Success',
+                message: 'Proposal sent successfully!',
+            });
         } catch (error: any) {
-            Alert.alert('Error', error.message || 'Failed to send proposal. Please try again.');
+            showToast({
+                type: 'error',
+                title: 'Error',
+                message: error.message || 'Failed to send proposal. Please try again.',
+            });
         }
-    }, [dispatch, requestId, proposalAmount, proposalMessage, routeInfo]);
+    }, [dispatch, requestId, proposalAmount, proposalMessage, routeInfo, showToast]);
 
-    // Handle complete with retry mechanism
-    const handleComplete = useCallback(async () => {
+    // Open complete modal
+    const handleComplete = useCallback(() => {
+        setShowCompleteModal(true);
+    }, []);
+
+    // Handle completion confirmation from modal
+    const handleConfirmComplete = useCallback(async () => {
         // Prevent double-click while completing
         if (isCompleting) return;
 
@@ -869,6 +944,12 @@ export default function WebSocketRequestDetailsScreen() {
 
                 // Only stop location tracking AFTER successful completion
                 await stopLocationTracking();
+
+                // Set navigating state BEFORE cleanup to show loader instead of "not found"
+                setIsCompletionNavigating(true);
+
+                // Close modal
+                setShowCompleteModal(false);
 
                 // Clean up Redux state for this completed service
                 dispatch(cleanupCompletedService(requestId));
@@ -885,52 +966,40 @@ export default function WebSocketRequestDetailsScreen() {
             }
         };
 
-        Alert.alert(
-            'Complete Service',
-            'Mark this service as completed?',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                    text: 'Complete',
-                    onPress: async () => {
-                        try {
-                            const success = await attemptComplete();
+        try {
+            const success = await attemptComplete();
 
-                            if (success) {
-                                setIsCompleting(false);
-                                Alert.alert('Success', 'Service completed!', [
-                                    {
-                                        text: 'OK',
-                                        onPress: () => {
-                                            InteractionManager.runAfterInteractions(() => {
-                                                if (isMountedRef.current) {
-                                                    router.replace('/(vendor)/(servicerequests)/');
-                                                }
-                                            });
-                                        }
-                                    }
-                                ]);
-                            }
-                        } catch (error: any) {
-                            setIsCompleting(false);
-                            // Show retry option on final failure
-                            Alert.alert(
-                                'Completion Failed',
-                                error.message || 'Failed to complete service. Please check your connection.',
-                                [
-                                    { text: 'Cancel', style: 'cancel' },
-                                    {
-                                        text: 'Try Again',
-                                        onPress: () => handleComplete(),
-                                    },
-                                ]
-                            );
-                        }
-                    },
-                },
-            ]
-        );
-    }, [dispatch, requestId, router, stopLocationTracking, isCompleting]);
+            if (success) {
+                setIsCompleting(false);
+
+                // Show success toast
+                showToast({
+                    type: 'success',
+                    title: 'Service Completed',
+                    message: 'Great job! The service has been marked as complete.',
+                    duration: 3000,
+                });
+
+                // Navigate to service requests screen
+                InteractionManager.runAfterInteractions(() => {
+                    if (isMountedRef.current) {
+                        router.replace('/(vendor)/(servicerequests)/');
+                    }
+                });
+            }
+        } catch (error: any) {
+            setIsCompleting(false);
+            setShowCompleteModal(false);
+
+            // Show error toast with retry option
+            showToast({
+                type: 'error',
+                title: 'Completion Failed',
+                message: error.message || 'Failed to complete service. Please try again.',
+                duration: 4000,
+            });
+        }
+    }, [dispatch, requestId, router, stopLocationTracking, isCompleting, showToast]);
 
     // Open cancel modal
     const handleCancelJob = useCallback(() => {
@@ -981,7 +1050,11 @@ export default function WebSocketRequestDetailsScreen() {
             if (__DEV__) {
                 console.error('[VendorDetails] Cancel job failed:', error);
             }
-            Alert.alert('Error', 'Failed to cancel job. Please try again.');
+            showToast({
+                type: 'error',
+                title: 'Error',
+                message: 'Failed to cancel job. Please try again.',
+            });
         } finally {
             setIsCancelling(false);
         }
@@ -1013,6 +1086,7 @@ export default function WebSocketRequestDetailsScreen() {
     const isWithinRange = straightLineDistanceKm !== null ? straightLineDistanceKm <= 0.1 : false;
 
     // Show toast when vendor reaches customer location (within 100m)
+    // Also stop location tracking - vendor has arrived, no need to continue tracking
     useEffect(() => {
         if (isWithinRange && !hasShownArrivalToast && isAccepted) {
             showToast({
@@ -1023,8 +1097,19 @@ export default function WebSocketRequestDetailsScreen() {
             });
             setHasShownArrivalToast(true);
 
+            // Stop location tracking when vendor arrives (battery optimization)
+            // This prevents unnecessary location updates after reaching destination
+            if (locationWatchRef.current) {
+                locationWatchRef.current.remove();
+                locationWatchRef.current = null;
+            }
+            if (isBackgroundTrackingActiveRef.current) {
+                stopBackgroundLocationTracking();
+                isBackgroundTrackingActiveRef.current = false;
+            }
+
             if (__DEV__) {
-                console.log('[VendorDetails] Vendor arrived within 100m - showing arrival toast');
+                console.log('[VendorDetails] Vendor arrived within 100m - stopped location tracking');
             }
         }
     }, [isWithinRange, hasShownArrivalToast, isAccepted, showToast]);
@@ -1033,6 +1118,16 @@ export default function WebSocketRequestDetailsScreen() {
     useEffect(() => {
         setHasShownArrivalToast(false);
     }, [requestId]);
+
+    // Show loader when navigating after completion (prevents "not found" flash)
+    if (isCompletionNavigating) {
+        return (
+            <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color={COLORS.success} />
+                <Text type="body2" style={styles.loadingText}>Completing service...</Text>
+            </View>
+        );
+    }
 
     // Request not found - check early
     // Use router.replace instead of back() for persisted screens with no history
@@ -1153,47 +1248,92 @@ export default function WebSocketRequestDetailsScreen() {
                         shouldReplaceMapContent={true}
                     />
                 )} */}
-                {/* Vendor Car Marker - Clean Icon */}
+                {/* Vendor Car Marker */}
                 <Marker
                     coordinate={vendorLocation}
-                    title="Your Location"
                     anchor={{ x: 0.5, y: 0.5 }}
                 >
-                    <FontAwesome5 name="car" size={32} color={COLORS.primary} />
+                    <View collapsable={false} style={styles.vendorMarker}>
+                        <FontAwesome5 name="car" size={18} color={COLORS.primary} />
+                    </View>
                 </Marker>
 
-                {/* Customer Location Marker - Clean Icon */}
+                {/* Customer Location Marker */}
                 <Marker
                     coordinate={customerLocation}
-                    title="Customer Location"
-                    description={request?.customer?.name}
+                    anchor={{ x: 0.5, y: 1 }}
                 >
-                    <Ionicons name="location" size={36} color={COLORS.accent} />
+                    <View collapsable={false} style={styles.customerMarkerContainer}>
+                        <View collapsable={false} style={styles.customerMarker}>
+                            <Ionicons name="location" size={22} color={COLORS.white} />
+                        </View>
+                        <View style={styles.customerMarkerTail} />
+                    </View>
                 </Marker>
 
+                {/* Route with 3-layer gradient effect */}
                 {routeInfo && routeInfo.coordinates.length > 0 && (
-                    <Polyline
-                        coordinates={routeInfo.coordinates}
-                        strokeColor={COLORS.primary}
-                        strokeWidth={4}
-                        lineDashPattern={[1]}
-                    />
+                    <>
+                        {/* Shadow/glow layer */}
+                        <Polyline
+                            coordinates={routeInfo.coordinates}
+                            strokeColor="rgba(29, 78, 216, 0.15)"
+                            strokeWidth={10}
+                        />
+                        {/* Middle layer */}
+                        <Polyline
+                            coordinates={routeInfo.coordinates}
+                            strokeColor="rgba(29, 78, 216, 0.4)"
+                            strokeWidth={6}
+                        />
+                        {/* Main route line */}
+                        <Polyline
+                            coordinates={routeInfo.coordinates}
+                            strokeColor={COLORS.primary}
+                            strokeWidth={4}
+                        />
+                    </>
                 )}
             </MapView>
 
-            {/* ETA Card */}
+            {/* Back Button */}
+            <TouchableOpacity
+                style={styles.backButtonFloat}
+                onPress={() => {
+                    if (isLocked) {
+                        if (request?.already_sent && request?.vendor_status === 'pending') {
+                            showToast({
+                                type: 'warning',
+                                title: 'Cannot Leave',
+                                message: 'Please wait for customer response or until the proposal expires.',
+                            });
+                        } else if (isAccepted) {
+                            showToast({
+                                type: 'warning',
+                                title: 'Active Service',
+                                message: 'You have an active service. Please complete it before leaving.',
+                            });
+                        }
+                    } else {
+                        router.back();
+                    }
+                }}
+                activeOpacity={0.8}
+            >
+                <Ionicons name="arrow-back" size={22} color={COLORS.gray800} />
+            </TouchableOpacity>
+
+            {/* ETA Card - Compact */}
             {routeInfo && (
                 <View style={styles.etaCard}>
                     <View style={styles.etaItem}>
-                        <Ionicons name="navigate" size={20} color={COLORS.primary} />
-                        <Text type="body" style={styles.etaLabel}>Distance</Text>
-                        <Text type="bodySemiBold" style={styles.etaValue}>{formatDistance(routeInfo.distance)}</Text>
+                        <Ionicons name="navigate" size={16} color={COLORS.primary} />
+                        <Text type="caption" style={styles.etaValue}>{formatDistance(routeInfo.distance)}</Text>
                     </View>
                     <View style={styles.etaDivider} />
                     <View style={styles.etaItem}>
-                        <Ionicons name="time" size={20} color={COLORS.accent} />
-                        <Text type="body" style={styles.etaLabel}>ETA</Text>
-                        <Text type="bodySemiBold" style={styles.etaValue}>{formatDuration(routeInfo.duration)}</Text>
+                        <Ionicons name="time" size={16} color={COLORS.accent} />
+                        <Text type="caption" style={styles.etaValue}>{formatDuration(routeInfo.duration)}</Text>
                     </View>
                 </View>
             )}
@@ -1218,14 +1358,11 @@ export default function WebSocketRequestDetailsScreen() {
                 </View>
             )}
 
-            {/* Status Banner - Service Accepted */}
+            {/* Status Banner - Service Accepted (Compact) */}
             {isAccepted && request?.status !== 'completed' && (
-                <View style={[styles.statusBanner, { backgroundColor: COLORS.success }]}>
-                    <Ionicons name="checkmark-circle" size={24} color={COLORS.white} />
-                    <View style={styles.statusTextContainer}>
-                        <Text type="bodySemiBold" style={styles.statusTitle}>Service Accepted!</Text>
-                        <Text type="body" style={styles.statusSubtitle}>Contact the customer and complete the service</Text>
-                    </View>
+                <View style={styles.statusBannerCompact}>
+                    <Ionicons name="checkmark-circle" size={16} color={COLORS.white} />
+                    <Text type="caption" style={styles.statusBannerText}>Service Accepted - Contact customer</Text>
                 </View>
             )}
 
@@ -1482,6 +1619,14 @@ export default function WebSocketRequestDetailsScreen() {
                 isLoading={isCancelling}
                 status={request?.status === 'en_route' ? 'en_route' : 'accepted'}
             />
+
+            {/* Complete Service Modal */}
+            <CompleteServiceModal
+                visible={showCompleteModal}
+                onClose={() => setShowCompleteModal(false)}
+                onConfirm={handleConfirmComplete}
+                isLoading={isCompleting}
+            />
         </View>
     );
 }
@@ -1525,41 +1670,93 @@ const styles = StyleSheet.create({
     map: {
         flex: 1,
     },
-    etaCard: {
+    // Vendor car marker - fully rounded circle
+    vendorMarker: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: COLORS.white,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 2,
+        borderColor: COLORS.primary,
+    },
+    // Customer destination marker - fully rounded circle
+    customerMarkerContainer: {
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    customerMarker: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: COLORS.accent,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 2,
+        borderColor: COLORS.white,
+    },
+    customerMarkerTail: {
+        width: 0,
+        height: 0,
+        borderLeftWidth: 8,
+        borderRightWidth: 8,
+        borderTopWidth: 10,
+        borderLeftColor: 'transparent',
+        borderRightColor: 'transparent',
+        borderTopColor: COLORS.accent,
+        marginTop: -2,
+    },
+    backButtonFloat: {
         position: 'absolute',
         top: verticalScale(16),
         left: scale(16),
-        right: scale(16),
+        width: scale(40),
+        height: scale(40),
         backgroundColor: COLORS.white,
-        borderRadius: moderateScale(12),
-        padding: scale(16),
-        flexDirection: 'row',
+        borderRadius: moderateScale(20),
+        justifyContent: 'center',
+        alignItems: 'center',
         shadowColor: COLORS.black,
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.1,
-        shadowRadius: 8,
+        shadowRadius: 4,
+        elevation: 4,
+    },
+    etaCard: {
+        position: 'absolute',
+        top: verticalScale(16),
+        left: scale(66),
+        backgroundColor: COLORS.white,
+        borderRadius: moderateScale(20),
+        paddingVertical: verticalScale(8),
+        paddingHorizontal: scale(14),
+        flexDirection: 'row',
+        alignItems: 'center',
+        shadowColor: COLORS.black,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
         elevation: 4,
     },
     etaItem: {
-        flex: 1,
+        flexDirection: 'row',
         alignItems: 'center',
+        gap: scale(4),
     },
     etaDivider: {
         width: 1,
-        backgroundColor: COLORS.gray200,
-        marginHorizontal: scale(12),
-    },
-    etaLabel: {
-        color: COLORS.gray500,
-        marginTop: verticalScale(4),
+        height: verticalScale(16),
+        backgroundColor: COLORS.gray300,
+        marginHorizontal: scale(10),
     },
     etaValue: {
-        color: COLORS.gray900,
-        marginTop: verticalScale(2),
+        color: COLORS.gray800,
+        fontWeight: '600',
     },
     timerBarContainer: {
         position: 'absolute',
-        top: verticalScale(100),
+        top: verticalScale(70),
         left: scale(16),
         right: scale(16),
         backgroundColor: COLORS.white,
@@ -1586,32 +1783,28 @@ const styles = StyleSheet.create({
         color: COLORS.gray700,
         textAlign: 'center',
     },
-    statusBanner: {
+    statusBannerCompact: {
         position: 'absolute',
-        top: verticalScale(100),
+        top: verticalScale(70),
         left: scale(16),
         right: scale(16),
+        backgroundColor: COLORS.success,
         borderRadius: moderateScale(12),
-        padding: scale(16),
+        paddingVertical: verticalScale(10),
+        paddingHorizontal: scale(14),
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'center',
+        gap: scale(6),
         shadowColor: COLORS.black,
         shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2,
-        shadowRadius: 8,
-        elevation: 5,
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 4,
     },
-    statusTextContainer: {
-        marginLeft: scale(12),
-        flex: 1,
-    },
-    statusTitle: {
+    statusBannerText: {
         color: COLORS.white,
-    },
-    statusSubtitle: {
-        color: COLORS.white,
-        opacity: 0.9,
-        marginTop: verticalScale(2),
+        fontWeight: '600',
     },
     bottomSheetBackground: {
         backgroundColor: COLORS.white,
@@ -1698,7 +1891,8 @@ const styles = StyleSheet.create({
     proposalInputContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
+        justifyContent: 'center',
+        gap: scale(16),
         marginBottom: verticalScale(16),
     },
     proposalButton: {
@@ -1715,28 +1909,29 @@ const styles = StyleSheet.create({
         elevation: 3,
     },
     proposalAmountContainer: {
-        flex: 1,
+        width: scale(90),
         alignItems: 'center',
         backgroundColor: COLORS.gray50,
-        marginHorizontal: scale(16),
-        padding: verticalScale(16),
-        borderRadius: moderateScale(12),
-        borderWidth: 2,
+        paddingVertical: verticalScale(4),
+        paddingHorizontal: scale(4),
+        borderRadius: moderateScale(8),
+        borderWidth: 1.5,
         borderColor: COLORS.primary + '30',
     },
     currencySymbol: {
         color: COLORS.gray500,
+        fontSize: moderateScale(10),
     },
     proposalAmount: {
-        fontSize: moderateScale(32),
+        fontSize: moderateScale(28),
         color: COLORS.gray900,
     },
     proposalAmountInput: {
-        fontSize: moderateScale(32),
+        fontSize: moderateScale(22),
         color: COLORS.gray900,
         fontWeight: 'bold',
         textAlign: 'center',
-        minWidth: scale(100),
+        minWidth: scale(60),
         padding: 0,
     },
     presetsContainer: {
@@ -1823,7 +2018,7 @@ const styles = StyleSheet.create({
     },
     lockBanner: {
         position: 'absolute',
-        top: verticalScale(160),
+        top: verticalScale(130),
         left: scale(16),
         right: scale(16),
         backgroundColor: COLORS.warning,

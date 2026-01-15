@@ -1,11 +1,11 @@
 // app/(vendor)/_layout.tsx
-import { Tabs, useRouter } from "expo-router";
+import { Tabs, useRouter, useSegments } from "expo-router";
 import GradientIcon from "@/components/common/GradientIcon";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { useAppSelector, useAppDispatch } from "@/hooks/useAppDispatch";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import { moderateScale, verticalScale } from "react-native-size-matters";
-import { View, ActivityIndicator, Alert } from "react-native";
+import { View, ActivityIndicator } from "react-native";
 import Text from "@/components/common/Text";
 import { COLORS } from "@/constants/colors";
 import { syncVendorActiveJobFromBackend } from "@/services/activeJobService";
@@ -15,9 +15,15 @@ import { setActiveJob } from "@/store/slices/dispatchSlice";
 export default function VendorTabsLayout() {
     const router = useRouter();
     const dispatch = useAppDispatch();
+    const segments = useSegments();
     const { user, vendorOnboardingStatus } = useAppSelector((state) => state.auth);
     const [syncingBackend, setSyncingBackend] = useState(true);
     const hasSyncedBackend = useRef(false);
+
+    // Hide tab bar on websocket-request-details screen
+    const hideTabBar = useMemo(() => {
+        return segments.includes('websocket-request-details');
+    }, [segments]);
 
     // Guard: Only verified vendors can access dashboard
     useEffect(() => {
@@ -49,45 +55,15 @@ export default function VendorTabsLayout() {
                 const { hasActive, activeJob, jobType, source } = await syncVendorActiveJobFromBackend();
 
                 if (hasActive && activeJob) {
-                    // Update Redux state
+                    // Update Redux state - websocket-requests.tsx will auto-navigate
                     dispatch(setActiveJob({
                         jobId: activeJob.jobId,
                         proposalId: activeJob.proposalId,
                     }));
 
                     if (__DEV__) {
-                        console.log('[VendorLayout] Found active job from', source, ':', activeJob);
+                        console.log('[VendorLayout] Found active job from', source, ':', activeJob, '- auto-navigating via websocket-requests');
                     }
-
-                    // Show alert with option to view job/proposal
-                    const title = jobType === 'active' ? 'Active Job Found' : 'Pending Proposal Found';
-                    const message = jobType === 'active'
-                        ? 'You have an active job in progress. Would you like to view it?'
-                        : 'You have a pending proposal waiting for customer response. Would you like to view it?';
-
-                    Alert.alert(
-                        title,
-                        message,
-                        [
-                            {
-                                text: 'View',
-                                onPress: () => {
-                                    router.push({
-                                        pathname: '/(vendor)/(servicerequests)/websocket-request-details',
-                                        params: { requestId: activeJob.jobId.toString() },
-                                    });
-                                    setSyncingBackend(false);
-                                },
-                            },
-                            {
-                                text: 'Stay Here',
-                                style: 'cancel',
-                                onPress: () => setSyncingBackend(false),
-                            },
-                        ],
-                        { cancelable: false }
-                    );
-                    return;
                 }
 
                 // No active job found
@@ -126,7 +102,7 @@ export default function VendorTabsLayout() {
                 headerShown: false,
                 tabBarActiveTintColor: "#2563EB",
                 tabBarInactiveTintColor: "#9CA3AF",
-                tabBarStyle: {
+                tabBarStyle: hideTabBar ? { display: 'none' } : {
                     borderTopLeftRadius: moderateScale(20),
                     borderTopRightRadius: moderateScale(20),
                     height: verticalScale(70),
