@@ -39,6 +39,8 @@ interface AuthState {
   lastOtpSentTime: number | null;
   resendCooldown: number; // seconds
   phoneNumber: string | null; // Store for OTP verification
+  // Email/Phone verification status (for customers who signed up but didn't verify OTP)
+  isEmailVerified: boolean;
   // Vendor onboarding status
   vendorOnboardingStatus: 'not_started' | 'in_progress' | 'pending_verification' | 'complete';
   // Logout in progress flag - prevents navigation race conditions
@@ -72,6 +74,7 @@ const initialState: AuthState = {
   lastOtpSentTime: null,
   resendCooldown: 60, // 60 seconds cooldown
   phoneNumber: null,
+  isEmailVerified: true, // Default true, set false when login returns is_verified=false
   vendorOnboardingStatus: 'not_started',
   isLoggingOut: false,
   // Single-device login state
@@ -137,6 +140,8 @@ export const requestOTP = createAsyncThunk(
 /**
  * Verify OTP - Verify OTP code and complete signup/login
  * POST /api/auth/otp-verify/
+ *
+ * Includes device tracking for single-device login enforcement
  */
 export const verifyOTP = createAsyncThunk(
   'auth/verifyOTP',
@@ -145,7 +150,26 @@ export const verifyOTP = createAsyncThunk(
     { rejectWithValue }
   ) => {
     try {
-      const response = await authService.verifyOTP(phoneNumber, otp);
+      // Get device info for session management
+      const deviceId = await deviceService.getOrCreateDeviceId();
+      const deviceName = deviceService.getDeviceName();
+
+      // Get push token (best-effort, don't fail if not available)
+      let pushToken: string | null = null;
+      try {
+        const { setupPushNotifications } = await import('@/utils/notifications');
+        pushToken = await setupPushNotifications();
+      } catch {
+        // Push token is optional
+      }
+
+      const response = await authService.verifyOTP(
+        phoneNumber,
+        otp,
+        deviceId,
+        deviceName,
+        pushToken
+      );
 
       // Store tokens and user in SecureStore
       await tokenService.saveSession(
@@ -979,6 +1003,10 @@ const authSlice = createSlice({
         state.isAuthenticated = true;
         state.error = null;
 
+        // Store email/phone verification status from backend
+        // If user signed up but didn't verify OTP, isVerified will be false
+        state.isEmailVerified = action.payload.isVerified ?? true;
+
         // Set vendor onboarding status based on backend response
         if (action.payload.user.role === 'vendor') {
           if (!action.payload.isOnboardingComplete) {
@@ -992,7 +1020,7 @@ const authSlice = createSlice({
             state.vendorOnboardingStatus = 'complete';
           }
         } else {
-          // Customers are always complete
+          // Customers are always complete (vendor onboarding not applicable)
           state.vendorOnboardingStatus = 'complete';
         }
       })

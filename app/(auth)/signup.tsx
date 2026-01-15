@@ -8,7 +8,6 @@ import {
     TouchableOpacity,
     Animated,
     TextInput,
-    Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -20,12 +19,14 @@ import { signupUser, clearError } from '@/store/slices/authSlice';
 import { normalizePhoneNumber } from '@/utils/validation';
 import { getErrorMessage } from '@/api/client';
 import PasswordInput from '@/components/common/PasswordInput';
+import { useToast } from '@/contexts/ToastContext';
 
 type Role = 'customer' | 'vendor' | null;
 
 export default function Signup() {
     const router = useRouter();
     const dispatch = useAppDispatch();
+    const { showToast } = useToast();
 
     // Redux state
     const { isLoading, error, otpSent: reduxOtpSent, isAuthenticated, user } = useAppSelector(
@@ -68,47 +69,50 @@ export default function Signup() {
     // Handle errors
     useEffect(() => {
         if (error) {
-            Alert.alert('Error', error, [
-                { text: 'OK', onPress: () => dispatch(clearError()) },
-            ]);
+            showToast({
+                type: 'error',
+                title: 'Error',
+                message: error,
+            });
+            dispatch(clearError());
         }
-    }, [error]);
+    }, [error, showToast, dispatch]);
 
     const handleSignup = async () => {
         // Validation
         if (!selectedRole) {
-            Alert.alert('Error', 'Please select your role (Customer or Vendor)');
+            showToast({ type: 'error', title: 'Error', message: 'Please select your role (Customer or Vendor)' });
             return;
         }
 
         if (!formData.firstName.trim() || !formData.lastName.trim()) {
-            Alert.alert('Error', 'Please enter your first and last name');
+            showToast({ type: 'error', title: 'Error', message: 'Please enter your first and last name' });
             return;
         }
 
         if (formData.phoneNumber.length < 10) {
-            Alert.alert('Error', 'Please enter a valid phone number');
+            showToast({ type: 'error', title: 'Error', message: 'Please enter a valid phone number' });
             return;
         }
 
         if (formData.password.length < 8) {
-            Alert.alert('Error', 'Password must be at least 8 characters');
+            showToast({ type: 'error', title: 'Error', message: 'Password must be at least 8 characters' });
             return;
         }
 
         if (formData.password !== formData.confirmPassword) {
-            Alert.alert('Error', 'Passwords do not match');
+            showToast({ type: 'error', title: 'Error', message: 'Passwords do not match' });
             return;
         }
 
         // Additional validation for customers
         if (selectedRole === 'customer') {
             if (!formData.address.trim()) {
-                Alert.alert('Error', 'Please enter your address');
+                showToast({ type: 'error', title: 'Error', message: 'Please enter your address' });
                 return;
             }
             if (!formData.city.trim()) {
-                Alert.alert('Error', 'Please enter your city');
+                showToast({ type: 'error', title: 'Error', message: 'Please enter your city' });
                 return;
             }
         }

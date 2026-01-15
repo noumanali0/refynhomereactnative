@@ -8,7 +8,6 @@ import {
     TouchableOpacity,
     Animated,
     TextInput,
-    Alert,
     Modal,
     ActivityIndicator,
 } from 'react-native';
@@ -23,6 +22,7 @@ import {
     checkSessionStatus,
     requestDeviceTransferOTP,
     clearSessionConflict,
+    requestOTP,
 } from '@/store/slices/authSlice';
 import { moderateScale } from 'react-native-size-matters';
 import { normalizePhoneNumber } from '@/utils/validation';
@@ -59,6 +59,11 @@ export default function Login() {
     // Device conflict modal state
     const [showDeviceConflictModal, setShowDeviceConflictModal] = useState(false);
     const [isRequestingTransferOTP, setIsRequestingTransferOTP] = useState(false);
+
+    // OTP not verified modal state (for customers who signed up but didn't verify)
+    const [showNotVerifiedModal, setShowNotVerifiedModal] = useState(false);
+    const [notVerifiedPhone, setNotVerifiedPhone] = useState('');
+    const [isRequestingVerifyOTP, setIsRequestingVerifyOTP] = useState(false);
 
     // Animation
     useEffect(() => {
@@ -141,11 +146,12 @@ export default function Login() {
                         ? 'pending proposal'
                         : 'active job';
 
-                Alert.alert(
-                    'Login Blocked',
-                    `This account has an active ${serviceTypeText} on "${sessionResult.existingDeviceName || 'another device'}". Please complete or cancel it first before logging in from this device.`,
-                    [{ text: 'OK' }]
-                );
+                showToast({
+                    type: 'error',
+                    title: 'Login Blocked',
+                    message: `This account has an active ${serviceTypeText} on "${sessionResult.existingDeviceName || 'another device'}". Please complete or cancel it first.`,
+                    duration: 5000,
+                });
                 return;
             }
 
@@ -176,6 +182,13 @@ export default function Login() {
                 setDeactivatedPhone(normalizePhoneNumber(phoneNumber));
                 setShowReactivateModal(true);
                 // Clear the error so toast doesn't show for deactivated case
+                dispatch(clearError());
+            }
+            // Check if OTP not verified (customer signed up but didn't verify)
+            else if (err?.includes?.('not verified') || err === 'Account not verified. Please verify your phone number.') {
+                setNotVerifiedPhone(normalizePhoneNumber(phoneNumber));
+                setShowNotVerifiedModal(true);
+                // Clear the error so toast doesn't show for this case
                 dispatch(clearError());
             }
             // Other errors are handled by useEffect showing the error toast
@@ -253,6 +266,44 @@ export default function Login() {
         setShowReactivateModal(false);
         setDeactivatedPhone('');
         setReactivateError(null);
+    };
+
+    // Handle verify OTP for unverified accounts
+    const handleVerifyUnverifiedAccount = async () => {
+        setIsRequestingVerifyOTP(true);
+
+        try {
+            // Store phone before clearing
+            const phoneToVerify = notVerifiedPhone;
+
+            // Request OTP for the unverified phone
+            await dispatch(requestOTP(phoneToVerify)).unwrap();
+
+            // Close modal first
+            setShowNotVerifiedModal(false);
+            setNotVerifiedPhone('');
+
+            // Navigate to OTP screen with stored phone
+            router.push({
+                pathname: '/(auth)/otp-login',
+                params: {
+                    phone: phoneToVerify,
+                },
+            });
+        } catch (err: any) {
+            showToast({
+                type: 'error',
+                title: 'Failed to Send OTP',
+                message: typeof err === 'string' ? err : 'Could not send OTP. Please try again.',
+            });
+        } finally {
+            setIsRequestingVerifyOTP(false);
+        }
+    };
+
+    const handleCloseNotVerifiedModal = () => {
+        setShowNotVerifiedModal(false);
+        setNotVerifiedPhone('');
     };
 
     return (
@@ -335,10 +386,11 @@ export default function Login() {
                         <TouchableOpacity
                             style={styles.forgotPasswordContainer}
                             onPress={() => {
-                                Alert.alert(
-                                    'Forgot Password',
-                                    'Password reset feature coming soon! Please contact support.'
-                                );
+                                showToast({
+                                    type: 'info',
+                                    title: 'Forgot Password',
+                                    message: 'Password reset feature coming soon! Please contact support.',
+                                });
                             }}
                         >
                             <Text type='body2' style={styles.forgotPasswordText}>
@@ -489,6 +541,52 @@ export default function Login() {
                                     <ActivityIndicator size="small" color="#fff" />
                                 ) : (
                                     <Text type="body" style={styles.proceedButtonText}>Proceed</Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* OTP Not Verified Modal - Shows when customer signed up but didn't verify OTP */}
+            <Modal
+                visible={showNotVerifiedModal}
+                transparent
+                animationType="fade"
+                onRequestClose={handleCloseNotVerifiedModal}
+            >
+                <View style={styles.modalOverlay}>
+                    <View style={styles.modalContent}>
+                        <View style={[styles.modalIconContainer, styles.notVerifiedIconBg]}>
+                            <Ionicons name="mail-unread-outline" size={48} color="#ef4444" />
+                        </View>
+
+                        <Text type="title" style={styles.modalTitle}>Verification Required</Text>
+                        <Text type="body" style={styles.modalDescription}>
+                            Your account hasn't been verified yet. Please verify your phone number to continue using RefynHome.
+                        </Text>
+
+                        <View style={styles.modalButtons}>
+                            <TouchableOpacity
+                                style={styles.modalCancelButton}
+                                onPress={handleCloseNotVerifiedModal}
+                                disabled={isRequestingVerifyOTP}
+                            >
+                                <Text type="body" style={styles.modalCancelText}>Cancel</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[
+                                    styles.verifyButton,
+                                    isRequestingVerifyOTP && styles.verifyButtonDisabled
+                                ]}
+                                onPress={handleVerifyUnverifiedAccount}
+                                disabled={isRequestingVerifyOTP}
+                            >
+                                {isRequestingVerifyOTP ? (
+                                    <ActivityIndicator size="small" color="#fff" />
+                                ) : (
+                                    <Text type="body" style={styles.verifyButtonText}>Verify Now</Text>
                                 )}
                             </TouchableOpacity>
                         </View>
@@ -752,6 +850,24 @@ const styles = StyleSheet.create({
         backgroundColor: '#93c5fd',
     },
     proceedButtonText: {
+        color: '#fff',
+        fontWeight: '600',
+    },
+    // Not Verified Modal Styles
+    notVerifiedIconBg: {
+        backgroundColor: '#fee2e2',
+    },
+    verifyButton: {
+        flex: 1,
+        paddingVertical: moderateScale(12),
+        borderRadius: 8,
+        backgroundColor: '#ef4444',
+        alignItems: 'center',
+    },
+    verifyButtonDisabled: {
+        backgroundColor: '#fca5a5',
+    },
+    verifyButtonText: {
         color: '#fff',
         fontWeight: '600',
     },

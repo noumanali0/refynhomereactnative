@@ -68,6 +68,10 @@ function convertAPIUserToFrontend(apiUser: UserAPI): Customer | Vendor {
           averageRating: apiUser.vendor_profile.average_rating,
           totalReviews: apiUser.vendor_profile.total_reviews,
           completedJobs: apiUser.vendor_profile.completed_jobs,
+          // Member since date (when vendor was approved)
+          memberSince: apiUser.vendor_profile.member_since,
+          // Active service requests count
+          activeRequests: apiUser.vendor_profile.active_requests || 0,
           // Rating distribution for profile screen
           rating_distribution: apiUser.vendor_profile.rating_distribution,
           // Service categories for edit profile
@@ -161,17 +165,27 @@ class AuthService {
    * @param code - OTP code (6 digits)
    * @returns Promise with tokens and user data
    */
-  async verifyOTP(phone: string, code: string): Promise<{
+  async verifyOTP(
+    phone: string,
+    code: string,
+    deviceId?: string,
+    deviceName?: string,
+    pushToken?: string | null
+  ): Promise<{
     access: string;
     refresh: string;
     user: Customer | Vendor;
     status: 'onboarding_complete' | 'onboarding_required';
+    device_id?: string;
   }> {
     try {
       const payload: OTPVerifyRequest = {
         phone,
         code,
         purpose: 'signup',
+        device_id: deviceId,
+        device_name: deviceName,
+        push_token: pushToken,
       };
 
       const response = await apiClient.post<OTPVerifyResponse>(
@@ -187,6 +201,7 @@ class AuthService {
         refresh: response.data.refresh,
         user,
         status: response.data.status,
+        device_id: response.data.device_id,
       };
     } catch (error) {
       console.error('[AuthService] OTP verify error:', error);
