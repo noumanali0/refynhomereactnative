@@ -1112,7 +1112,7 @@ const RequestServiceScreen = () => {
             const selectedCategory = findCategory(values.selectedService, categories);
 
             if (!selectedCategory) {
-                showToast({ type: 'error', title: 'Error', message: 'Please select a valid service category' });
+                Alert.alert('Error', 'Please select a valid service category');
                 formikHelpers.setSubmitting(false);
                 return;
             }
@@ -1189,7 +1189,7 @@ const RequestServiceScreen = () => {
             const errorMessage = error instanceof Error
                 ? error.message
                 : 'Failed to create service request. Please try again.';
-            showToast({ type: 'error', title: 'Error', message: errorMessage });
+            Alert.alert('Error', errorMessage);
         } finally {
             // Reset double-click protection
             isSubmittingRef.current = false;
@@ -1426,8 +1426,9 @@ const styles = StyleSheet.create({
     },
     buttonContainer: {
         flexDirection: 'row',
-        gap: scale(12),
+        gap: scale(2),
         marginTop: verticalScale(8),
+        // backgroundColor:"green"
     },
     cancelButton: {
         // flex: 1,
@@ -1455,7 +1456,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: scale(8),
+        // gap: scale(8),
         paddingVertical: verticalScale(14),
         paddingHorizontal: scale(14),
         width:moderateScale(150)

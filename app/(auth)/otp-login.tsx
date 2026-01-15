@@ -210,7 +210,7 @@ export default function OTPVerification() {
                             <Text type='body2' style={styles.inputLabel}>Enter OTP</Text>
                             <View style={styles.otpInputWrapper}>
                                 <TextInput
-                                    placeholder="Enter 6-digit OTP"
+                                    placeholder="6-digit code"
                                     placeholderTextColor="#94a3b8"
                                     value={otp}
                                     onChangeText={setOtp}
@@ -424,6 +424,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     otpInput: {
+        width: '100%',
         fontSize: moderateScale(18),
         color: '#0f172a',
         letterSpacing: 8,

@@ -269,7 +269,7 @@ export default function DeviceTransferOTP() {
                                     style={styles.inputIcon}
                                 />
                                 <TextInput
-                                    placeholder="Enter 6-digit OTP"
+                                    placeholder="6-digit code"
                                     placeholderTextColor="#94a3b8"
                                     value={otp}
                                     onChangeText={setOtp}

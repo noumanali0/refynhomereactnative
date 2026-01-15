@@ -385,13 +385,7 @@ export default function Login() {
                         {/* Forgot Password Link */}
                         <TouchableOpacity
                             style={styles.forgotPasswordContainer}
-                            onPress={() => {
-                                showToast({
-                                    type: 'info',
-                                    title: 'Forgot Password',
-                                    message: 'Password reset feature coming soon! Please contact support.',
-                                });
-                            }}
+                            onPress={() => router.push('/(auth)/forgot-password')}
                         >
                             <Text type='body2' style={styles.forgotPasswordText}>
                                 Forgot Password?
