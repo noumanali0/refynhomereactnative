@@ -341,98 +341,63 @@ export const refreshAccessToken = createAsyncThunk(
  *
  * IMPORTANT: This thunk performs complete cleanup to ensure no stale state
  * remains after logout, preventing issues on next login.
+ *
+ * Order matters:
+ * 1. First: Socket disconnect & API logout (need tokens)
+ * 2. Then: Clear tokens and local storage
+ * 3. Finally: Redux state resets
  */
 export const logoutUser = createAsyncThunk(
   'auth/logout',
   async (_, { dispatch }) => {
+    // Get tokens before any cleanup (needed for socket/API)
+    const refreshToken = await tokenService.getRefreshToken();
+    const deviceId = await deviceService.getOrCreateDeviceId();
+
+    // Import all required modules
+    const { disconnectSocket, resetDispatchState } = await import('./dispatchSlice');
+    const { clearReviewState } = await import('./reviewSlice');
+    const { resetHistory: resetServiceHistory } = await import('./serviceHistorySlice');
+    const { resetHistory: resetVendorHistory } = await import('./vendorHistorySlice');
+    const { stopBackgroundLocationTracking } = await import('@/services/backgroundLocationService');
+    const { clearActiveJob } = await import('@/services/activeJobService');
+    const { clearCustomerActiveService } = await import('@/services/customerActiveServiceService');
+
+    // STEP 1: Socket disconnect & API logout (these need tokens to work properly)
     try {
-      // Disconnect WebSocket first (imported dynamically to avoid circular deps)
-      const { disconnectSocket, resetDispatchState } = await import('./dispatchSlice');
-
-      // Properly await the async thunk dispatch
-      try {
-        await dispatch(disconnectSocket()).unwrap();
-      } catch (socketError) {
-        // Socket might not be connected, ignore this error
-        console.log('[Auth] Socket disconnect skipped:', socketError);
-      }
-
-      // Reset dispatch state (sync action)
-      dispatch(resetDispatchState());
-
-      // Reset other slices that may contain user-specific data
-      try {
-        const { clearReviewState } = await import('./reviewSlice');
-        const { resetHistory: resetServiceHistory } = await import('./serviceHistorySlice');
-        const { resetHistory: resetVendorHistory } = await import('./vendorHistorySlice');
-
-        dispatch(clearReviewState());
-        dispatch(resetServiceHistory());
-        dispatch(resetVendorHistory());
-
-        if (__DEV__) console.log('[Auth] All user-specific slices reset');
-      } catch (sliceError) {
-        // Slices might not be loaded, ignore
-        console.log('[Auth] Slice reset skipped:', sliceError);
-      }
-
-      // Stop background location tracking if running (for vendors)
-      try {
-        const { stopBackgroundLocationTracking } = await import('@/services/backgroundLocationService');
-        await stopBackgroundLocationTracking();
-        if (__DEV__) console.log('[Auth] Background location tracking stopped');
-      } catch (locationError) {
-        // Background task might not be running, ignore
-        console.log('[Auth] Background location stop skipped:', locationError);
-      }
-
-      // Clear persisted active job from SecureStore (vendor)
-      try {
-        const { clearActiveJob } = await import('@/services/activeJobService');
-        await clearActiveJob();
-        if (__DEV__) console.log('[Auth] Persisted active job cleared');
-      } catch (jobError) {
-        // No active job to clear, ignore
-        console.log('[Auth] Clear active job skipped:', jobError);
-      }
-
-      // Clear persisted active service from SecureStore (customer)
-      try {
-        const { clearCustomerActiveService } = await import('@/services/customerActiveServiceService');
-        await clearCustomerActiveService();
-        if (__DEV__) console.log('[Auth] Persisted customer active service cleared');
-      } catch (serviceError) {
-        // No active service to clear, ignore
-        console.log('[Auth] Clear customer active service skipped:', serviceError);
-      }
-
-      // Call logout API to blacklist refresh token and deactivate device session
-      const refreshToken = await tokenService.getRefreshToken();
-      const deviceId = await deviceService.getOrCreateDeviceId();
-      if (refreshToken) {
-        await authService.logout(refreshToken, deviceId);
-        if (__DEV__) console.log('[Auth] Refresh token blacklisted, device session deactivated');
-      }
-
-      // Clear all tokens and user data from SecureStore
-      await tokenService.clearSession();
-
-      return null;
-    } catch (error: any) {
-      // Logout locally even if API fails - ensure cleanup still happens
-      try {
-        const { stopBackgroundLocationTracking } = await import('@/services/backgroundLocationService');
-        await stopBackgroundLocationTracking();
-      } catch { /* ignore */ }
-
-      try {
-        const { clearActiveJob } = await import('@/services/activeJobService');
-        await clearActiveJob();
-      } catch { /* ignore */ }
-
-      await tokenService.clearSession();
-      return null;
+      await Promise.allSettled([
+        dispatch(disconnectSocket()).unwrap().catch(() => {}),
+        stopBackgroundLocationTracking().catch(() => {}),
+        refreshToken
+          ? authService.logout(refreshToken, deviceId).catch(() => {})
+          : Promise.resolve(),
+      ]);
+      if (__DEV__) console.log('[Auth] Socket disconnected and API logout done');
+    } catch (error) {
+      if (__DEV__) console.log('[Auth] Socket/API cleanup error (non-fatal):', error);
     }
+
+    // STEP 2: Clear all tokens and local storage
+    try {
+      await Promise.allSettled([
+        tokenService.clearSession(),
+        clearActiveJob(),
+        clearCustomerActiveService(),
+      ]);
+      if (__DEV__) console.log('[Auth] All local storage cleared');
+    } catch (error) {
+      if (__DEV__) console.log('[Auth] Storage clear error (non-fatal):', error);
+    }
+
+    // STEP 3: Reset Redux state (sync, instant)
+    dispatch(resetDispatchState());
+    dispatch(clearReviewState());
+    dispatch(resetServiceHistory());
+    dispatch(resetVendorHistory());
+
+    if (__DEV__) console.log('[Auth] Logout complete');
+
+    return null;
   }
 );
 

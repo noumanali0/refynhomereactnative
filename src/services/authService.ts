@@ -13,6 +13,12 @@
 import { apiClient } from '@/api/client';
 import { AUTH_ENDPOINTS } from '@/api/endpoints';
 import { deviceService } from './deviceService';
+
+// Auth endpoints need longer timeout due to:
+// - SMS sending (can be slow on carrier side)
+// - Account creation (multiple DB operations)
+// - OTP verification
+const AUTH_TIMEOUT = 25000; // 25 seconds for auth operations
 import type {
   SignupRequest,
   SignupResponse,
@@ -124,7 +130,11 @@ class AuthService {
    */
   async signup(payload: SignupRequest): Promise<SignupResponse> {
     try {
-      const response = await apiClient.post<SignupResponse>(AUTH_ENDPOINTS.SIGNUP, payload);
+      const response = await apiClient.post<SignupResponse>(
+        AUTH_ENDPOINTS.SIGNUP,
+        payload,
+        { timeout: AUTH_TIMEOUT }
+      );
       return response.data;
     } catch (error) {
       console.error('[AuthService] Signup error:', error);
@@ -148,7 +158,8 @@ class AuthService {
 
       const response = await apiClient.post<OTPRequestResponse>(
         AUTH_ENDPOINTS.OTP_REQUEST,
-        payload
+        payload,
+        { timeout: AUTH_TIMEOUT } // SMS sending can be slow
       );
       return response.data;
     } catch (error) {
@@ -190,7 +201,8 @@ class AuthService {
 
       const response = await apiClient.post<OTPVerifyResponse>(
         AUTH_ENDPOINTS.OTP_VERIFY,
-        payload
+        payload,
+        { timeout: AUTH_TIMEOUT }
       );
 
       // Convert API user to frontend format
@@ -230,7 +242,11 @@ class AuthService {
         password,
       };
 
-      const response = await apiClient.post<LoginResponse>(AUTH_ENDPOINTS.LOGIN, payload);
+      const response = await apiClient.post<LoginResponse>(
+        AUTH_ENDPOINTS.LOGIN,
+        payload,
+        { timeout: AUTH_TIMEOUT }
+      );
 
       // Convert API user to frontend format
       const user = convertAPIUserToFrontend(response.data.user);
@@ -613,7 +629,8 @@ class AuthService {
     try {
       const response = await apiClient.post<LoginResponse>(
         AUTH_ENDPOINTS.REACTIVATE_ACCOUNT,
-        { phone, password }
+        { phone, password },
+        { timeout: AUTH_TIMEOUT }
       );
 
       // Convert API user to frontend format (same as login)
@@ -758,10 +775,14 @@ class AuthService {
       const response = await apiClient.post<{
         message: string;
         otp_sent: boolean;
-      }>(AUTH_ENDPOINTS.REQUEST_DEVICE_TRANSFER_OTP, {
-        phone,
-        device_id: deviceId,
-      });
+      }>(
+        AUTH_ENDPOINTS.REQUEST_DEVICE_TRANSFER_OTP,
+        {
+          phone,
+          device_id: deviceId,
+        },
+        { timeout: AUTH_TIMEOUT } // SMS sending can be slow
+      );
 
       return {
         message: response.data.message,
@@ -806,14 +827,18 @@ class AuthService {
         is_verified: boolean;
         is_onboarding_complete: boolean;
         transferred_from_device: string | null;
-      }>(AUTH_ENDPOINTS.VERIFY_DEVICE_TRANSFER, {
-        phone: params.phone,
-        code: params.code,
-        password: params.password,
-        device_id: params.deviceId,
-        device_name: params.deviceName,
-        push_token: params.pushToken,
-      });
+      }>(
+        AUTH_ENDPOINTS.VERIFY_DEVICE_TRANSFER,
+        {
+          phone: params.phone,
+          code: params.code,
+          password: params.password,
+          device_id: params.deviceId,
+          device_name: params.deviceName,
+          push_token: params.pushToken,
+        },
+        { timeout: AUTH_TIMEOUT }
+      );
 
       // Convert API user to frontend format
       const user = convertAPIUserToFrontend(response.data.user);
@@ -899,14 +924,18 @@ class AuthService {
         active_service_type?: string;
         existing_device_name?: string;
         requires_otp?: boolean;
-      }>(AUTH_ENDPOINTS.LOGIN, {
-        phone,
-        password,
-        device_id: deviceId,
-        device_name: deviceName,
-        push_token: pushToken,
-        force_logout_other: forceLogoutOther || false,
-      });
+      }>(
+        AUTH_ENDPOINTS.LOGIN,
+        {
+          phone,
+          password,
+          device_id: deviceId,
+          device_name: deviceName,
+          push_token: pushToken,
+          force_logout_other: forceLogoutOther || false,
+        },
+        { timeout: AUTH_TIMEOUT }
+      );
 
       // Convert API user to frontend format
       const user = convertAPIUserToFrontend(response.data.user);
@@ -936,6 +965,79 @@ class AuthService {
         }
       }
       console.error('[AuthService] Login with device error:', error);
+      throw error;
+    }
+  }
+
+  // ==========================================================================
+  // FORGOT PASSWORD
+  // ==========================================================================
+
+  /**
+   * Request OTP for password reset
+   * POST /api/auth/forgot-password/
+   *
+   * Sends OTP to user's registered phone number for password reset.
+   *
+   * @param phone - User's phone number
+   * @returns Promise with OTP sent status
+   */
+  async forgotPassword(phone: string): Promise<{ message: string; otpSent: boolean }> {
+    try {
+      const response = await apiClient.post<{ message: string; otp_sent: boolean }>(
+        AUTH_ENDPOINTS.FORGOT_PASSWORD,
+        { phone },
+        { timeout: AUTH_TIMEOUT }
+      );
+
+      if (__DEV__) {
+        console.log('[AuthService] Forgot password OTP sent');
+      }
+
+      return {
+        message: response.data.message,
+        otpSent: response.data.otp_sent,
+      };
+    } catch (error) {
+      console.error('[AuthService] Forgot password error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Reset password with OTP verification
+   * POST /api/auth/reset-password/
+   *
+   * Resets user's password after OTP verification.
+   *
+   * @param phone - User's phone number
+   * @param code - OTP code received via SMS
+   * @param newPassword - New password (min 8 characters)
+   * @returns Promise with reset status
+   */
+  async resetPassword(
+    phone: string,
+    code: string,
+    newPassword: string
+  ): Promise<{ message: string; status: 'password_reset' }> {
+    try {
+      const response = await apiClient.post<{ message: string; status: 'password_reset' }>(
+        AUTH_ENDPOINTS.RESET_PASSWORD,
+        {
+          phone,
+          code,
+          new_password: newPassword,
+        },
+        { timeout: AUTH_TIMEOUT }
+      );
+
+      if (__DEV__) {
+        console.log('[AuthService] Password reset successful');
+      }
+
+      return response.data;
+    } catch (error) {
+      console.error('[AuthService] Reset password error:', error);
       throw error;
     }
   }

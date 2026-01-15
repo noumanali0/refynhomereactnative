@@ -205,6 +205,30 @@ export const AUTH_ENDPOINTS = {
    * Used to send push notifications for login attempts and force logouts.
    */
   REGISTER_PUSH_TOKEN: '/auth/register-push-token/',
+
+  // ========================================================================
+  // FORGOT PASSWORD
+  // ========================================================================
+
+  /**
+   * POST /api/auth/forgot-password/
+   * Body: { phone: string }
+   * Response: { message: string, otp_sent: boolean }
+   *
+   * Request OTP for password reset.
+   * Sends OTP to user's registered phone number.
+   */
+  FORGOT_PASSWORD: '/auth/forgot-password/',
+
+  /**
+   * POST /api/auth/reset-password/
+   * Body: { phone: string, code: string, new_password: string }
+   * Response: { message: string, status: 'password_reset' }
+   *
+   * Reset password using OTP verification.
+   * New password must be at least 8 characters.
+   */
+  RESET_PASSWORD: '/auth/reset-password/',
 } as const;
 
 // ============================================================================
