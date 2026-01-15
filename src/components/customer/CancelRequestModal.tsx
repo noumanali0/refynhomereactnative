@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '@/constants/colors';
+import { moderateScale, scale, verticalScale } from 'react-native-size-matters';
 import {
     CustomerCancelReasonCode,
     CUSTOMER_CANCEL_REASONS,
@@ -166,15 +167,15 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(0,0,0,0.5)',
         justifyContent: 'center',
         alignItems: 'center',
-        padding: 20,
+        padding: scale(20),
     },
     modalContainer: {
         width: '100%',
-        maxWidth: 340,
+        maxWidth: scale(340),
         backgroundColor: COLORS.white,
-        borderRadius: 16,
-        paddingVertical: 24,
-        paddingHorizontal: 20,
+        borderRadius: moderateScale(16),
+        paddingVertical: verticalScale(24),
+        paddingHorizontal: scale(20),
     },
     header: {
         alignItems: 'center',
@@ -296,32 +297,40 @@ const styles = StyleSheet.create({
     },
     buttonRow: {
         flexDirection: 'row',
-        gap: 12,
-        marginTop: 4,
+        gap: scale(12),
+        marginTop: verticalScale(4),
     },
     keepButton: {
         flex: 1,
-        paddingVertical: 12,
-        borderRadius: 10,
+        paddingVertical: verticalScale(12),
+        paddingHorizontal: scale(8),
+        borderRadius: moderateScale(10),
         alignItems: 'center',
+        justifyContent: 'center',
         backgroundColor: COLORS.gray100,
+        minHeight: verticalScale(44),
     },
     keepButtonText: {
         color: COLORS.gray700,
         fontWeight: '600',
-        fontSize: 14,
+        fontSize: moderateScale(13),
+        textAlign: 'center',
     },
     cancelButton: {
         flex: 1,
-        paddingVertical: 12,
-        borderRadius: 10,
+        paddingVertical: verticalScale(12),
+        paddingHorizontal: scale(8),
+        borderRadius: moderateScale(10),
         alignItems: 'center',
+        justifyContent: 'center',
         backgroundColor: COLORS.error,
+        minHeight: verticalScale(44),
     },
     cancelButtonText: {
         color: COLORS.white,
         fontWeight: '600',
-        fontSize: 14,
+        fontSize: moderateScale(13),
+        textAlign: 'center',
     },
     buttonDisabled: {
         opacity: 0.7,

@@ -21,10 +21,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { LinearGradient } from "expo-linear-gradient";
 import Animated, { FadeInDown, FadeIn } from "react-native-reanimated";
 import { scale, verticalScale, moderateScale } from "react-native-size-matters";
+import { useDispatch, useSelector } from "react-redux";
+import type { AppDispatch } from "@/store";
 
 import Text from "@/components/common/Text";
 import { vendorApi, VendorPublicProfile, VendorReview } from "@/services/vendorApi";
-import { favoriteService } from "@/services/favoriteService";
+import { addToFavorites, removeFromFavorites, selectFavoriteVendorIds } from "@/store/slices/vendorSlice";
 import { COLORS } from "@/constants/colors";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
@@ -559,6 +561,11 @@ const VendorDetailScreen: React.FC = () => {
   const router = useRouter();
   const params = useLocalSearchParams();
   const vendorId = params.vendorId ? Number(params.vendorId) : null;
+  const dispatch = useDispatch<AppDispatch>();
+
+  // Redux state for favorites (source of truth)
+  const favoriteVendorIds = useSelector(selectFavoriteVendorIds);
+  const isFavorite = vendorId ? favoriteVendorIds.includes(vendorId) : false;
 
   const [vendor, setVendor] = useState<VendorPublicProfile | null>(null);
   const [reviews, setReviews] = useState<VendorReview[]>([]);
@@ -567,7 +574,6 @@ const VendorDetailScreen: React.FC = () => {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>("about");
-  const [isFavorite, setIsFavorite] = useState(false);
   const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
 
   const fetchVendorProfile = useCallback(async (showLoading = true) => {
@@ -583,7 +589,7 @@ const VendorDetailScreen: React.FC = () => {
 
       const profile = await vendorApi.getProfile(vendorId);
       setVendor(profile);
-      setIsFavorite(profile.is_favorite);
+      // Note: isFavorite is managed by Redux (favoriteVendorIds), not local state
       setReviews(profile.recent_reviews);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load vendor profile");
@@ -621,18 +627,18 @@ const VendorDetailScreen: React.FC = () => {
     try {
       setIsTogglingFavorite(true);
       if (isFavorite) {
-        await favoriteService.remove(vendorId);
-        setIsFavorite(false);
+        // Use Redux action - updates favoriteVendorIds immediately
+        await dispatch(removeFromFavorites(vendorId)).unwrap();
       } else {
-        await favoriteService.add(vendorId);
-        setIsFavorite(true);
+        // Use Redux action - updates favoriteVendorIds immediately
+        await dispatch(addToFavorites(vendorId)).unwrap();
       }
     } catch (err) {
       console.error('Failed to toggle favorite:', err);
     } finally {
       setIsTogglingFavorite(false);
     }
-  }, [vendorId, isFavorite, isTogglingFavorite]);
+  }, [vendorId, isFavorite, isTogglingFavorite, dispatch]);
 
   useEffect(() => {
     fetchVendorProfile();

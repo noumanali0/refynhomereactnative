@@ -6,11 +6,10 @@ export default function CustomerHomeLayout() {
         <Stack
             screenOptions={{
                 headerShown: false,
-                // headerTitleAlign: "center",
             }}
         >
             <Stack.Screen name="index" options={{ title: "Home" }} />
-            <Stack.Screen name="service-request" options={{ title: "Request Service" }} />
+            <Stack.Screen name="create" options={{ title: "Create Request" }} />
             <Stack.Screen name="live-offers" options={{ title: "Live Offers" }} />
             <Stack.Screen name="tracking" options={{ title: "Track Vendor" }} />
         </Stack>

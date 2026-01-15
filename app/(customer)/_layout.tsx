@@ -1,11 +1,19 @@
 // app/(customer)/_layout.tsx
-import { Tabs } from "expo-router";
+import { Tabs, useSegments } from "expo-router";
 import GradientIcon from "@/components/common/GradientIcon";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { moderateScale, verticalScale } from "react-native-size-matters";
+import { useMemo } from "react";
 
 
 export default function CustomerTabsLayout() {
+    const segments = useSegments();
+
+    // Hide tab bar on live-offers screen
+    const hideTabBar = useMemo(() => {
+        return segments.includes('live-offers');
+    }, [segments]);
+
     return (
         <ErrorBoundary>
         <Tabs
@@ -13,7 +21,7 @@ export default function CustomerTabsLayout() {
                 headerShown: false,
                 tabBarActiveTintColor: "#2563EB",
                 tabBarInactiveTintColor: "#9CA3AF",
-                tabBarStyle: {
+                tabBarStyle: hideTabBar ? { display: 'none' } : {
                     borderTopLeftRadius: moderateScale(20),
                     borderTopRightRadius: moderateScale(20),
                     height: verticalScale(70),

@@ -24,6 +24,7 @@ import { OngoingServiceCard } from '@/components/customer/OngoingServiceCard';
 import { useCurrentLocation } from '@/hooks/useCurrentLocation';
 import { updateProfile, fetchUserProfile } from '@/store/slices/authSlice';
 import { fetchServiceHistory, selectServiceHistory, selectIsLoading as selectHistoryLoading } from '@/store/slices/serviceHistorySlice';
+import { fetchFavoriteVendors } from '@/store/slices/vendorSlice';
 import {
   getCustomerActiveService,
   clearCustomerActiveService,
@@ -204,11 +205,13 @@ export default function CustomerHomeScreen() {
     checkActiveService();
   }, [router, dispatch]);
 
-  // Fetch user profile and recent services on mount
+  // Fetch user profile, recent services, and favorites on mount
   useEffect(() => {
     dispatch(fetchUserProfile());
     // Fetch recent services (limit to 5 for home screen)
     dispatch(fetchServiceHistory({ limit: 5 }));
+    // Fetch favorites to populate favoriteVendorIds for heart icon state
+    dispatch(fetchFavoriteVendors());
   }, [dispatch]);
 
   // Get current location
@@ -230,6 +233,7 @@ export default function CustomerHomeScreen() {
     setRefreshing(true);
     await Promise.all([
       dispatch(fetchServiceHistory({ limit: 5 })),
+      dispatch(fetchFavoriteVendors()),
       refetchLocation(),
     ]);
     setRefreshing(false);

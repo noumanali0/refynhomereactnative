@@ -1112,7 +1112,7 @@ const RequestServiceScreen = () => {
             const selectedCategory = findCategory(values.selectedService, categories);
 
             if (!selectedCategory) {
-                Alert.alert('Error', 'Please select a valid service category');
+                showToast({ type: 'error', title: 'Error', message: 'Please select a valid service category' });
                 formikHelpers.setSubmitting(false);
                 return;
             }
@@ -1189,7 +1189,7 @@ const RequestServiceScreen = () => {
             const errorMessage = error instanceof Error
                 ? error.message
                 : 'Failed to create service request. Please try again.';
-            Alert.alert('Error', errorMessage);
+            showToast({ type: 'error', title: 'Error', message: errorMessage });
         } finally {
             // Reset double-click protection
             isSubmittingRef.current = false;

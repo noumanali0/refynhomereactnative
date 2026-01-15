@@ -40,6 +40,7 @@ import RatingModal from "@/components/common/RatingModal";
 import CancelRequestModal from "@/components/customer/CancelRequestModal";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { COLORS } from "@/constants/colors";
+import { lightMapStyle, routeColors, routeWidths, calculateBearing } from "@/constants/mapStyles";
 import { serviceRequestApi, type CreateServiceRequestParams, type CustomerCancelReasonCode } from "@/services/serviceRequestApi";
 import { socketService } from "@/services/socketService";
 import type { AppDispatch, RootState } from "@/store";
@@ -94,8 +95,8 @@ const CONSTANTS = {
     VENDOR_ARRIVAL_THRESHOLD_M: 100,
     /** Default request timeout in seconds (5 minutes) */
     REQUEST_TIMEOUT_SECONDS: 300,
-    /** Map edge padding for fitToCoordinates */
-    MAP_EDGE_PADDING: { top: 100, right: 100, bottom: 400, left: 100 },
+    /** Map edge padding for fitToCoordinates (top accounts for tracking card) */
+    MAP_EDGE_PADDING: { top: 200, right: 60, bottom: 400, left: 60 },
     /** Map delta for initial region */
     MAP_DELTA: 0.02,
     /** Height of each proposal card for FlatList optimization */
@@ -129,12 +130,12 @@ const ZOOM_THRESHOLDS = {
         FAR: 0.05,          // Show full route
     },
 
-    // Edge padding per zoom level (bottom padding accounts for bottom sheet)
+    // Edge padding per zoom level (top accounts for tracking card, bottom for bottom sheet)
     PADDING: {
-        VERY_CLOSE: { top: 80, right: 80, bottom: 350, left: 80 },
-        CLOSE: { top: 100, right: 100, bottom: 400, left: 100 },
-        MEDIUM: { top: 120, right: 120, bottom: 450, left: 120 },
-        FAR: { top: 150, right: 150, bottom: 500, left: 150 },
+        VERY_CLOSE: { top: 180, right: 60, bottom: 350, left: 60 },
+        CLOSE: { top: 200, right: 60, bottom: 400, left: 60 },
+        MEDIUM: { top: 220, right: 60, bottom: 450, left: 60 },
+        FAR: { top: 250, right: 60, bottom: 500, left: 60 },
     },
 
     ANIMATION_DURATION: 800, // Smooth 800ms animations
@@ -164,6 +165,11 @@ const ProposalCard = React.memo(({
     isAccepting,
     isDeclining,
 }: ProposalCardProps) => {
+    // DEBUG: Log vendor profile photo URL
+    if (__DEV__) {
+        console.log('[ProposalCard] Vendor profile_photo_url:', proposal.vendor?.profile_photo_url);
+    }
+
     // Calculate initial time from acceptance_expires_at (more reliable than remaining_expiry_time)
     const calculateTimeLeft = useCallback(() => {
         if (!proposal.acceptance_expires_at) {
@@ -360,6 +366,11 @@ const ProposalCard = React.memo(({
                                 <Image
                                     source={{ uri: proposal.vendor.profile_photo_url }}
                                     style={styles.avatarImage}
+                                    onError={(e) => {
+                                        if (__DEV__) {
+                                            console.log('[ProposalCard] Image load error:', e.nativeEvent.error, 'URL:', proposal.vendor?.profile_photo_url);
+                                        }
+                                    }}
                                 />
                             ) : (
                                 <LinearGradient
@@ -405,6 +416,11 @@ const ProposalCard = React.memo(({
                                 <Image
                                     source={{ uri: proposal.vendor.profile_photo_url }}
                                     style={styles.avatarImage}
+                                    onError={(e) => {
+                                        if (__DEV__) {
+                                            console.log('[ProposalCard] Image load error (non-accepted):', e.nativeEvent.error, 'URL:', proposal.vendor?.profile_photo_url);
+                                        }
+                                    }}
                                 />
                             ) : (
                                 <LinearGradient
@@ -793,7 +809,7 @@ export default function LiveOffersScreen() {
         destination: Coordinates
     ): {
         delta: number;
-        padding: typeof ZOOM_THRESHOLDS.PADDING.CLOSE;
+        padding: { top: number; right: number; bottom: number; left: number };
         zoomLevel: 'very_close' | 'close' | 'medium' | 'far';
     } => {
         const { haversineDistanceKm } = require('@/utils/geo');
@@ -1828,11 +1844,11 @@ export default function LiveOffersScreen() {
             });
         } catch (err: unknown) {
             const errorMessage = err instanceof Error ? err.message : 'Failed to accept proposal. Please try again.';
-            Alert.alert('Error', errorMessage);
+            showToast({ type: 'error', title: 'Error', message: errorMessage });
         } finally {
             setAcceptingId(null);
         }
-    }, [dispatch]);
+    }, [dispatch, showToast]);
 
     const handleDeclineProposal = useCallback(async (proposalId: number) => {
         try {
@@ -1840,7 +1856,7 @@ export default function LiveOffersScreen() {
             await dispatch(declineProposal(proposalId)).unwrap();
         } catch (err: unknown) {
             const errorMessage = err instanceof Error ? err.message : 'Failed to decline proposal.';
-            Alert.alert('Error', errorMessage);
+            showToast({ type: 'error', title: 'Error', message: errorMessage });
         } finally {
             setDecliningId(null);
         }
@@ -1982,12 +1998,13 @@ export default function LiveOffersScreen() {
                     const remainingMinutes = Math.ceil(
                         (data.details?.required_inactive_minutes || 20) - (data.details?.inactive_minutes || 0)
                     );
-                    Alert.alert(
-                        'Cannot Cancel',
-                        `The vendor has traveled ${data.details?.distance_covered_km?.toFixed(1) || '1.0'}km towards you. ` +
-                        `Cancellation will be available after ${remainingMinutes} more minutes if the vendor is inactive.`,
-                        [{ text: 'OK', onPress: () => setShowCancelModal(false) }]
-                    );
+                    showToast({
+                        type: 'warning',
+                        title: 'Cannot Cancel',
+                        message: `The vendor has traveled ${data.details?.distance_covered_km?.toFixed(1) || '1.0'}km towards you. Cancellation will be available after ${remainingMinutes} more minutes if the vendor is inactive.`,
+                        duration: 5000,
+                    });
+                    setShowCancelModal(false);
                 }
             });
 
@@ -2015,15 +2032,15 @@ export default function LiveOffersScreen() {
             if (__DEV__) {
                 console.error('[LiveOffers] Cancel WebSocket failed:', error);
             }
-            Alert.alert('Error', 'Failed to cancel request. Please try again.');
+            showToast({ type: 'error', title: 'Error', message: 'Failed to cancel request. Please try again.' });
             setIsCancelling(false);
         }
-    }, [effectiveRequestId, router, dispatch]);
+    }, [effectiveRequestId, router, dispatch, showToast]);
 
     // Handle retry request - create new request with same parameters
     const handleRetryRequest = useCallback(async () => {
         if (!originalRequestParams) {
-            Alert.alert('Error', 'Request details not available. Please create a new request.');
+            showToast({ type: 'error', title: 'Error', message: 'Request details not available. Please create a new request.' });
             return;
         }
 
@@ -2047,45 +2064,42 @@ export default function LiveOffersScreen() {
                 },
             });
 
-            Alert.alert('Success', 'Request re-submitted! Finding nearby vendors...');
+            showToast({ type: 'success', title: 'Success', message: 'Request re-submitted! Finding nearby vendors...' });
         } catch (error: unknown) {
             const errorMessage = error instanceof Error ? error.message : 'Failed to retry request';
-            Alert.alert('Error', errorMessage);
+            showToast({ type: 'error', title: 'Error', message: errorMessage });
         } finally {
             setIsRetrying(false);
         }
-    }, [originalRequestParams, router]);
+    }, [originalRequestParams, router, showToast]);
 
     /**
-     * Renders map markers
+     * Renders map markers - inDrive style with pulsing destination and rotating car
      */
     function renderMarkers(): React.ReactNode {
         if (!serviceLocation) return null;
 
         return (
             <>
-                {/* Service Address Marker - Clean Icon */}
+                {/* Service Address Marker - Simple location icon */}
                 <Marker
                     key="service-location"
                     coordinate={serviceLocation}
-                    title="Service Location"
-                    description={serviceAddress}
+                    anchor={{ x: 0.5, y: 1 }}
                 >
                     <Ionicons name="location" size={36} color={COLORS.accent} />
                 </Marker>
 
-                {/* Vendor Car Marker - Clean Icon */}
+                {/* Vendor Car Marker - Simple car icon */}
                 {acceptedProposal && vendorLocation && !serviceCancelledByVendor && (
                     <Marker
                         key={`vendor-${acceptedProposal.id}`}
                         coordinate={vendorLocation}
                         anchor={{ x: 0.5, y: 0.5 }}
-                        title={acceptedProposal.vendor?.full_name || 'Vendor'}
-                        description={vendorHasArrived ? "Arrived!" : "On the way"}
                     >
                         <FontAwesome5
                             name="car"
-                            size={32}
+                            size={24}
                             color={vendorHasArrived ? COLORS.success : COLORS.primary}
                         />
                     </Marker>
@@ -2196,34 +2210,41 @@ export default function LiveOffersScreen() {
                 </LinearGradient>
             </View>
 
-            {/* Map */}
+            {/* Map - inDrive style with custom styling */}
             <MapView
                 ref={mapRef}
                 style={styles.map}
                 provider={PROVIDER_DEFAULT}
+                customMapStyle={lightMapStyle}
                 initialRegion={{
                     ...serviceLocation,
                     latitudeDelta: CONSTANTS.MAP_DELTA,
                     longitudeDelta: CONSTANTS.MAP_DELTA,
                 }}
             >
-                {/* OpenStreetMap tiles - COMMENTED OUT for Google Maps dev build */}
-                {/* Uncomment below for Expo Go testing (no native Google Maps) */}
-                {/* {(Platform.OS === "web" || (Platform.OS === "android" && __DEV__)) && (
-                    <UrlTile
-                        urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-                        maximumZ={19}
-                        shouldReplaceMapContent={true}
-                    />
-                )} */}
+                {/* Gradient Route - 3 layer polylines for glow effect (inDrive style) */}
                 {/* Hide route when vendor cancels OR when vendor has arrived (in_progress) */}
                 {routeCoords.length > 0 && !serviceCancelledByVendor && currentRequest?.status !== 'in_progress' && (
-                    <Polyline
-                        coordinates={routeCoords}
-                        strokeColor={COLORS.primary}
-                        strokeWidth={5}
-                        lineDashPattern={[1]}
-                    />
+                    <>
+                        {/* Shadow/glow layer */}
+                        <Polyline
+                            coordinates={routeCoords}
+                            strokeColor={routeColors.shadow}
+                            strokeWidth={routeWidths.shadow}
+                        />
+                        {/* Middle layer */}
+                        <Polyline
+                            coordinates={routeCoords}
+                            strokeColor={routeColors.middle}
+                            strokeWidth={routeWidths.middle}
+                        />
+                        {/* Main route line */}
+                        <Polyline
+                            coordinates={routeCoords}
+                            strokeColor={routeColors.main}
+                            strokeWidth={routeWidths.main}
+                        />
+                    </>
                 )}
                 {renderMarkers()}
             </MapView>
@@ -2595,8 +2616,8 @@ const styles = StyleSheet.create({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingTop: verticalScale(50),
-        paddingBottom: verticalScale(16),
+        paddingTop: verticalScale(32),
+        paddingBottom: verticalScale(10),
         paddingHorizontal: scale(16),
     },
     backButton: {
@@ -2659,11 +2680,58 @@ const styles = StyleSheet.create({
         shadowRadius: 6,
         elevation: 8,
     },
+    // Destination pin marker - fully rounded circle
+    destinationMarkerContainer: {
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    destinationPin: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: COLORS.accent,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 2,
+        borderColor: COLORS.white,
+    },
+    destinationPinTail: {
+        width: 0,
+        height: 0,
+        borderLeftWidth: 8,
+        borderRightWidth: 8,
+        borderTopWidth: 10,
+        borderLeftColor: 'transparent',
+        borderRightColor: 'transparent',
+        borderTopColor: COLORS.accent,
+        marginTop: -2,
+    },
+    // Car marker - fully rounded circle
+    carMarkerContainer: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: COLORS.white,
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 2,
+        borderColor: COLORS.primary,
+    },
+    carMarkerArrived: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: '#E8F5E9',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 2,
+        borderColor: COLORS.success,
+    },
 
     // Tracking info card
     trackingInfoCard: {
         position: 'absolute',
-        top: verticalScale(120),
+        top: verticalScale(85),
         left: scale(16),
         right: scale(16),
         backgroundColor: COLORS.white,
@@ -3157,6 +3225,7 @@ const styles = StyleSheet.create({
     },
     actionContainer: {
         flexDirection: 'row',
+        alignItems: 'stretch',
         padding: scale(16),
         paddingTop: verticalScale(12),
         gap: scale(12),
@@ -3191,6 +3260,7 @@ const styles = StyleSheet.create({
         opacity: 0.6,
     },
     acceptGradient: {
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',

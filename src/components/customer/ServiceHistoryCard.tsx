@@ -105,11 +105,12 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
   const vendor = request?.assigned_vendor_detail || request?.accepted_proposal?.vendor;
   const vendorId = vendor?.id;
 
-  // PRIMARY: Use is_favorite from API response (most accurate)
-  // FALLBACK: Use Redux for optimistic updates (when toggling favorite)
-  const isFavorite = vendor?.is_favorite ?? (
-    vendorId ? favoriteVendorIds.includes(vendorId) : false
-  );
+  // Redux favoriteVendorIds is the source of truth for UI
+  // It's updated immediately on toggle for responsive UX
+  // Only fall back to API value if vendorId is not available
+  const isFavorite = vendorId
+    ? favoriteVendorIds.includes(vendorId)
+    : (vendor?.is_favorite ?? false);
 
   // Handle toggle favorites (add/remove)
   const handleToggleFavorite = useCallback(async () => {

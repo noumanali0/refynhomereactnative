@@ -72,11 +72,11 @@ export default function ProfileScreen() {
     const handleLogout = () => {
         // Block logout if customer has active service
         if (hasActiveJob) {
-            Alert.alert(
-                'Cannot Logout',
-                activeJobReason || 'You have an active service. Please complete or cancel it before logging out.',
-                [{ text: 'OK', style: 'default' }]
-            );
+            showToast({
+                type: 'warning',
+                title: 'Cannot Logout',
+                message: activeJobReason || 'You have an active service. Please complete or cancel it before logging out.',
+            });
             return;
         }
 
@@ -100,7 +100,7 @@ export default function ProfileScreen() {
                                 console.warn('[Profile] Logout timeout - showing error');
                             }
                             setIsLoggingOut(false);
-                            Alert.alert('Logout Timeout', 'Logout is taking longer than expected. Please try again.');
+                            showToast({ type: 'error', title: 'Logout Timeout', message: 'Logout is taking longer than expected. Please try again.' });
                         }, 8000); // 8 second timeout
 
                         try {
@@ -110,7 +110,7 @@ export default function ProfileScreen() {
                             // No need to call router.replace here - _layout.tsx will redirect to login
                         } catch (error: any) {
                             clearTimeout(logoutTimeout);
-                            Alert.alert("Logout Failed", error.message || "Failed to logout");
+                            showToast({ type: 'error', title: 'Logout Failed', message: error.message || 'Failed to logout' });
                         } finally {
                             setIsLoggingOut(false);
                         }
@@ -174,9 +174,9 @@ export default function ProfileScreen() {
 
         try {
             await dispatch(changePassword({ currentPassword, newPassword })).unwrap();
-            // Success - close modal and show success alert
+            // Success - close modal and show success toast
             handleClosePasswordModal();
-            Alert.alert('Success', 'Password changed successfully');
+            showToast({ type: 'success', title: 'Success', message: 'Password changed successfully' });
         } catch (error: any) {
             const message = typeof error === 'string'
                 ? error
