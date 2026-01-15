@@ -41,6 +41,9 @@ import {
     selectVendorAverageRating,
     selectVendorReviewsHasMore,
     clearVendorReviews,
+    selectOriginalTotalCount,
+    selectOriginalDistribution,
+    selectOriginalAverageRating,
 } from '@/store/slices/reviewSlice';
 
 // ============================================================================
@@ -69,10 +72,13 @@ export default function ReviewsScreen() {
     const isLoading = useSelector(selectIsLoadingVendorReviews);
     const isLoadingMore = useSelector(selectIsLoadingMoreReviews);
     const error = useSelector(selectVendorReviewsError);
-    const totalCount = useSelector(selectVendorReviewsCount);
-    const distribution = useSelector(selectVendorReviewsDistribution);
-    const averageRating = useSelector(selectVendorAverageRating);
+    const filteredCount = useSelector(selectVendorReviewsCount); // Count of filtered reviews
     const hasMore = useSelector(selectVendorReviewsHasMore);
+
+    // ORIGINAL stats - these never change with filter (for filter chip counts)
+    const totalCount = useSelector(selectOriginalTotalCount);
+    const distribution = useSelector(selectOriginalDistribution);
+    const averageRating = useSelector(selectOriginalAverageRating);
 
     // Extract vendor ID from user data
     const vendorId = useMemo(() => {
@@ -226,14 +232,15 @@ export default function ReviewsScreen() {
             return (
                 <View style={styles.footerContainer}>
                     <Text type="body2" style={styles.footerText}>
-                        Showing {vendorReviews.length} of {totalCount} reviews
+                        Showing {vendorReviews.length} of {filterByStar === 'all' ? totalCount : filteredCount} reviews
+                        {filterByStar !== 'all' && ` (${filterByStar}★ filter)`}
                     </Text>
                 </View>
             );
         }
 
         return null;
-    }, [isLoadingMore, hasMore, processedReviews.length, vendorReviews.length, totalCount]);
+    }, [isLoadingMore, hasMore, processedReviews.length, vendorReviews.length, totalCount, filteredCount, filterByStar]);
 
     // Render empty state
     const renderEmptyState = () => (
@@ -278,7 +285,7 @@ export default function ReviewsScreen() {
                     <View style={styles.headerTextContainer}>
                         <Text type="title" style={styles.headerTitle}>Reviews</Text>
                         <Text type="subtitle" style={styles.headerSubtitle}>
-                            {processedReviews.length} of {vendorReviews.length} reviews
+                            {totalCount > 0 ? `${totalCount} total reviews` : 'No reviews yet'}
                         </Text>
                     </View>
                     <View style={styles.headerSpacer} />

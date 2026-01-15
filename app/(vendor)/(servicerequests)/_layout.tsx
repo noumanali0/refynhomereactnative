@@ -1,18 +1,16 @@
-// app/(customer)/(home)/_layout.tsx
+// app/(vendor)/(servicerequests)/_layout.tsx
 import { Stack } from "expo-router";
 
-export default function VendorDashboardLayout() {
+export default function VendorServiceRequestsLayout() {
     return (
         <Stack
             screenOptions={{
                 headerShown: false,
-                // headerTitleAlign: "center",
             }}
         >
             <Stack.Screen name="index" options={{ title: "Service Requests" }} />
             <Stack.Screen name="request-details" options={{ title: "Request Detail" }} />
-            {/* <Stack.Screen name="live-offers" options={{ title: "Live Offers" }} /> */}
-            {/* <Stack.Screen name="tracking" options={{ title: "Track Vendor" }} /> */}
+            <Stack.Screen name="websocket-request-details" options={{ title: "Request Detail" }} />
         </Stack>
     );
 }

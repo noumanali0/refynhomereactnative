@@ -7,7 +7,7 @@
  * Integrated with backend API for real data.
  */
 
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import {
     View,
     TouchableOpacity,
@@ -15,7 +15,8 @@ import {
     Image,
     Alert,
     ActivityIndicator,
-    ScrollView
+    ScrollView,
+    RefreshControl
 } from 'react-native';
 import Text from '@/components/common/Text';
 import { useRouter } from 'expo-router';
@@ -62,6 +63,7 @@ export default function VendorProfileScreen() {
     const { pickImage } = useImagePicker();
     const [isLoggingOut, setIsLoggingOut] = useState(false);
     const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+    const [isRefreshing, setIsRefreshing] = useState(false);
 
     // Get current user from auth state
     const { user, isLoading } = useSelector((state: RootState) => state.auth);
@@ -69,10 +71,37 @@ export default function VendorProfileScreen() {
     // Check if vendor has active job (prevents logout)
     const { hasActiveJob, reason: activeJobReason } = useSelector(selectVendorHasActiveJob);
 
-    // Fetch user profile on mount
+    // Fetch user profile on mount - only if we don't have vendor profile data
+    // This prevents slow tab switching when data already exists
     useEffect(() => {
-        dispatch(fetchUserProfile());
-    }, [dispatch]);
+        const profile = (user as any)?.vendorProfile || (user as any)?.vendor_profile;
+        // Only fetch if we don't have essential profile data
+        if (!profile?.id) {
+            dispatch(fetchUserProfile());
+        }
+    }, [dispatch, user]);
+
+    // Handle pull-to-refresh
+    const handleRefresh = useCallback(async () => {
+        setIsRefreshing(true);
+        try {
+            await dispatch(fetchUserProfile()).unwrap();
+            if (__DEV__) {
+                console.log('[VendorProfile] Profile refreshed successfully');
+            }
+        } catch (error) {
+            if (__DEV__) {
+                console.error('[VendorProfile] Failed to refresh profile:', error);
+            }
+            showToast({
+                type: 'error',
+                title: 'Refresh Failed',
+                message: 'Failed to refresh profile data',
+            });
+        } finally {
+            setIsRefreshing(false);
+        }
+    }, [dispatch, showToast]);
 
     // Extract vendor profile from user
     const vendorProfile = useMemo(() => {
@@ -80,7 +109,6 @@ export default function VendorProfileScreen() {
 
         // Build a vendor profile object from user data
         const profile = (user as any).vendorProfile || (user as any).vendor_profile;
-        console.log("🚀 ~ VendorProfileScreen ~ profile:", profile)
 
         return {
             id: user.uid || (user as any).id,
@@ -98,12 +126,11 @@ export default function VendorProfileScreen() {
             isOnline: true,
             subscriptionTier: (user as any).subscription_tier || (user as any).subscriptionTier || 'basic',
             serviceRadius: profile?.serviceRadiusKm || profile?.service_radius_km || 10,
-            memberSince: profile?.member_since || null,
+            memberSince: profile?.memberSince || profile?.member_since || null,
             ratingDistribution: profile?.rating_distribution || null,
             activeRequests: profile?.activeRequests || profile?.active_requests || 0,
         };
     }, [user]);
-    console.log("🚀 ~ VendorProfileScreen ~ vendorProfile:", vendorProfile)
 
     // Get all reviews for this vendor
     // Note: Reviews are now fetched from API when needed
@@ -231,11 +258,11 @@ export default function VendorProfileScreen() {
     const handleLogout = () => {
         // Block logout if vendor has active job
         if (hasActiveJob) {
-            Alert.alert(
-                'Cannot Logout',
-                activeJobReason || 'You have an active job. Please complete or cancel it before logging out.',
-                [{ text: 'OK', style: 'default' }]
-            );
+            showToast({
+                type: 'warning',
+                title: 'Cannot Logout',
+                message: activeJobReason || 'You have an active job. Please complete or cancel it before logging out.',
+            });
             return;
         }
 
@@ -256,7 +283,7 @@ export default function VendorProfileScreen() {
                                 console.warn('[VendorProfile] Logout timeout - showing error');
                             }
                             setIsLoggingOut(false);
-                            Alert.alert('Logout Timeout', 'Logout is taking longer than expected. Please try again.');
+                            showToast({ type: 'error', title: 'Logout Timeout', message: 'Logout is taking longer than expected. Please try again.' });
                         }, 8000); // 8 second timeout
 
                         try {
@@ -266,7 +293,7 @@ export default function VendorProfileScreen() {
                             // No need to call router.replace here - _layout.tsx will redirect to login
                         } catch (error: any) {
                             clearTimeout(logoutTimeout);
-                            Alert.alert('Logout Failed', error.message || 'Failed to logout');
+                            showToast({ type: 'error', title: 'Logout Failed', message: error.message || 'Failed to logout' });
                         } finally {
                             setIsLoggingOut(false);
                         }
@@ -294,6 +321,15 @@ export default function VendorProfileScreen() {
                 style={styles.scrollView}
                 contentContainerStyle={styles.contentContainer}
                 showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={isRefreshing}
+                        onRefresh={handleRefresh}
+                        colors={[COLORS.primary]}
+                        tintColor={COLORS.primary}
+                        progressViewOffset={20}
+                    />
+                }
             >
                 {/* Profile Card */}
                 <View style={styles.profileCard}>
@@ -491,7 +527,7 @@ export default function VendorProfileScreen() {
                     <ProfileOption
                         icon={<Ionicons name="help-circle-outline" size={20} color={COLORS.primary} />}
                         label="Help & Support"
-                        onPress={() => Alert.alert('Help', 'Support coming soon!')}
+                        onPress={() => showToast({ type: 'info', title: 'Help', message: 'Support coming soon!' })}
                     />
                     <ProfileOption
                         icon={<Ionicons name="log-out-outline" size={20} color={COLORS.error} />}
@@ -518,7 +554,7 @@ const styles = StyleSheet.create({
     },
     scrollView: {
         flex: 1,
-        marginTop: verticalScale(-30),
+        marginTop: verticalScale(0),
     },
     contentContainer: {
         paddingBottom: verticalScale(22),
@@ -534,8 +570,8 @@ const styles = StyleSheet.create({
         color: COLORS.gray600,
     },
     headerGradient: {
-        paddingTop: verticalScale(30),
-        paddingBottom: verticalScale(80),
+        paddingTop: verticalScale(20),
+        paddingBottom: verticalScale(35),
         paddingHorizontal: scale(20),
         borderBottomLeftRadius: moderateScale(24),
         borderBottomRightRadius: moderateScale(24),

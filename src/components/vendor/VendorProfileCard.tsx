@@ -1,7 +1,7 @@
 import React from 'react';
 import { View, Image, TouchableOpacity, StyleSheet } from 'react-native';
 import Text from '@/components/common/Text';
-import { Star, MapPin, CheckCircle, Award } from 'lucide-react-native';
+import { Star, MapPin, CheckCircle, Award, User } from 'lucide-react-native';
 
 interface VendorProfileCardProps {
     vendor: {
@@ -27,7 +27,13 @@ export const VendorProfileCard: React.FC<VendorProfileCardProps> = ({
             {/* Header Row */}
             <View style={styles.header}>
                 <View style={styles.avatarContainer}>
-                    <Image source={{ uri: vendor.avatar }} style={styles.avatar} />
+                    {vendor.avatar ? (
+                        <Image source={{ uri: vendor.avatar }} style={styles.avatar} />
+                    ) : (
+                        <View style={styles.avatarPlaceholder}>
+                            <User size={28} color="#FFFFFF" />
+                        </View>
+                    )}
                     <View style={[styles.onlineIndicator, vendor.isOnline && styles.onlineActive]} />
                 </View>
 
@@ -105,6 +111,14 @@ const styles = StyleSheet.create({
         height: 64,
         borderRadius: 32,
         backgroundColor: '#E5E7EB',
+    },
+    avatarPlaceholder: {
+        width: 64,
+        height: 64,
+        borderRadius: 32,
+        backgroundColor: '#2563EB',
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     onlineIndicator: {
         position: 'absolute',

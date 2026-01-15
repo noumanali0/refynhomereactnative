@@ -7,7 +7,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, ScrollView, TouchableOpacity, StyleSheet, Alert, Modal, TextInput, ActivityIndicator, Platform } from 'react-native';
+import { View, ScrollView, TouchableOpacity, StyleSheet, Modal, TextInput, ActivityIndicator, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -19,6 +19,7 @@ import { COLORS } from '@/constants/colors';
 import Text from '@/components/common/Text';
 import { useAppDispatch } from '@/hooks/useAppDispatch';
 import { deleteAccount, changePassword, deactivateAccount } from '@/store/slices/authSlice';
+import { useToast } from '@/contexts/ToastContext';
 
 // Storage key for notification preference
 const PUSH_NOTIFICATION_KEY = 'vendor_push_notifications';
@@ -26,6 +27,7 @@ const PUSH_NOTIFICATION_KEY = 'vendor_push_notifications';
 export default function AccountSettingsScreen() {
     const router = useRouter();
     const dispatch = useAppDispatch();
+    const { showToast } = useToast();
 
     // Notification Settings
     const [pushNotifications, setPushNotifications] = useState(false);
@@ -91,11 +93,11 @@ export default function AccountSettingsScreen() {
             }
 
             if (finalStatus !== 'granted') {
-                Alert.alert(
-                    'Permission Required',
-                    'Please enable notifications in your device settings to receive push notifications.',
-                    [{ text: 'OK' }]
-                );
+                showToast({
+                    type: 'warning',
+                    title: 'Permission Required',
+                    message: 'Please enable notifications in your device settings to receive push notifications.',
+                });
                 return;
             }
 
@@ -126,7 +128,7 @@ export default function AccountSettingsScreen() {
     };
 
     const handlePrivacy = () => {
-        Alert.alert('Privacy Policy', 'View privacy policy coming soon!');
+        showToast({ type: 'info', title: 'Privacy Policy', message: 'View privacy policy coming soon!' });
     };
 
     const handleOpenDeactivateModal = () => {
@@ -181,7 +183,7 @@ export default function AccountSettingsScreen() {
         try {
             await dispatch(changePassword({ currentPassword, newPassword })).unwrap();
             handleClosePasswordModal();
-            Alert.alert('Success', 'Password changed successfully');
+            showToast({ type: 'success', title: 'Success', message: 'Password changed successfully' });
         } catch (error: any) {
             setPasswordError(error || 'Failed to change password');
         } finally {

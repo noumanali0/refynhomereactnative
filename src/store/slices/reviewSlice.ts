@@ -39,12 +39,20 @@ interface ReviewState {
     isLoadingMoreReviews: boolean;
     /** Error message from fetching vendor reviews */
     vendorReviewsError: string | null;
-    /** Total count of vendor reviews */
+    /** Total count of vendor reviews (filtered) */
     vendorReviewsCount: number;
-    /** Star rating distribution */
+    /** Star rating distribution (filtered) */
     vendorReviewsDistribution: Record<string, number>;
-    /** Average rating */
+    /** Average rating (filtered) */
     vendorAverageRating: number;
+    /** ORIGINAL total count (never changes with filter) */
+    originalTotalCount: number;
+    /** ORIGINAL distribution (never changes with filter) */
+    originalDistribution: Record<string, number>;
+    /** ORIGINAL average rating (never changes with filter) */
+    originalAverageRating: number;
+    /** Whether original stats have been loaded */
+    originalStatsLoaded: boolean;
     /** Current page for pagination */
     vendorReviewsPage: number;
     /** Total pages for pagination */
@@ -71,6 +79,10 @@ const initialState: ReviewState = {
     vendorReviewsCount: 0,
     vendorReviewsDistribution: { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 },
     vendorAverageRating: 0,
+    originalTotalCount: 0,
+    originalDistribution: { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 },
+    originalAverageRating: 0,
+    originalStatsLoaded: false,
     vendorReviewsPage: 1,
     vendorReviewsTotalPages: 1,
     vendorReviewsHasMore: false,
@@ -128,7 +140,7 @@ export const submitReview = createAsyncThunk<
  * ```
  */
 export const fetchVendorReviews = createAsyncThunk<
-    VendorReviewsResponse & { vendorId: number },
+    VendorReviewsResponse & { vendorId: number; isFiltered: boolean },
     GetVendorReviewsParams,
     { rejectValue: string }
 >(
@@ -140,7 +152,9 @@ export const fetchVendorReviews = createAsyncThunk<
                 page: 1,
                 page_size: 10,
             });
-            return { ...response, vendorId: params.vendorId };
+            // Track whether this is a filtered request
+            const isFiltered = params.stars !== undefined;
+            return { ...response, vendorId: params.vendorId, isFiltered };
         } catch (error: any) {
             return rejectWithValue(error.message || 'Failed to fetch reviews');
         }
@@ -234,6 +248,10 @@ const reviewSlice = createSlice({
             state.vendorReviewsCount = 0;
             state.vendorReviewsDistribution = { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 };
             state.vendorAverageRating = 0;
+            state.originalTotalCount = 0;
+            state.originalDistribution = { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 };
+            state.originalAverageRating = 0;
+            state.originalStatsLoaded = false;
             state.vendorReviewsPage = 1;
             state.vendorReviewsTotalPages = 1;
             state.vendorReviewsHasMore = false;
@@ -275,6 +293,15 @@ const reviewSlice = createSlice({
                 state.vendorReviewsTotalPages = action.payload.total_pages;
                 state.vendorReviewsHasMore = action.payload.page < action.payload.total_pages;
                 state.currentVendorId = action.payload.vendorId;
+
+                // Save original stats ONLY on unfiltered fetch (first time)
+                // These will be used for filter chip counts - they never change with filter
+                if (!action.payload.isFiltered && !state.originalStatsLoaded) {
+                    state.originalTotalCount = action.payload.count;
+                    state.originalDistribution = action.payload.distribution;
+                    state.originalAverageRating = action.payload.average_rating;
+                    state.originalStatsLoaded = true;
+                }
             })
             // Fetch vendor reviews: Rejected
             .addCase(fetchVendorReviews.rejected, (state, action) => {
@@ -382,6 +409,15 @@ export const selectVendorReviewsTotalPages = (state: RootState) => state.review.
 
 /** Whether there are more reviews to load */
 export const selectVendorReviewsHasMore = (state: RootState) => state.review.vendorReviewsHasMore;
+
+/** ORIGINAL total count (never changes with filter) */
+export const selectOriginalTotalCount = (state: RootState) => state.review.originalTotalCount;
+
+/** ORIGINAL distribution (never changes with filter) */
+export const selectOriginalDistribution = (state: RootState) => state.review.originalDistribution;
+
+/** ORIGINAL average rating (never changes with filter) */
+export const selectOriginalAverageRating = (state: RootState) => state.review.originalAverageRating;
 
 // ============================================================================
 // Export
