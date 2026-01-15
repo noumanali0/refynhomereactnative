@@ -3,7 +3,7 @@ import { COLORS } from "@/constants/colors";
 import { useAppSelector } from "@/hooks/useAppDispatch";
 import { Ionicons } from "@expo/vector-icons";
 import { Link, router } from "expo-router";
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { View, Image, StyleSheet, Pressable } from "react-native";
 import {
     SafeAreaView,
@@ -20,7 +20,12 @@ type Props = {
 export default function AppHeader({ isStackScreen = false }: Props) {
     const { user } = useAppSelector((state) => state.auth);
     const insets = useSafeAreaInsets();
+    const [imageLoadError, setImageLoadError] = useState(false);
 
+    // Reset image error when profile photo URL changes
+    useEffect(() => {
+        setImageLoadError(false);
+    }, [user?.profilePhoto]);
 
     return (
         <View
@@ -73,23 +78,26 @@ export default function AppHeader({ isStackScreen = false }: Props) {
                             style={styles.avatarWrap}
                         // onPress={() => router.push("/(tabs)/profile")}
                         >
-                            {
-                                user?.profilePhoto ? (<>
-                                    <Image
-                                        source={{ uri: user?.profilePhoto }}
-                                        // source={require("@/assets/images/players/avatar.png")}
-                                        style={styles.avatar}
+                            {user?.profilePhoto && !imageLoadError ? (
+                                <Image
+                                    source={{ uri: user?.profilePhoto }}
+                                    style={styles.avatar}
+                                    onError={() => setImageLoadError(true)}
+                                />
+                            ) : (
+                                <LinearGradient
+                                    colors={[COLORS.primary, COLORS.accent]}
+                                    start={{ x: 0, y: 0 }}
+                                    end={{ x: 1, y: 1 }}
+                                    style={styles.avatarPlaceholder}
+                                >
+                                    <Ionicons
+                                        name="person"
+                                        size={moderateScale(22)}
+                                        color="white"
                                     />
-                                </>) : (<>
-                                    <View style={styles.avatarPlaceholder}>
-                                        <Ionicons
-                                            name="person-sharp"
-                                            size={moderateScale(25)}
-                                            color="white"
-                                        />
-                                    </View>
-                                </>)
-                            }
+                                </LinearGradient>
+                            )}
                         </Pressable>
                     </Link>
 
@@ -138,7 +146,6 @@ const styles = StyleSheet.create({
         width: "100%",
         height: "100%",
         borderRadius: moderateScale(50),
-        backgroundColor: "gray",
         alignItems: "center",
         justifyContent: "center",
     },

@@ -99,6 +99,9 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
   // Review modal state
   const [showRatingModal, setShowRatingModal] = useState(false);
 
+  // Image load error state for vendor avatar fallback
+  const [imageLoadError, setImageLoadError] = useState(false);
+
   const statusConfig = useMemo(() => getStatusConfig(request.status), [request.status]);
 
   // Get vendor info from either assigned_vendor_detail or accepted_proposal
@@ -262,19 +265,18 @@ export const ServiceHistoryCard: React.FC<ServiceHistoryCardProps> = ({
               >
                 {/* Vendor Avatar */}
                 <View style={styles.vendorAvatar}>
-                  {vendor.profile_photo_url ? (
+                  {vendor.profile_photo_url && !imageLoadError ? (
                     <Image
                       source={{ uri: vendor.profile_photo_url }}
                       style={styles.avatarImage}
+                      onError={() => setImageLoadError(true)}
                     />
                   ) : (
                     <LinearGradient
                       colors={[COLORS.primary, COLORS.accent]}
                       style={styles.avatarGradient}
                     >
-                      <Text style={styles.avatarText}>
-                        {vendor?.full_name?.charAt(0)?.toUpperCase() || 'V'}
-                      </Text>
+                      <Ionicons name="person" size={moderateScale(24)} color={COLORS.white} />
                     </LinearGradient>
                   )}
                 </View>

@@ -32,8 +32,10 @@ export default function ProfileScreen() {
     const { showToast } = useToast();
     const { imageUri, pickImage } = useImagePicker();
     const [deleteModal, setDeleteModal] = useState(false);
+    const [showLogoutModal, setShowLogoutModal] = useState(false);
     const [isLoggingOut, setIsLoggingOut] = useState(false);
     const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+    const [imageLoadError, setImageLoadError] = useState(false);
 
     // Delete account state
     const [deletePassword, setDeletePassword] = useState('');
@@ -63,6 +65,11 @@ export default function ProfileScreen() {
         dispatch(fetchUserProfile());
     }, [dispatch]);
 
+    // Reset image error state when profile photo URL changes
+    useEffect(() => {
+        setImageLoadError(false);
+    }, [userProfilePhoto]);
+
     // Get user display info
     const userName = user?.name || `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'User';
     const userPhone = user?.phone || user?.phoneNumber || '';
@@ -80,44 +87,20 @@ export default function ProfileScreen() {
             return;
         }
 
-        Alert.alert(
-            "Logout",
-            "Are you sure you want to logout?",
-            [
-                {
-                    text: "Cancel",
-                    style: "cancel"
-                },
-                {
-                    text: "Logout",
-                    style: "destructive",
-                    onPress: async () => {
-                        setIsLoggingOut(true);
+        setShowLogoutModal(true);
+    };
 
-                        // Timeout to show error if logout hangs (navigation handled by _layout.tsx)
-                        const logoutTimeout = setTimeout(() => {
-                            if (__DEV__) {
-                                console.warn('[Profile] Logout timeout - showing error');
-                            }
-                            setIsLoggingOut(false);
-                            showToast({ type: 'error', title: 'Logout Timeout', message: 'Logout is taking longer than expected. Please try again.' });
-                        }, 8000); // 8 second timeout
+    const handleConfirmLogout = async () => {
+        setIsLoggingOut(true);
 
-                        try {
-                            await dispatch(logoutUser()).unwrap();
-                            clearTimeout(logoutTimeout);
-                            // Navigation is handled by _layout.tsx automatically when isAuthenticated becomes false
-                            // No need to call router.replace here - _layout.tsx will redirect to login
-                        } catch (error: any) {
-                            clearTimeout(logoutTimeout);
-                            showToast({ type: 'error', title: 'Logout Failed', message: error.message || 'Failed to logout' });
-                        } finally {
-                            setIsLoggingOut(false);
-                        }
-                    }
-                }
-            ]
-        );
+        try {
+            await dispatch(logoutUser()).unwrap();
+            // Navigation is handled by _layout.tsx automatically when isAuthenticated becomes false
+        } catch (error: any) {
+            setIsLoggingOut(false);
+            setShowLogoutModal(false);
+            showToast({ type: 'error', title: 'Logout Failed', message: error.message || 'Failed to logout' });
+        }
     };
 
     const handleDeleteAccount = async () => {
@@ -251,15 +234,29 @@ export default function ProfileScreen() {
                         <GradientBorder radius={60} style={styles.avatarBorder}>
                             <View style={styles.avatarInner}>
                                 {isUploadingPhoto ? (
-                                    <View style={styles.placeholderAvatar}>
+                                    <LinearGradient
+                                        colors={[COLORS.primary, COLORS.accent]}
+                                        start={{ x: 0, y: 0 }}
+                                        end={{ x: 1, y: 1 }}
+                                        style={styles.placeholderAvatar}
+                                    >
                                         <ActivityIndicator size="large" color="#fff" />
-                                    </View>
-                                ) : userProfilePhoto ? (
-                                    <Image source={{ uri: userProfilePhoto }} style={styles.avatar} />
+                                    </LinearGradient>
+                                ) : userProfilePhoto && !imageLoadError ? (
+                                    <Image
+                                        source={{ uri: userProfilePhoto }}
+                                        style={styles.avatar}
+                                        onError={() => setImageLoadError(true)}
+                                    />
                                 ) : (
-                                    <View style={styles.placeholderAvatar}>
+                                    <LinearGradient
+                                        colors={[COLORS.primary, COLORS.accent]}
+                                        start={{ x: 0, y: 0 }}
+                                        end={{ x: 1, y: 1 }}
+                                        style={styles.placeholderAvatar}
+                                    >
                                         <Ionicons name="person" size={50} color="#fff" />
-                                    </View>
+                                    </LinearGradient>
                                 )}
                             </View>
                         </GradientBorder>
@@ -552,6 +549,44 @@ export default function ProfileScreen() {
                     </View>
                 </View>
             </Modal>
+
+            {/* Logout Confirmation Modal */}
+            <Modal visible={showLogoutModal} transparent animationType="fade">
+                <View style={styles.modalWrapper}>
+                    <View style={styles.modalBox}>
+                        <View style={[styles.modalIconContainer, { backgroundColor: '#fef3c7' }]}>
+                            <Ionicons name="log-out-outline" size={40} color="#f59e0b" />
+                        </View>
+
+                        <Text type="title" style={styles.modalTitle}>Logout?</Text>
+                        <Text type="body2" style={styles.modalText}>
+                            Are you sure you want to logout from your account?
+                        </Text>
+
+                        <View style={styles.modalBtns}>
+                            <TouchableOpacity
+                                style={styles.cancelBtn}
+                                onPress={() => setShowLogoutModal(false)}
+                                disabled={isLoggingOut}
+                            >
+                                <Text type="body2" style={styles.cancelText}>Cancel</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[styles.logoutBtn, isLoggingOut && styles.logoutBtnDisabled]}
+                                onPress={handleConfirmLogout}
+                                disabled={isLoggingOut}
+                            >
+                                {isLoggingOut ? (
+                                    <ActivityIndicator size="small" color="#fff" />
+                                ) : (
+                                    <Text type="body2" style={styles.logoutText}>Logout</Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -594,8 +629,7 @@ const styles = StyleSheet.create({
         height: "100%",
         justifyContent: "center",
         alignItems: "center",
-        backgroundColor: "gray",
-        zIndex: -1
+        borderRadius: moderateScale(56),
     },
     editIcon: {
         position: "absolute",
@@ -712,6 +746,21 @@ const styles = StyleSheet.create({
     },
     deleteBtnDisabled: {
         backgroundColor: "#fca5a5",
+    },
+    logoutBtn: {
+        flex: 1,
+        paddingVertical: moderateScale(14),
+        paddingHorizontal: moderateScale(20),
+        borderRadius: moderateScale(12),
+        backgroundColor: "#f59e0b",
+        alignItems: "center",
+    },
+    logoutText: {
+        fontSize: moderateScale(16),
+        color: "#fff",
+    },
+    logoutBtnDisabled: {
+        backgroundColor: "#fcd34d",
     },
 
     // Password input styles

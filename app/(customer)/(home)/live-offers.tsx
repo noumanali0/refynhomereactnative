@@ -70,7 +70,6 @@ import {
     setCustomerActiveService,
     clearCustomerActiveServiceState,
     setVendorReached1km,
-    selectCustomerActiveService,
 } from "@/store/slices/dispatchSlice";
 import { clearReviewState } from "@/store/slices/reviewSlice";
 import { useVendorProximity } from "@/hooks/useVendorProximity";
@@ -165,6 +164,14 @@ const ProposalCard = React.memo(({
     isAccepting,
     isDeclining,
 }: ProposalCardProps) => {
+    // Image load error state for fallback
+    const [imageLoadError, setImageLoadError] = useState(false);
+
+    // Reset error state when profile photo URL changes
+    useEffect(() => {
+        setImageLoadError(false);
+    }, [proposal.vendor?.profile_photo_url]);
+
     // DEBUG: Log vendor profile photo URL
     if (__DEV__) {
         console.log('[ProposalCard] Vendor profile_photo_url:', proposal.vendor?.profile_photo_url);
@@ -362,26 +369,20 @@ const ProposalCard = React.memo(({
                         activeOpacity={0.7}
                     >
                         <View style={styles.avatarContainer}>
-                            {proposal.vendor?.profile_photo_url ? (
+                            {proposal.vendor?.profile_photo_url && !imageLoadError ? (
                                 <Image
                                     source={{ uri: proposal.vendor.profile_photo_url }}
                                     style={styles.avatarImage}
-                                    onError={(e) => {
-                                        if (__DEV__) {
-                                            console.log('[ProposalCard] Image load error:', e.nativeEvent.error, 'URL:', proposal.vendor?.profile_photo_url);
-                                        }
-                                    }}
+                                    onError={() => setImageLoadError(true)}
                                 />
                             ) : (
                                 <LinearGradient
                                     colors={[COLORS.primary, COLORS.accent]}
                                     start={{ x: 0, y: 0 }}
                                     end={{ x: 1, y: 1 }}
-                                    style={styles.avatar}
+                                    style={styles.avatarPlaceholder}
                                 >
-                                    <Text style={styles.avatarTextWhite}>
-                                        {proposal?.vendor?.full_name?.charAt(0)?.toUpperCase() || 'V'}
-                                    </Text>
+                                    <Ionicons name="person" size={moderateScale(24)} color={COLORS.white} />
                                 </LinearGradient>
                             )}
                             {proposal.vendor?.verified && (
@@ -412,26 +413,20 @@ const ProposalCard = React.memo(({
                 ) : (
                     <View style={styles.vendorInfo}>
                         <View style={styles.avatarContainer}>
-                            {proposal.vendor?.profile_photo_url ? (
+                            {proposal.vendor?.profile_photo_url && !imageLoadError ? (
                                 <Image
                                     source={{ uri: proposal.vendor.profile_photo_url }}
                                     style={styles.avatarImage}
-                                    onError={(e) => {
-                                        if (__DEV__) {
-                                            console.log('[ProposalCard] Image load error (non-accepted):', e.nativeEvent.error, 'URL:', proposal.vendor?.profile_photo_url);
-                                        }
-                                    }}
+                                    onError={() => setImageLoadError(true)}
                                 />
                             ) : (
                                 <LinearGradient
                                     colors={[COLORS.primary, COLORS.accent]}
                                     start={{ x: 0, y: 0 }}
                                     end={{ x: 1, y: 1 }}
-                                    style={styles.avatar}
+                                    style={styles.avatarPlaceholder}
                                 >
-                                    <Text style={styles.avatarTextWhite}>
-                                        {proposal.vendor?.full_name?.charAt(0)?.toUpperCase() || 'V'}
-                                    </Text>
+                                    <Ionicons name="person" size={moderateScale(24)} color={COLORS.white} />
                                 </LinearGradient>
                             )}
                             {proposal.vendor?.verified && (
@@ -2616,7 +2611,7 @@ const styles = StyleSheet.create({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingTop: verticalScale(32),
+        paddingTop: verticalScale(12),
         paddingBottom: verticalScale(10),
         paddingHorizontal: scale(16),
     },
@@ -2685,6 +2680,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
     },
+
     destinationPin: {
         width: 44,
         height: 44,
@@ -2695,6 +2691,7 @@ const styles = StyleSheet.create({
         borderWidth: 2,
         borderColor: COLORS.white,
     },
+
     destinationPinTail: {
         width: 0,
         height: 0,
@@ -3092,6 +3089,13 @@ const styles = StyleSheet.create({
         height: moderateScale(50),
         borderRadius: moderateScale(25),
     },
+    avatarPlaceholder: {
+        width: moderateScale(50),
+        height: moderateScale(50),
+        borderRadius: moderateScale(25),
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
     avatarText: {
         fontSize: moderateScale(20),
         fontWeight: '700',
@@ -3235,7 +3239,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: verticalScale(12),
+        paddingVertical: verticalScale(10),
         borderRadius: moderateScale(10),
         borderWidth: 1.5,
         borderColor: COLORS.error,
@@ -3247,7 +3251,7 @@ const styles = StyleSheet.create({
         color: COLORS.error,
     },
     acceptButton: {
-        flex: 2,
+        flex: 1,
         borderRadius: moderateScale(10),
         overflow: 'hidden',
         shadowColor: COLORS.success,
@@ -3264,7 +3268,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: verticalScale(12),
+        paddingVertical: verticalScale(10),
         gap: scale(6),
     },
     acceptText: {

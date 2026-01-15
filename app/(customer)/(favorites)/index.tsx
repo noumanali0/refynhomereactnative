@@ -10,7 +10,7 @@
  * - Loading states
  */
 
-import React, { useEffect, useCallback, useMemo } from 'react';
+import React, { useEffect, useCallback, useMemo, useState } from 'react';
 import {
     View,
     FlatList,
@@ -101,6 +101,7 @@ const formatDate = (dateString: string | null | undefined): string => {
 
 const VendorCard: React.FC<VendorCardProps> = React.memo(({ item, onRemove, isRemoving }) => {
     const vendor = item.vendor;
+    const [imageLoadError, setImageLoadError] = useState(false);
 
     // Safely extract vendor data with fallbacks
     const vendorName = vendor?.full_name || 'Unknown Vendor';
@@ -131,15 +132,21 @@ const VendorCard: React.FC<VendorCardProps> = React.memo(({ item, onRemove, isRe
             <View style={styles.vendorCardContent}>
                 {/* Vendor Avatar */}
                 <View style={styles.avatarContainer}>
-                    {profilePhotoUrl ? (
+                    {profilePhotoUrl && !imageLoadError ? (
                         <Image
                             source={{ uri: profilePhotoUrl }}
                             style={styles.vendorAvatar}
+                            onError={() => setImageLoadError(true)}
                         />
                     ) : (
-                        <View style={styles.avatarPlaceholder}>
-                            <Ionicons name="person" size={28} color={COLORS.gray400} />
-                        </View>
+                        <LinearGradient
+                            colors={[COLORS.primary, COLORS.accent]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={styles.avatarPlaceholder}
+                        >
+                            <Ionicons name="person" size={28} color={COLORS.white} />
+                        </LinearGradient>
                     )}
                     {isVerified && (
                         <View style={styles.verifiedBadge}>
@@ -484,7 +491,6 @@ const styles = StyleSheet.create({
         width: moderateScale(60),
         height: moderateScale(60),
         borderRadius: moderateScale(30),
-        backgroundColor: COLORS.gray100,
         justifyContent: 'center',
         alignItems: 'center',
     },

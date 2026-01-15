@@ -35,11 +35,17 @@ const WebSocketProposalCardInner = ({ proposal, isNew = false }: Props) => {
 
     // Calculate time remaining for acceptance
     const [timeLeft, setTimeLeft] = React.useState(proposal.remaining_expiry_time);
+    const [imageLoadError, setImageLoadError] = React.useState(false);
 
     // Sync timeLeft with remaining_expiry_time when it changes
     useEffect(() => {
         setTimeLeft(proposal.remaining_expiry_time);
     }, [proposal.remaining_expiry_time]);
+
+    // Reset image error when vendor photo URL changes
+    useEffect(() => {
+        setImageLoadError(false);
+    }, [proposal?.vendor?.profile_photo_url]);
 
     // Timer effect - only runs when status changes
     useEffect(() => {
@@ -201,16 +207,15 @@ const WebSocketProposalCardInner = ({ proposal, isNew = false }: Props) => {
                     <View style={styles.vendorInfo}>
                         {/* Vendor Avatar */}
                         <View style={styles.avatarContainer}>
-                            {proposal?.vendor?.profile_photo_url ? (
+                            {proposal?.vendor?.profile_photo_url && !imageLoadError ? (
                                 <Image
                                     source={{ uri: proposal?.vendor?.profile_photo_url }}
                                     style={styles.avatar}
+                                    onError={() => setImageLoadError(true)}
                                 />
                             ) : (
                                 <View style={styles.avatarPlaceholder}>
-                                    <Text style={styles.avatarText}>
-                                        {proposal?.vendor?.full_name?.charAt(0)?.toUpperCase() || 'V'}
-                                    </Text>
+                                    <Ionicons name="person" size={moderateScale(24)} color={COLORS.white} />
                                 </View>
                             )}
                             {proposal?.vendor?.verified && (
@@ -411,7 +416,7 @@ const styles = StyleSheet.create({
         width: moderateScale(50),
         height: moderateScale(50),
         borderRadius: moderateScale(25),
-        backgroundColor: COLORS.primary + '20',
+        backgroundColor: COLORS.gray400,
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -544,21 +549,22 @@ const styles = StyleSheet.create({
     },
     actionContainer: {
         flexDirection: 'row',
-        padding: scale(16),
+        // padding: scale(16),
         paddingTop: verticalScale(12),
-        gap: scale(16),
+        // gap: scale(16),
+        backgroundColor:"green"
     },
     declineButton: {
-        flex: 1,
+        // flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: verticalScale(12),
-        paddingHorizontal: scale(16),
+        paddingVertical: verticalScale(10),
+        paddingHorizontal: scale(12),
         borderRadius: moderateScale(10),
         borderWidth: 1.5,
         borderColor: COLORS.error,
-        gap: scale(8),
+        // gap: scale(6),
     },
     declineText: {
         fontSize: moderateScale(14),
@@ -566,10 +572,10 @@ const styles = StyleSheet.create({
         color: COLORS.error,
     },
     acceptButton: {
-        flex: 2,
+        // flex: 1,
         borderRadius: moderateScale(10),
         overflow: 'hidden',
-        shadowColor: COLORS.success,
+        // shadowColor: COLORS.success,
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.3,
         shadowRadius: 4,
@@ -582,9 +588,9 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: verticalScale(12),
-        paddingHorizontal: scale(16),
-        gap: scale(8),
+        paddingVertical: verticalScale(10),
+        paddingHorizontal: scale(12),
+        gap: scale(6),
     },
     acceptText: {
         fontSize: moderateScale(14),

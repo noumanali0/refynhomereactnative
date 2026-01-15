@@ -69,6 +69,7 @@ export default function VendorEditProfileScreen() {
   );
   const [newPhotoUri, setNewPhotoUri] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [imageLoadError, setImageLoadError] = useState(false);
 
   // Category management state
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
@@ -356,14 +357,21 @@ export default function VendorEditProfileScreen() {
           {/* Profile Photo */}
           <View style={styles.photoSection}>
             <TouchableOpacity onPress={pickImage} style={styles.photoContainer}>
-              {profilePhoto ? (
-                <Image source={{ uri: profilePhoto }} style={styles.profilePhoto} />
+              {profilePhoto && !imageLoadError ? (
+                <Image
+                  source={{ uri: profilePhoto }}
+                  style={styles.profilePhoto}
+                  onError={() => setImageLoadError(true)}
+                />
               ) : (
-                <View style={styles.photoPlaceholder}>
-                  <Text type="title" style={styles.photoPlaceholderText}>
-                    {getInitials()}
-                  </Text>
-                </View>
+                <LinearGradient
+                  colors={[COLORS.primary, COLORS.accent]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.photoPlaceholder}
+                >
+                  <Ionicons name="person" size={moderateScale(50)} color={COLORS.white} />
+                </LinearGradient>
               )}
               <View style={styles.cameraButton}>
                 <Ionicons name="camera" size={16} color={COLORS.white} />
@@ -743,15 +751,10 @@ const styles = StyleSheet.create({
     width: moderateScale(120),
     height: moderateScale(120),
     borderRadius: moderateScale(60),
-    backgroundColor: COLORS.primary,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 4,
     borderColor: COLORS.white,
-  },
-  photoPlaceholderText: {
-    fontSize: moderateScale(40),
-    color: COLORS.white,
   },
   cameraButton: {
     position: 'absolute',

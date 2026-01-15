@@ -13,7 +13,7 @@ import {
     TouchableOpacity,
     StyleSheet,
     Image,
-    Alert,
+    Modal,
     ActivityIndicator,
     ScrollView,
     RefreshControl
@@ -62,8 +62,10 @@ export default function VendorProfileScreen() {
     const { showToast } = useToast();
     const { pickImage } = useImagePicker();
     const [isLoggingOut, setIsLoggingOut] = useState(false);
+    const [showLogoutModal, setShowLogoutModal] = useState(false);
     const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
     const [isRefreshing, setIsRefreshing] = useState(false);
+    const [imageLoadError, setImageLoadError] = useState(false);
 
     // Get current user from auth state
     const { user, isLoading } = useSelector((state: RootState) => state.auth);
@@ -80,6 +82,12 @@ export default function VendorProfileScreen() {
             dispatch(fetchUserProfile());
         }
     }, [dispatch, user]);
+
+    // Reset image error state when profile photo URL changes
+    useEffect(() => {
+        setImageLoadError(false);
+    }, [vendorProfile?.profilePhoto]);
+    console.log("🚀 ~ VendorProfileScreen ~ profile:", user)
 
     // Handle pull-to-refresh
     const handleRefresh = useCallback(async () => {
@@ -266,41 +274,20 @@ export default function VendorProfileScreen() {
             return;
         }
 
-        Alert.alert(
-            'Logout',
-            'Are you sure you want to logout?',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                {
-                    text: 'Logout',
-                    style: 'destructive',
-                    onPress: async () => {
-                        setIsLoggingOut(true);
+        setShowLogoutModal(true);
+    };
 
-                        // Timeout to show error if logout hangs (navigation handled by _layout.tsx)
-                        const logoutTimeout = setTimeout(() => {
-                            if (__DEV__) {
-                                console.warn('[VendorProfile] Logout timeout - showing error');
-                            }
-                            setIsLoggingOut(false);
-                            showToast({ type: 'error', title: 'Logout Timeout', message: 'Logout is taking longer than expected. Please try again.' });
-                        }, 8000); // 8 second timeout
+    const handleConfirmLogout = async () => {
+        setIsLoggingOut(true);
 
-                        try {
-                            await dispatch(logoutUser()).unwrap();
-                            clearTimeout(logoutTimeout);
-                            // Navigation is handled by _layout.tsx automatically when isAuthenticated becomes false
-                            // No need to call router.replace here - _layout.tsx will redirect to login
-                        } catch (error: any) {
-                            clearTimeout(logoutTimeout);
-                            showToast({ type: 'error', title: 'Logout Failed', message: error.message || 'Failed to logout' });
-                        } finally {
-                            setIsLoggingOut(false);
-                        }
-                    }
-                },
-            ]
-        );
+        try {
+            await dispatch(logoutUser()).unwrap();
+            // Navigation is handled by _layout.tsx automatically when isAuthenticated becomes false
+        } catch (error: any) {
+            setIsLoggingOut(false);
+            setShowLogoutModal(false);
+            showToast({ type: 'error', title: 'Logout Failed', message: error.message || 'Failed to logout' });
+        }
     };
 
     return (
@@ -341,20 +328,29 @@ export default function VendorProfileScreen() {
                     activeOpacity={0.8}
                 >
                     {isUploadingPhoto ? (
-                        <View style={styles.profilePhotoPlaceholder}>
+                        <LinearGradient
+                            colors={[COLORS.primary, COLORS.accent]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={styles.profilePhotoPlaceholder}
+                        >
                             <ActivityIndicator size="large" color={COLORS.white} />
-                        </View>
-                    ) : vendorProfile.profilePhoto ? (
+                        </LinearGradient>
+                    ) : vendorProfile.profilePhoto && !imageLoadError ? (
                         <Image
                             source={{ uri: vendorProfile.profilePhoto }}
                             style={styles.profilePhoto}
+                            onError={() => setImageLoadError(true)}
                         />
                     ) : (
-                        <View style={styles.profilePhotoPlaceholder}>
-                            <Text type="title" style={styles.profilePhotoText}>
-                                {vendorProfile?.name?.substring(0, 2)?.toUpperCase() || 'VE'}
-                            </Text>
-                        </View>
+                        <LinearGradient
+                            colors={[COLORS.primary, COLORS.accent]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={styles.profilePhotoPlaceholder}
+                        >
+                            <Ionicons name="person" size={moderateScale(50)} color={COLORS.white} />
+                        </LinearGradient>
                     )}
 
                     {/* Edit Button Overlay */}
@@ -539,6 +535,44 @@ export default function VendorProfileScreen() {
                 </View>
             </View>
             </ScrollView>
+
+            {/* Logout Confirmation Modal */}
+            <Modal visible={showLogoutModal} transparent animationType="fade">
+                <View style={styles.modalWrapper}>
+                    <View style={styles.modalBox}>
+                        <View style={styles.modalIconContainer}>
+                            <Ionicons name="log-out-outline" size={40} color="#f59e0b" />
+                        </View>
+
+                        <Text type="title" style={styles.modalTitle}>Logout?</Text>
+                        <Text type="body2" style={styles.modalText}>
+                            Are you sure you want to logout from your account?
+                        </Text>
+
+                        <View style={styles.modalBtns}>
+                            <TouchableOpacity
+                                style={styles.cancelBtn}
+                                onPress={() => setShowLogoutModal(false)}
+                                disabled={isLoggingOut}
+                            >
+                                <Text type="body2" style={styles.cancelText}>Cancel</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={[styles.logoutBtn, isLoggingOut && styles.logoutBtnDisabled]}
+                                onPress={handleConfirmLogout}
+                                disabled={isLoggingOut}
+                            >
+                                {isLoggingOut ? (
+                                    <ActivityIndicator size="small" color="#fff" />
+                                ) : (
+                                    <Text type="body2" style={styles.logoutText}>Logout</Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -616,7 +650,6 @@ const styles = StyleSheet.create({
         width: moderateScale(100),
         height: moderateScale(100),
         borderRadius: moderateScale(50),
-        backgroundColor: COLORS.primary,
         justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 4,
@@ -802,5 +835,79 @@ const styles = StyleSheet.create({
         shadowRadius: 8,
         elevation: 2,
         padding: moderateScale(8)
+    },
+
+    // Logout Modal Styles
+    modalWrapper: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.5)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: moderateScale(20),
+    },
+    modalBox: {
+        width: '100%',
+        maxWidth: moderateScale(400),
+        backgroundColor: '#fff',
+        padding: moderateScale(24),
+        borderRadius: moderateScale(24),
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: moderateScale(8),
+        elevation: 8,
+    },
+    modalIconContainer: {
+        width: moderateScale(80),
+        height: moderateScale(80),
+        borderRadius: moderateScale(40),
+        backgroundColor: '#fef3c7',
+        justifyContent: 'center',
+        alignItems: 'center',
+        alignSelf: 'center',
+        marginBottom: moderateScale(16),
+    },
+    modalTitle: {
+        color: '#1f2937',
+        textAlign: 'center',
+        marginBottom: moderateScale(8),
+    },
+    modalText: {
+        color: '#6b7280',
+        textAlign: 'center',
+        lineHeight: moderateScale(20),
+    },
+    modalBtns: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginTop: moderateScale(24),
+        gap: moderateScale(12),
+    },
+    cancelBtn: {
+        flex: 1,
+        paddingVertical: moderateScale(14),
+        paddingHorizontal: moderateScale(20),
+        borderRadius: moderateScale(12),
+        backgroundColor: '#f3f4f6',
+        alignItems: 'center',
+    },
+    cancelText: {
+        fontSize: moderateScale(16),
+        color: '#4b5563',
+    },
+    logoutBtn: {
+        flex: 1,
+        paddingVertical: moderateScale(14),
+        paddingHorizontal: moderateScale(20),
+        borderRadius: moderateScale(12),
+        backgroundColor: '#f59e0b',
+        alignItems: 'center',
+    },
+    logoutText: {
+        fontSize: moderateScale(16),
+        color: '#fff',
+    },
+    logoutBtnDisabled: {
+        backgroundColor: '#fcd34d',
     },
 });

@@ -74,6 +74,7 @@ const VendorHeader = memo(({
   isTogglingFavorite: boolean;
   onBack: () => void;
 }) => {
+  const [imageLoadError, setImageLoadError] = useState(false);
   const memberYear = vendor.member_since
     ? new Date(vendor.member_since).getFullYear()
     : new Date().getFullYear();
@@ -119,19 +120,18 @@ const VendorHeader = memo(({
         style={styles.profileSection}
       >
         <View style={styles.avatarContainer}>
-          {vendor.profile_photo_url ? (
+          {vendor.profile_photo_url && !imageLoadError ? (
             <Image
               source={{ uri: vendor.profile_photo_url }}
               style={styles.avatar}
+              onError={() => setImageLoadError(true)}
             />
           ) : (
             <LinearGradient
               colors={[COLORS.white + '30', COLORS.white + '10']}
               style={styles.avatarPlaceholder}
             >
-              <Text style={styles.avatarText}>
-                {vendor.full_name?.charAt(0)?.toUpperCase() || 'V'}
-              </Text>
+              <Ionicons name="person" size={moderateScale(40)} color={COLORS.white} />
             </LinearGradient>
           )}
           {vendor.verified && (
@@ -288,6 +288,7 @@ const AboutTab = memo(({ vendor }: { vendor: VendorPublicProfile }) => (
 
 // ----------------------- Review Card Component -----------------------
 const ReviewCard = memo(({ review, index }: { review: VendorReview; index: number }) => {
+  const [reviewerImageError, setReviewerImageError] = useState(false);
   const formattedDate = new Date(review.createdAt).toLocaleDateString('en-US', {
     year: 'numeric',
     month: 'short',
@@ -301,19 +302,18 @@ const ReviewCard = memo(({ review, index }: { review: VendorReview; index: numbe
     >
       <View style={styles.reviewHeader}>
         <View style={styles.reviewerInfo}>
-          {review.customer.photo_url ? (
+          {review.customer.photo_url && !reviewerImageError ? (
             <Image
               source={{ uri: review.customer.photo_url }}
               style={styles.reviewerAvatar}
+              onError={() => setReviewerImageError(true)}
             />
           ) : (
             <LinearGradient
               colors={[COLORS.primary, COLORS.accent]}
               style={styles.reviewerAvatarPlaceholder}
             >
-              <Text style={styles.reviewerInitial}>
-                {review.customer.name?.charAt(0)?.toUpperCase() || 'U'}
-              </Text>
+              <Ionicons name="person" size={moderateScale(18)} color={COLORS.white} />
             </LinearGradient>
           )}
           <View style={styles.reviewerDetails}>
@@ -1051,9 +1051,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   ratingBigNumber: {
-    fontSize: moderateScale(48),
+    fontSize: moderateScale(40),
     fontWeight: '700',
     color: COLORS.gray900,
+    lineHeight: moderateScale(48),
   },
   ratingStarsRow: {
     flexDirection: 'row',
