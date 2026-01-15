@@ -25,6 +25,10 @@ export interface VendorProfile {
   averageRating: number;
   totalReviews: number;
   completedJobs: number;
+  // Member since date (when vendor was approved)
+  memberSince: string | null;
+  // Active service requests count
+  activeRequests: number;
   // Rating distribution from API
   rating_distribution?: {
     "1": number;

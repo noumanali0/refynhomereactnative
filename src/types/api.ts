@@ -138,6 +138,10 @@ export interface OTPVerifyRequest {
   phone: string;
   code: string;
   purpose: 'signup';
+  // Device tracking fields for session management
+  device_id?: string;
+  device_name?: string;
+  push_token?: string | null;
 }
 
 /**
@@ -209,6 +213,7 @@ export interface OTPVerifyResponseCustomer extends JWTTokens {
   message: string;
   user: UserAPI;
   status: 'onboarding_complete';
+  device_id?: string; // Permanent device ID for session tracking
 }
 
 /**
@@ -219,6 +224,9 @@ export interface OTPVerifyResponseVendor extends JWTTokens {
   message: string;
   user: UserAPI;
   status: 'onboarding_required';
+  is_verified?: boolean;
+  is_onboarding_complete?: boolean;
+  device_id?: string; // Permanent device ID for session tracking
 }
 
 export type OTPVerifyResponse = OTPVerifyResponseCustomer | OTPVerifyResponseVendor;

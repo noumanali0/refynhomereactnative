@@ -340,6 +340,9 @@ export interface SendProposalParams {
   priceQuote?: number;
   message?: string;
   etaMinutes?: number;
+  // Vendor location - included in proposal to ensure location is saved before validation
+  vendorLatitude?: number;
+  vendorLongitude?: number;
 }
 
 export interface Coordinates {

@@ -2,17 +2,27 @@
  * useRouteTracking Hook
  *
  * Manages route tracking between vendor location and service location.
- * Uses Google Directions API for route calculation.
+ * Uses OSRM (Open Source Routing Machine) for route calculation.
  * Includes proper throttling, AbortController for race condition handling,
  * and mounted state checks for safe state updates.
+ *
+ * Note: Switch to Google Routes API when enabled by uncommenting googleDirectionsService
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { InteractionManager } from 'react-native';
 import type { Coordinates } from '@/types/socket';
 import { simplifyRoute } from '@/utils/polylineSimplify';
-import { googleDirectionsService, RouteInfo } from '@/services/googleDirectionsService';
+// Google Routes API - uncomment when enabled
+// import { googleDirectionsService, RouteInfo } from '@/services/googleDirectionsService';
 import { haversineDistanceKm } from '@/utils/geo';
+
+// RouteInfo type for OSRM response
+interface RouteInfo {
+  distance: number; // meters
+  duration: number; // seconds
+  coordinates: Coordinates[];
+}
 
 // ============================================================================
 // Constants
@@ -174,26 +184,64 @@ export function useRouteTracking({
   }, [enabled]); // Only run when enabled changes - handles initial mount and acceptance
 
   /**
-   * Fetches route from Google Directions API.
+   * Fetches route from OSRM (Open Source Routing Machine).
    * Returns full RouteInfo including distance, duration, and coordinates.
+   *
+   * Note: Switch to Google Routes API when enabled:
+   * const routeInfo = await googleDirectionsService.getRoute(start, end);
    */
   const fetchRoute = useCallback(async (
     start: Coordinates,
     end: Coordinates,
-    _signal?: AbortSignal // Signal not used by Google service (has internal timeout)
+    signal?: AbortSignal
   ): Promise<{ routeInfo: RouteInfo | null; simplifiedCoords: Coordinates[] }> => {
     try {
-      const routeInfo = await googleDirectionsService.getRoute(start, end);
+      // Using OSRM for now - switch to Google Routes API when enabled
+      const response = await fetch(
+        `https://router.project-osrm.org/route/v1/driving/${start.longitude},${start.latitude};${end.longitude},${end.latitude}?overview=full&geometries=geojson`,
+        { signal }
+      );
 
-      if (!routeInfo || !routeInfo.coordinates.length) {
-        if (__DEV__) {
-          console.warn('[useRouteTracking] Google Directions returned no route, using fallback');
-        }
-        return { routeInfo: null, simplifiedCoords: [start, end] }; // Fallback to direct line
+      if (!response.ok) {
+        throw new Error(`OSRM API error: ${response.status}`);
       }
 
-      // Simplify route to max ~80 points to prevent Polyline crash on low-end devices
-      const simplifiedCoords = simplifyRoute(routeInfo.coordinates);
+      const data = await response.json();
+
+      if (data.code !== 'Ok' || !data.routes?.[0]) {
+        if (__DEV__) {
+          console.warn('[useRouteTracking] OSRM returned no route, using fallback');
+        }
+        return { routeInfo: null, simplifiedCoords: [start, end] };
+      }
+
+      const route = data.routes[0];
+      const coordinates: Coordinates[] = route.geometry.coordinates.map(
+        ([lng, lat]: [number, number]) => ({
+          latitude: lat,
+          longitude: lng,
+        })
+      );
+
+      const routeInfo: RouteInfo = {
+        distance: route.distance, // meters
+        duration: route.duration, // seconds
+        coordinates,
+      };
+
+      // OSRM can return 2000+ points which crashes low-end devices
+      // Simplify route to max ~80 points
+      const simplifiedCoords = simplifyRoute(coordinates);
+
+      if (__DEV__) {
+        console.log('[useRouteTracking] Route updated (OSRM):', {
+          originalPoints: coordinates.length,
+          simplifiedPoints: simplifiedCoords.length,
+          distance: `${(route.distance / 1000).toFixed(1)} km`,
+          duration: `${Math.ceil(route.duration / 60)} min`,
+        });
+      }
+
       return { routeInfo, simplifiedCoords };
     } catch (err) {
       // Don't log abort errors - they're expected during cleanup
@@ -211,7 +259,7 @@ export function useRouteTracking({
 
   /**
    * Performs the route fetch with proper abort handling and state updates.
-   * Updates coordinates, road distance, and ETA from Google Routes API.
+   * Updates coordinates, road distance, and ETA from OSRM.
    */
   const doFetchRoute = useCallback(async () => {
     if (!vendorLocation || !serviceLocation || !isMountedRef.current) {
