@@ -151,3 +151,21 @@ debug_crash.bat
 
 # Claude local settings
 .claude/
+
+# Claude temporary files
+tmpclaude-*
+
+# Sensitive credential files
+*.jks
+credentials.json
+credentials/
+google-services.json
+
+# Backend service folder
+homehero-service/
+
+# Test files (not needed in version control)
+__mocks__/
+__tests__/
+jest.config.js
+jest.setup.js
