@@ -2082,7 +2082,9 @@ export default function LiveOffersScreen() {
                     coordinate={serviceLocation}
                     anchor={{ x: 0.5, y: 1 }}
                 >
-                    <Ionicons name="location" size={36} color={COLORS.accent} />
+                    <View collapsable={false}>
+                        <Ionicons name="location" size={36} color={COLORS.accent} />
+                    </View>
                 </Marker>
 
                 {/* Vendor Car Marker - Simple car icon */}
@@ -2092,11 +2094,13 @@ export default function LiveOffersScreen() {
                         coordinate={vendorLocation}
                         anchor={{ x: 0.5, y: 0.5 }}
                     >
-                        <FontAwesome5
-                            name="car"
-                            size={24}
-                            color={vendorHasArrived ? COLORS.success : COLORS.primary}
-                        />
+                        <View collapsable={false}>
+                            <FontAwesome5
+                                name="car"
+                                size={24}
+                                color={vendorHasArrived ? COLORS.success : COLORS.primary}
+                            />
+                        </View>
                     </Marker>
                 )}
             </>
@@ -2217,30 +2221,32 @@ export default function LiveOffersScreen() {
                     longitudeDelta: CONSTANTS.MAP_DELTA,
                 }}
             >
-                {/* Gradient Route - 3 layer polylines for glow effect (inDrive style) */}
+                {/* Gradient Route - 3 layer polylines for glow effect (inDrive style) - Memoized to prevent jerk */}
                 {/* Hide route when vendor cancels OR when vendor has arrived (in_progress) */}
-                {routeCoords.length > 0 && !serviceCancelledByVendor && currentRequest?.status !== 'in_progress' && (
-                    <>
-                        {/* Shadow/glow layer */}
-                        <Polyline
-                            coordinates={routeCoords}
-                            strokeColor={routeColors.shadow}
-                            strokeWidth={routeWidths.shadow}
-                        />
-                        {/* Middle layer */}
-                        <Polyline
-                            coordinates={routeCoords}
-                            strokeColor={routeColors.middle}
-                            strokeWidth={routeWidths.middle}
-                        />
-                        {/* Main route line */}
-                        <Polyline
-                            coordinates={routeCoords}
-                            strokeColor={routeColors.main}
-                            strokeWidth={routeWidths.main}
-                        />
-                    </>
-                )}
+                {useMemo(() =>
+                    routeCoords.length > 0 && !serviceCancelledByVendor && currentRequest?.status !== 'in_progress' ? (
+                        <>
+                            {/* Shadow/glow layer */}
+                            <Polyline
+                                coordinates={routeCoords}
+                                strokeColor={routeColors.shadow}
+                                strokeWidth={routeWidths.shadow}
+                            />
+                            {/* Middle layer */}
+                            <Polyline
+                                coordinates={routeCoords}
+                                strokeColor={routeColors.middle}
+                                strokeWidth={routeWidths.middle}
+                            />
+                            {/* Main route line */}
+                            <Polyline
+                                coordinates={routeCoords}
+                                strokeColor={routeColors.main}
+                                strokeWidth={routeWidths.main}
+                            />
+                        </>
+                    ) : null
+                , [routeCoords, serviceCancelledByVendor, currentRequest?.status])}
                 {renderMarkers()}
             </MapView>
 
