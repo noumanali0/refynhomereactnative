@@ -156,9 +156,16 @@ export interface VendorOnboardingRequest {
   bio?: string;
   experience?: number;
   profile_photo?: File | string; // File for multipart, base64 for JSON
+  // Old CNIC field - kept for backward compatibility
   id_verification_photo?: File | string;
+  // New: Front and back CNIC photos (Pakistani NIC requirement)
+  cnic_front_photo?: File | string;
+  cnic_back_photo?: File | string;
+  // Base64 alternatives
   profile_photo_base64?: string; // Base64 encoded image
   id_verification_photo_base64?: string; // Base64 encoded image
+  cnic_front_photo_base64?: string; // Base64 encoded image
+  cnic_back_photo_base64?: string; // Base64 encoded image
   service_categories?: (number | string)[]; // Array of IDs or slugs
 }
 
