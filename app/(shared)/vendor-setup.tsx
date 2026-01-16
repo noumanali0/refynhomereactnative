@@ -78,11 +78,12 @@ export default function VendorProfileSetup() {
   const router = useRouter();
   const dispatch = useAppDispatch();
   const { showToast } = useToast();
-  const { user, isLoading: authLoading } = useAppSelector((state) => state.auth);
+  const { user, isLoading: authLoading, vendorOnboardingStatus } = useAppSelector((state) => state.auth);
 
-  // Image pickers for profile and CNIC photos
-  const { imageUri: profilePhoto, pickImage: pickProfilePhoto } = useImagePicker();
-  const { imageUri: cnicPhoto, pickImage: pickCnicPhoto } = useImagePicker();
+  // Image pickers for profile and CNIC photos (front & back)
+  const { imageUri: profilePhoto, pickImage: pickProfilePhoto } = useImagePicker({ imageType: 'profile' });
+  const { imageUri: cnicFrontPhoto, pickImage: pickCnicFrontPhoto } = useImagePicker({ imageType: 'document' });
+  const { imageUri: cnicBackPhoto, pickImage: pickCnicBackPhoto } = useImagePicker({ imageType: 'document' });
 
   // Form state
   const [formData, setFormData] = useState<FormData>({
@@ -100,6 +101,21 @@ export default function VendorProfileSetup() {
   const [isLoading, setIsLoading] = useState(false);
   const [showCityDropdown, setShowCityDropdown] = useState(false);
   const [fadeAnim] = useState(new Animated.Value(0));
+
+  // Navigation guard: Redirect if vendor is already verified
+  useEffect(() => {
+    if (vendorOnboardingStatus === 'complete') {
+      if (__DEV__) {
+        console.log('[VendorSetup] Vendor already verified, redirecting to dashboard');
+      }
+      router.replace('/(vendor)/(servicerequests)');
+    } else if (vendorOnboardingStatus === 'pending_verification') {
+      if (__DEV__) {
+        console.log('[VendorSetup] Vendor pending verification, redirecting to pending screen');
+      }
+      router.replace('/(shared)/pending-verification');
+    }
+  }, [vendorOnboardingStatus, router]);
 
   // Animation on mount
   useEffect(() => {
@@ -199,9 +215,13 @@ export default function VendorProfileSetup() {
       isValid = false;
     }
 
-    // CNIC photo validation
-    if (!cnicPhoto) {
-      newErrors.cnicPhoto = 'CNIC verification photo is required';
+    // CNIC photos validation (both front and back required)
+    if (!cnicFrontPhoto) {
+      newErrors.cnicFrontPhoto = 'CNIC front photo is required';
+      isValid = false;
+    }
+    if (!cnicBackPhoto) {
+      newErrors.cnicBackPhoto = 'CNIC back photo is required';
       isValid = false;
     }
 
@@ -236,7 +256,11 @@ export default function VendorProfileSetup() {
         phone: user.phoneNumber,
         cnic: formData.cnicNumber,
         profile_photo: profilePhoto ?? undefined, // Base64 or file URI
-        id_verification_photo: cnicPhoto ?? undefined, // Base64 or file URI
+        // New: Front and back CNIC photos (Pakistani NIC requirement)
+        cnic_front_photo: cnicFrontPhoto ?? undefined,
+        cnic_back_photo: cnicBackPhoto ?? undefined,
+        // Old field kept for backward compatibility
+        id_verification_photo: cnicFrontPhoto ?? undefined, // Use front as fallback
         service_categories: formData.serviceCategories, // Already string[], matches (number | string)[]
         bio: formData.bio || undefined,
         address: formData.serviceAreas || undefined,
@@ -602,51 +626,108 @@ export default function VendorProfileSetup() {
               </View>
             </View>
 
-            {/* CNIC Verification Photo */}
+            {/* CNIC Verification Photos (Front & Back) */}
             <View style={styles.photoContainer}>
               <Text type="subtitle2" style={styles.photoLabel}>
-                ID Verification Photo (CNIC) <Text style={styles.required}>*</Text>
+                CNIC Verification Photos <Text style={styles.required}>*</Text>
               </Text>
-              <TouchableOpacity
-                onPress={pickCnicPhoto}
-                activeOpacity={0.8}
-                style={styles.cnicPhotoUploadContainer}
-              >
-                <LinearGradient
-                  colors={['rgba(37, 99, 235, 0.1)', 'rgba(249, 115, 22, 0.1)']}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={[
-                    styles.cnicPhotoPlaceholder,
-                    cnicPhoto && styles.cnicPhotoSelected,
-                  ]}
+              <Text type="body2" style={styles.photoHelperText}>
+                Upload both front and back side of your CNIC card
+              </Text>
+
+              {/* CNIC Front Photo */}
+              <View style={styles.cnicSection}>
+                <Text type="bodySemiBold" style={styles.cnicSideLabel}>
+                  <Ionicons name="card-outline" size={16} /> Front Side
+                </Text>
+                <TouchableOpacity
+                  onPress={pickCnicFrontPhoto}
+                  activeOpacity={0.8}
+                  style={styles.cnicPhotoUploadContainer}
                 >
-                  <View style={styles.cnicPhotoContent}>
-                    <Ionicons
-                      name="document-attach-outline"
-                      size={28}
-                      color={errors.cnicPhoto ? '#ef4444' : '#F97316'}
-                    />
-                    <View style={styles.cnicPhotoTextContainer}>
-                      <Text type="bodySemiBold" style={styles.cnicPhotoButtonText}>Choose File</Text>
-                      <Text type="body" style={styles.cnicPhotoSubtext}>
-                        {cnicPhoto ? 'File selected ✓' : 'No file chosen'}
-                      </Text>
-                    </View>
-                  </View>
-                  {cnicPhoto && (
-                    <View style={styles.cnicPhotoPreviewThumb}>
-                      <Image
-                        source={{ uri: cnicPhoto }}
-                        style={styles.cnicPhotoThumbImage}
+                  <LinearGradient
+                    colors={['rgba(37, 99, 235, 0.1)', 'rgba(249, 115, 22, 0.1)']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={[
+                      styles.cnicPhotoPlaceholder,
+                      cnicFrontPhoto && styles.cnicPhotoSelected,
+                    ]}
+                  >
+                    <View style={styles.cnicPhotoContent}>
+                      <Ionicons
+                        name="document-attach-outline"
+                        size={28}
+                        color={errors.cnicFrontPhoto ? '#ef4444' : '#F97316'}
                       />
+                      <View style={styles.cnicPhotoTextContainer}>
+                        <Text type="bodySemiBold" style={styles.cnicPhotoButtonText}>Choose File</Text>
+                        <Text type="body" style={styles.cnicPhotoSubtext}>
+                          {cnicFrontPhoto ? 'Front side selected ✓' : 'No file chosen'}
+                        </Text>
+                      </View>
                     </View>
-                  )}
-                </LinearGradient>
-              </TouchableOpacity>
-              {errors.cnicPhoto ? (
-                <Text type="body" style={styles.errorText}>{errors.cnicPhoto}</Text>
-              ) : null}
+                    {cnicFrontPhoto && (
+                      <View style={styles.cnicPhotoPreviewThumb}>
+                        <Image
+                          source={{ uri: cnicFrontPhoto }}
+                          style={styles.cnicPhotoThumbImage}
+                        />
+                      </View>
+                    )}
+                  </LinearGradient>
+                </TouchableOpacity>
+                {errors.cnicFrontPhoto ? (
+                  <Text type="body" style={styles.errorText}>{errors.cnicFrontPhoto}</Text>
+                ) : null}
+              </View>
+
+              {/* CNIC Back Photo */}
+              <View style={styles.cnicSection}>
+                <Text type="bodySemiBold" style={styles.cnicSideLabel}>
+                  <Ionicons name="card-outline" size={16} /> Back Side
+                </Text>
+                <TouchableOpacity
+                  onPress={pickCnicBackPhoto}
+                  activeOpacity={0.8}
+                  style={styles.cnicPhotoUploadContainer}
+                >
+                  <LinearGradient
+                    colors={['rgba(37, 99, 235, 0.1)', 'rgba(249, 115, 22, 0.1)']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={[
+                      styles.cnicPhotoPlaceholder,
+                      cnicBackPhoto && styles.cnicPhotoSelected,
+                    ]}
+                  >
+                    <View style={styles.cnicPhotoContent}>
+                      <Ionicons
+                        name="document-attach-outline"
+                        size={28}
+                        color={errors.cnicBackPhoto ? '#ef4444' : '#F97316'}
+                      />
+                      <View style={styles.cnicPhotoTextContainer}>
+                        <Text type="bodySemiBold" style={styles.cnicPhotoButtonText}>Choose File</Text>
+                        <Text type="body" style={styles.cnicPhotoSubtext}>
+                          {cnicBackPhoto ? 'Back side selected ✓' : 'No file chosen'}
+                        </Text>
+                      </View>
+                    </View>
+                    {cnicBackPhoto && (
+                      <View style={styles.cnicPhotoPreviewThumb}>
+                        <Image
+                          source={{ uri: cnicBackPhoto }}
+                          style={styles.cnicPhotoThumbImage}
+                        />
+                      </View>
+                    )}
+                  </LinearGradient>
+                </TouchableOpacity>
+                {errors.cnicBackPhoto ? (
+                  <Text type="body" style={styles.errorText}>{errors.cnicBackPhoto}</Text>
+                ) : null}
+              </View>
             </View>
 
             {/* Submit Button */}
@@ -772,7 +853,22 @@ const styles = StyleSheet.create({
   },
   photoLabel: {
     color: '#334155',
-    marginBottom: 12,
+    marginBottom: 8,
+  },
+  photoHelperText: {
+    color: '#64748b',
+    fontSize: moderateScale(13),
+    marginBottom: 16,
+  },
+  cnicSection: {
+    marginBottom: 16,
+  },
+  cnicSideLabel: {
+    color: '#0f172a',
+    fontSize: moderateScale(14),
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   photoUploadContainer: {
     borderRadius: 16,

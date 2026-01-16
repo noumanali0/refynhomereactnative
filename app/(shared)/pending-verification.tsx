@@ -23,7 +23,7 @@ import { logoutUser, fetchUserProfile } from '@/store/slices/authSlice';
 export default function PendingVerification() {
     const router = useRouter();
     const dispatch = useAppDispatch();
-    const { user } = useAppSelector((state) => state.auth);
+    const { user, vendorOnboardingStatus } = useAppSelector((state) => state.auth);
 
     const [fadeAnim] = useState(new Animated.Value(0));
     const [scaleAnim] = useState(new Animated.Value(0.8));
@@ -46,13 +46,22 @@ export default function PendingVerification() {
         ]).start();
     }, []);
 
-    // Check if vendor got verified
+    // Navigation guard: Redirect based on vendor status changes
     useEffect(() => {
-        if (user?.role === 'vendor' && user.vendorProfile?.verified) {
+        if (vendorOnboardingStatus === 'complete') {
             // Vendor is now verified! Navigate to dashboard
+            if (__DEV__) {
+                console.log('[PendingVerification] Vendor now verified, redirecting to dashboard');
+            }
             router.replace('/(vendor)/(servicerequests)');
+        } else if (vendorOnboardingStatus === 'in_progress') {
+            // If somehow went back to in_progress (shouldn't happen), go to vendor setup
+            if (__DEV__) {
+                console.log('[PendingVerification] Status changed to in_progress, redirecting to setup');
+            }
+            router.replace('/(shared)/vendor-setup');
         }
-    }, [user]);
+    }, [vendorOnboardingStatus, router]);
 
     const handleRefreshStatus = async () => {
         setIsRefreshing(true);
