@@ -1080,39 +1080,11 @@ export default function WebSocketRequestDetailsScreen() {
         }
     }, [router]);
 
-    // Check if vendor is within 100 meters of customer location
+    // Check if vendor is within 50 meters of customer location
     // Using straight-line (Haversine) distance for accurate proximity check
-    // 0.1 km = 100 meters (must be before early returns for hooks)
-    const isWithinRange = straightLineDistanceKm !== null ? straightLineDistanceKm <= 0.1 : false;
-
-    // Show toast when vendor reaches customer location (within 100m)
-    // Also stop location tracking - vendor has arrived, no need to continue tracking
-    useEffect(() => {
-        if (isWithinRange && !hasShownArrivalToast && isAccepted) {
-            showToast({
-                type: 'success',
-                title: 'Reached Destination',
-                message: 'You have arrived at the customer location.',
-                duration: 5000,
-            });
-            setHasShownArrivalToast(true);
-
-            // Stop location tracking when vendor arrives (battery optimization)
-            // This prevents unnecessary location updates after reaching destination
-            if (locationWatchRef.current) {
-                locationWatchRef.current.remove();
-                locationWatchRef.current = null;
-            }
-            if (isBackgroundTrackingActiveRef.current) {
-                stopBackgroundLocationTracking();
-                isBackgroundTrackingActiveRef.current = false;
-            }
-
-            if (__DEV__) {
-                console.log('[VendorDetails] Vendor arrived within 100m - stopped location tracking');
-            }
-        }
-    }, [isWithinRange, hasShownArrivalToast, isAccepted, showToast]);
+    // 0.05 km = 50 meters (must be before early returns for hooks)
+    // NOTE: Location tracking continues after arrival (no longer stops)
+    const isWithinRange = straightLineDistanceKm !== null ? straightLineDistanceKm <= 0.05 : false;
 
     // Reset arrival toast when request changes
     useEffect(() => {
