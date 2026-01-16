@@ -89,6 +89,7 @@ export type ServiceRequestStatus =
   | 'pending'
   | 'accepted'
   | 'en_route'
+  | 'arrived'
   | 'in_progress'
   | 'completed'
   | 'cancelled'
@@ -150,6 +151,20 @@ export interface ServiceRequestCheckExpiryPayload {
   service_request_id: number;
 }
 
+export interface VendorArrivedPayload {
+  service_request_id: number;
+  latitude: number;
+  longitude: number;
+}
+
+export interface ServiceStartPayload {
+  service_request_id: number;
+}
+
+export interface ServiceCompletePayload {
+  service_request_id: number;
+}
+
 // Action type union
 export type SocketAction =
   | 'ping'
@@ -161,7 +176,9 @@ export type SocketAction =
   | 'route.start'
   | 'route.arrive'
   | 'route.complete'
+  | 'vendor.arrived'
   | 'service.start'
+  | 'service.complete'
   | 'vendor.cancel'
   | 'proposal.check_expiry'
   | 'service_request.check_expiry';
@@ -268,10 +285,39 @@ export interface RouteCompleteAckEvent {
   service_request_id: number;
 }
 
+export interface VendorArrivedAckEvent {
+  event: 'vendor.arrived.ack';
+  service_request_id: number;
+  message: string;
+  arrival_time: string | null;
+}
+
+export interface VendorArrivedNotificationEvent {
+  event: 'vendor.arrived.notification';
+  service_request_id: number;
+  message: string;
+  arrival_time: string;
+}
+
+export interface ServiceStartedAckEvent {
+  event: 'service.started.ack';
+  service_request_id: number;
+  message: string;
+  service_start_time: string | null;
+  min_duration_minutes: number;
+}
+
+export interface ServiceCompletedAckEvent {
+  event: 'service.completed.ack';
+  service_request_id: number;
+  message: string;
+}
+
 export interface SocketErrorEvent {
   event: 'error';
   code: string;
   message: string;
+  details?: any;
 }
 
 export interface LocationUpdatedEvent {
@@ -301,6 +347,10 @@ export type SocketEvent =
   | RouteStartAckEvent
   | RouteArriveAckEvent
   | RouteCompleteAckEvent
+  | VendorArrivedAckEvent
+  | VendorArrivedNotificationEvent
+  | ServiceStartedAckEvent
+  | ServiceCompletedAckEvent
   | SocketErrorEvent;
 
 // ============================================
