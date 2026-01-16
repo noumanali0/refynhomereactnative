@@ -1271,29 +1271,31 @@ export default function WebSocketRequestDetailsScreen() {
                     </View>
                 </Marker>
 
-                {/* Route with 3-layer gradient effect */}
-                {routeInfo && routeInfo.coordinates.length > 0 && (
-                    <>
-                        {/* Shadow/glow layer */}
-                        <Polyline
-                            coordinates={routeInfo.coordinates}
-                            strokeColor="rgba(29, 78, 216, 0.15)"
-                            strokeWidth={10}
-                        />
-                        {/* Middle layer */}
-                        <Polyline
-                            coordinates={routeInfo.coordinates}
-                            strokeColor="rgba(29, 78, 216, 0.4)"
-                            strokeWidth={6}
-                        />
-                        {/* Main route line */}
-                        <Polyline
-                            coordinates={routeInfo.coordinates}
-                            strokeColor={COLORS.primary}
-                            strokeWidth={4}
-                        />
-                    </>
-                )}
+                {/* Route with 3-layer gradient effect - Memoized to prevent jerk */}
+                {useMemo(() =>
+                    routeInfo && routeInfo.coordinates.length > 0 ? (
+                        <>
+                            {/* Shadow/glow layer */}
+                            <Polyline
+                                coordinates={routeInfo.coordinates}
+                                strokeColor="rgba(29, 78, 216, 0.15)"
+                                strokeWidth={10}
+                            />
+                            {/* Middle layer */}
+                            <Polyline
+                                coordinates={routeInfo.coordinates}
+                                strokeColor="rgba(29, 78, 216, 0.4)"
+                                strokeWidth={6}
+                            />
+                            {/* Main route line */}
+                            <Polyline
+                                coordinates={routeInfo.coordinates}
+                                strokeColor={COLORS.primary}
+                                strokeWidth={4}
+                            />
+                        </>
+                    ) : null
+                , [routeInfo?.coordinates])}
             </MapView>
 
             {/* Back Button */}

@@ -362,11 +362,17 @@ const WebSocketProposalCardInner = ({ proposal, isNew = false }: Props) => {
 };
 
 const arePropsEqual = (prevProps: Props, nextProps: Props) => {
+    // PERFORMANCE: Only re-render if these specific props change
+    // This prevents unnecessary re-renders when vendor location updates
     return (
         prevProps.proposal.id === nextProps.proposal.id &&
         prevProps.proposal.status === nextProps.proposal.status &&
         prevProps.proposal.remaining_expiry_time === nextProps.proposal.remaining_expiry_time &&
-        prevProps.isNew === nextProps.isNew
+        prevProps.isNew === nextProps.isNew &&
+        // Also check vendor distance to prevent jerk when vendor moves
+        prevProps.proposal.vendor?.distance_km === nextProps.proposal.vendor?.distance_km &&
+        prevProps.proposal.eta_minutes === nextProps.proposal.eta_minutes &&
+        prevProps.proposal.message === nextProps.proposal.message
     );
 };
 

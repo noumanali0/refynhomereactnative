@@ -191,15 +191,37 @@ export default function WebSocketOffersScreen() {
     }, []);
 
     // ========================================================================
-    // Route to vendor
+    // Route to vendor - with throttling to prevent jerk
     // ========================================================================
 
+    // Track last route fetch time for throttling
+    const lastRouteFetchRef = useRef<number>(0);
+    const routeFetchTimeoutRef = useRef<NodeJS.Timeout>();
+
     useEffect(() => {
+        // Clear existing timeout
+        if (routeFetchTimeoutRef.current) {
+            clearTimeout(routeFetchTimeoutRef.current);
+        }
+
         const fetchRoute = async () => {
             if (!userLocation || !vendorLocation) {
                 setRouteCoords([]);
                 return;
             }
+
+            // PERFORMANCE: Throttle route fetching to prevent excessive API calls
+            // Only fetch route once every 15 seconds to prevent marker jerk
+            const now = Date.now();
+            const timeSinceLastFetch = now - lastRouteFetchRef.current;
+            const THROTTLE_MS = 15000; // 15 seconds
+
+            if (timeSinceLastFetch < THROTTLE_MS && routeCoords.length > 0) {
+                // Skip fetch if within throttle period and we already have a route
+                return;
+            }
+
+            lastRouteFetchRef.current = now;
 
             try {
                 const url = `https://router.project-osrm.org/route/v1/driving/${vendorLocation?.longitude},${vendorLocation.latitude};${userLocation.longitude},${userLocation.latitude}?overview=full&geometries=geojson`;
@@ -222,14 +244,28 @@ export default function WebSocketOffersScreen() {
                 // CRITICAL: Simplify route to prevent crash on low-end devices
                 // OSRM can return 2000+ points which causes Polyline to crash
                 const simplifiedCoords = simplifyRoute(rawCoords);
-                setRouteCoords(simplifiedCoords);
+
+                // Validate simplification output
+                if (simplifiedCoords && simplifiedCoords.length > 1) {
+                    setRouteCoords(simplifiedCoords);
+                } else {
+                    // Fallback to direct line if simplification failed
+                    setRouteCoords([userLocation, vendorLocation]);
+                }
             } catch (e) {
                 console.warn('fetchRoute error:', e);
                 setRouteCoords([userLocation, vendorLocation]);
             }
         };
 
-        fetchRoute();
+        // Debounce route fetching by 500ms to avoid rapid updates
+        routeFetchTimeoutRef.current = setTimeout(fetchRoute, 500);
+
+        return () => {
+            if (routeFetchTimeoutRef.current) {
+                clearTimeout(routeFetchTimeoutRef.current);
+            }
+        };
     }, [userLocation, vendorLocation]);
 
     // ========================================================================
@@ -417,7 +453,7 @@ export default function WebSocketOffersScreen() {
                 {/* User Marker */}
                 {userLocation && (
                     <Marker coordinate={userLocation} title="Your Location">
-                        <View style={styles.userMarker}>
+                        <View collapsable={false} style={styles.userMarker}>
                             <Ionicons name="home" size={20} color={COLORS.white} />
                         </View>
                     </Marker>
@@ -430,21 +466,22 @@ export default function WebSocketOffersScreen() {
                         title={acceptedProposal.vendor?.full_name || 'Vendor'}
                         description="En route to you"
                     >
-                        <View style={styles.vendorMarker}>
+                        <View collapsable={false} style={styles.vendorMarker}>
                             <Ionicons name="car" size={20} color={COLORS.white} />
                         </View>
                     </Marker>
                 )}
 
-                {/* Route Line */}
-                {routeCoords.length > 1 && (
-                    <Polyline
-                        coordinates={routeCoords}
-                        strokeColor={COLORS.primary}
-                        strokeWidth={4}
-                        lineDashPattern={[1]}
-                    />
-                )}
+                {/* Route Line - Memoized to prevent jerk */}
+                {useMemo(() =>
+                    routeCoords.length > 1 ? (
+                        <Polyline
+                            coordinates={routeCoords}
+                            strokeColor={COLORS.primary}
+                            strokeWidth={4}
+                        />
+                    ) : null
+                , [routeCoords])}
             </MapView>
 
             {/* Connection Status Badge */}
