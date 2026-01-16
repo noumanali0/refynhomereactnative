@@ -349,6 +349,11 @@ const reviewSlice = createSlice({
                 state.vendorReviewsTotalPages = action.payload.total_pages;
                 state.vendorReviewsHasMore = action.payload.page < action.payload.total_pages;
                 state.currentVendorId = action.payload.vendorId;
+
+                // Update original stats on refresh (fix for rating not updating after new review)
+                state.originalTotalCount = action.payload.count;
+                state.originalDistribution = action.payload.distribution;
+                state.originalAverageRating = action.payload.average_rating;
             })
             // Refresh vendor reviews: Rejected
             .addCase(refreshVendorReviews.rejected, (state, action) => {
