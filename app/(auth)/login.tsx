@@ -77,20 +77,44 @@ export default function Login() {
     // Navigate after successful authentication
     useEffect(() => {
         if (isAuthenticated && user) {
+            if (__DEV__) {
+                console.log('[Login] Post-login navigation:', {
+                    role: user.role,
+                    vendorOnboardingStatus,
+                    vendorProfile: user.vendorProfile,
+                });
+            }
+
             // Navigate based on role and vendor status
             if (user.role === 'customer') {
                 router.replace('/(customer)/(home)');
             } else if (user.role === 'vendor') {
-                const vendorVerified = user.vendorProfile?.verified === true;
-                const needsOnboarding = vendorOnboardingStatus === 'in_progress';
-                const pendingVerification = vendorOnboardingStatus === 'pending_verification';
-
-                if (needsOnboarding) {
+                // Use vendorOnboardingStatus from Redux (most reliable source)
+                // This is set correctly by loginUser thunk based on backend response
+                if (vendorOnboardingStatus === 'in_progress') {
+                    // Vendor hasn't submitted CNIC + categories yet
                     router.replace('/(shared)/vendor-setup');
-                } else if (pendingVerification || !vendorVerified) {
+                } else if (vendorOnboardingStatus === 'pending_verification') {
+                    // Vendor submitted onboarding but awaiting admin approval
                     router.replace('/(shared)/pending-verification');
-                } else {
+                } else if (vendorOnboardingStatus === 'complete') {
+                    // Vendor is verified and approved - go to dashboard
                     router.replace('/(vendor)/(servicerequests)');
+                } else {
+                    // Fallback: if status is somehow undefined, check user object
+                    if (__DEV__) {
+                        console.warn('[Login] vendorOnboardingStatus is undefined, using fallback logic');
+                    }
+                    const vendorVerified = user.vendorProfile?.verified === true;
+                    const hasCnic = user.vendorProfile?.cnic?.length > 0;
+
+                    if (!hasCnic) {
+                        router.replace('/(shared)/vendor-setup');
+                    } else if (!vendorVerified) {
+                        router.replace('/(shared)/pending-verification');
+                    } else {
+                        router.replace('/(vendor)/(servicerequests)');
+                    }
                 }
             }
         }
@@ -186,10 +210,18 @@ export default function Login() {
             }
             // Check if OTP not verified (customer signed up but didn't verify)
             else if (err?.includes?.('not verified') || err === 'Account not verified. Please verify your phone number.') {
+                // Backend will auto-fix existing users, so this should only show for NEW signups
+                // If user keeps seeing this, they should contact support
                 setNotVerifiedPhone(normalizePhoneNumber(phoneNumber));
                 setShowNotVerifiedModal(true);
+
                 // Clear the error so toast doesn't show for this case
                 dispatch(clearError());
+
+                // Log for debugging in dev mode
+                if (__DEV__) {
+                    console.warn('[Login] OTP not verified error - this should only occur for new signups');
+                }
             }
             // Other errors are handled by useEffect showing the error toast
         }
