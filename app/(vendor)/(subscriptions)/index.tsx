@@ -16,7 +16,7 @@ const SubscriptionsScreen = () => {
         end={{ x: 1, y: 1 }}
         style={styles.header}
       >
-        <Text type="title" style={styles.headerTitle}>Subscriptions</Text>
+        <Text type="headerTitle" style={styles.headerTitle}>Subscriptions</Text>
         <Text type="body2" style={styles.headerSubtitle}>Manage your subscription plans</Text>
       </LinearGradient>
 
@@ -87,7 +87,7 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.gray50,
   },
   header: {
-    paddingTop: verticalScale(30),
+    paddingTop: verticalScale(14),
     paddingBottom: verticalScale(30),
     paddingHorizontal: scale(20),
     borderBottomLeftRadius: moderateScale(24),

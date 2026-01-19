@@ -233,7 +233,7 @@ export default function CheckoutScreen() {
                     >
                         <Ionicons name="arrow-back" size={24} color={COLORS.gray900} />
                     </TouchableOpacity>
-                    <Text type="title" style={styles.headerTitle}>Complete Payment</Text>
+                    <Text type="headerTitle" style={styles.headerTitle}>Complete Payment</Text>
                     <View style={{ width: 24 }} />
                 </View>
 

@@ -632,6 +632,10 @@ export default function LiveOffersScreen() {
     const mapRef = useRef<MapView | null>(null);
     const bottomSheetRef = useRef<BottomSheet | null>(null);
 
+    // Refs to track map initialization state (prevents blinking/jerking)
+    const hasInitialMapFitRef = useRef(false);
+    const lastZoomLevelRef = useRef<string | null>(null);
+
     // Redux state
     const connectionStatus = useSelector(selectConnectionStatus);
     const isConnected = useSelector(selectIsConnected);
@@ -698,8 +702,21 @@ export default function LiveOffersScreen() {
     // Track if vendor arrival toast has been shown (prevents duplicate toasts)
     const [hasShownArrivalToast, setHasShownArrivalToast] = useState(false);
 
-    // Track auto-started requests to prevent duplicate service.start sends
-    const autoStartedRequestIdsRef = useRef<Set<number>>(new Set());
+    // Track if customer has sent "I'm Coming" acknowledgement
+    // Initialized from backend data (customer_coming_acknowledged) for persistence across app restarts
+    const [hasSentComingAck, setHasSentComingAck] = useState(false);
+    const [isSendingComingAck, setIsSendingComingAck] = useState(false);
+
+    // Initialize hasSentComingAck from backend data when currentRequest is loaded
+    // This ensures the "Vendor notified" banner persists across app restarts
+    useEffect(() => {
+        if (currentRequest?.customer_coming_acknowledged) {
+            setHasSentComingAck(true);
+            if (__DEV__) {
+                console.log('[LiveOffers] Restored hasSentComingAck from backend:', true);
+            }
+        }
+    }, [currentRequest?.customer_coming_acknowledged]);
 
     // =========================================================================
     // STAGED INITIALIZATION - Prevents crash on first mount
@@ -850,15 +867,27 @@ export default function LiveOffersScreen() {
     // Route Tracking Hook - Uses optimized useRouteTracking
     // =========================================================================
     const handleFirstRouteFetch = useCallback((route: Coordinates[]) => {
+        // Only run the initial map fit ONCE to prevent blinking
+        if (hasInitialMapFitRef.current) {
+            if (__DEV__) {
+                console.log('[FirstRouteFetch] Skipping - already fitted');
+            }
+            return;
+        }
+
         // Defer map animation until UI is idle
         // This prevents jank on low-end devices during first route fetch
         InteractionManager.runAfterInteractions(() => {
             if (!mapRef.current || !vendorLocation || !serviceLocation) return;
 
+            // Mark as fitted to prevent future calls
+            hasInitialMapFitRef.current = true;
+
             const zoomConfig = calculateSmartZoom(vendorLocation, serviceLocation);
+            lastZoomLevelRef.current = zoomConfig.zoomLevel;
 
             if (__DEV__) {
-                console.log('[FirstRouteFetch] Smart zoom:', zoomConfig.zoomLevel);
+                console.log('[FirstRouteFetch] Initial smart zoom:', zoomConfig.zoomLevel);
             }
 
             if (zoomConfig.zoomLevel === 'very_close' || zoomConfig.zoomLevel === 'close') {
@@ -880,16 +909,17 @@ export default function LiveOffersScreen() {
                 });
             }
         });
-    }, [vendorLocation, serviceLocation, calculateSmartZoom]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [calculateSmartZoom]); // Removed vendorLocation, serviceLocation - use refs instead
 
     // Memoize enabled flag to prevent unnecessary hook re-renders
     // This is critical for preventing crash on low-end devices
     // IMPORTANT: Only enable after staged initialization is complete
     // Disable when vendor cancels to clear route from map
-    // Disable when status is 'in_progress' (vendor has arrived, no need for routes)
+    // Disable when status is 'arrived' or 'in_progress' (vendor has arrived, no need for routes)
     const isRouteTrackingEnabled = useMemo(() => {
-        const isInProgress = currentRequest?.status === 'in_progress';
-        return initStage === 'ready' && !!acceptedProposal && !!vendorLocation && !!serviceLocation && !serviceCancelledByVendor && !isInProgress;
+        const vendorHasArrivedOrServiceStarted = currentRequest?.status === 'arrived' || currentRequest?.status === 'in_progress';
+        return initStage === 'ready' && !!acceptedProposal && !!vendorLocation && !!serviceLocation && !serviceCancelledByVendor && !vendorHasArrivedOrServiceStarted;
     }, [initStage, acceptedProposal, vendorLocation, serviceLocation, serviceCancelledByVendor, currentRequest?.status]);
 
     const {
@@ -924,10 +954,15 @@ export default function LiveOffersScreen() {
     // =========================================================================
 
     /**
-     * Update zoom as vendor approaches
-     * Debounced to prevent excessive map operations
+     * Update zoom ONLY when zoom level threshold changes
+     * This prevents constant map animations that cause blinking/jerking
      */
     useEffect(() => {
+        // Skip if not initialized yet
+        if (!hasInitialMapFitRef.current) {
+            return;
+        }
+
         if (!vendorLocation || !serviceLocation || !acceptedProposal || routeCoords.length === 0) {
             return;
         }
@@ -937,6 +972,22 @@ export default function LiveOffersScreen() {
                 if (!mapRef.current) return;
 
                 const zoomConfig = calculateSmartZoom(vendorLocation, serviceLocation);
+
+                // CRITICAL: Only animate if zoom level CHANGED (crossed a threshold)
+                // This prevents constant blinking when vendor moves but stays in same zoom level
+                if (lastZoomLevelRef.current === zoomConfig.zoomLevel) {
+                    if (__DEV__) {
+                        console.log('[DynamicZoom] Skipping - same zoom level:', zoomConfig.zoomLevel);
+                    }
+                    return;
+                }
+
+                // Update the zoom level ref
+                lastZoomLevelRef.current = zoomConfig.zoomLevel;
+
+                if (__DEV__) {
+                    console.log('[DynamicZoom] Zoom level changed to:', zoomConfig.zoomLevel);
+                }
 
                 if (zoomConfig.zoomLevel === 'very_close' || zoomConfig.zoomLevel === 'close') {
                     const midLat = (vendorLocation.latitude + serviceLocation.latitude) / 2;
@@ -973,42 +1024,60 @@ export default function LiveOffersScreen() {
         },
     });
 
-    // Send service.start action and show toast when vendor arrives within 100m
+    // Listen for vendor.arrived.notification from backend (vendor manually marks arrival)
+    // This replaces the old auto-start logic - now vendor controls the flow
     useEffect(() => {
-        if (vendorHasArrived && !hasShownArrivalToast && acceptedProposal && effectiveRequestId) {
-            // Prevent duplicate sends
-            if (autoStartedRequestIdsRef.current.has(effectiveRequestId)) {
-                return;
+        if (!effectiveRequestId) return;
+
+        const unsubscribe = socketService.on('vendor.arrived.notification', (data: any) => {
+            if (data.service_request_id === effectiveRequestId && !hasShownArrivalToast) {
+                // Show toast notification when vendor marks arrival
+                showToast({
+                    type: 'success',
+                    title: 'Vendor Has Arrived',
+                    message: data.message || `${acceptedProposal?.vendor?.full_name || 'Vendor'} has arrived at your location.`,
+                    duration: 5000,
+                });
+                setHasShownArrivalToast(true);
+
+                if (__DEV__) {
+                    console.log('[LiveOffers] Received vendor.arrived.notification:', data);
+                }
             }
+        });
 
-            // Send service.start action via WebSocket
-            // This will change status to 'in_progress' on the backend
-            socketService.send('service.start', {
-                service_request_id: effectiveRequestId,
-            });
+        return () => unsubscribe();
+    }, [effectiveRequestId, hasShownArrivalToast, acceptedProposal?.vendor?.full_name, showToast]);
 
-            // Mark as auto-started to prevent duplicate triggers
-            autoStartedRequestIdsRef.current.add(effectiveRequestId);
+    // Listen for service.started.notification from backend (vendor starts service work)
+    useEffect(() => {
+        if (!effectiveRequestId) return;
 
-            // Show toast notification
-            showToast({
-                type: 'success',
-                title: 'Service Started',
-                message: `${acceptedProposal.vendor?.full_name || 'Vendor'} has arrived. Service started automatically.`,
-                duration: 5000,
-            });
-            setHasShownArrivalToast(true);
+        const unsubscribe = socketService.on('service.started.notification', (data: any) => {
+            if (data.service_request_id === effectiveRequestId) {
+                // Show toast notification when vendor starts service
+                showToast({
+                    type: 'info',
+                    title: 'Service Started',
+                    message: data.message || `${acceptedProposal?.vendor?.full_name || 'Vendor'} has started working on your service.`,
+                    duration: 5000,
+                });
 
-            if (__DEV__) {
-                console.log('[LiveOffers] Vendor arrived - sending service.start action');
+                if (__DEV__) {
+                    console.log('[LiveOffers] Received service.started.notification:', data);
+                }
             }
-        }
-    }, [vendorHasArrived, hasShownArrivalToast, acceptedProposal, effectiveRequestId, showToast]);
+        });
 
-    // Reset arrival toast and auto-started tracking when request changes
+        return () => unsubscribe();
+    }, [effectiveRequestId, acceptedProposal?.vendor?.full_name, showToast]);
+
+    // Reset state when request changes
     useEffect(() => {
         setHasShownArrivalToast(false);
-        autoStartedRequestIdsRef.current.clear();
+        // Reset map fit refs so new request gets proper initial fit
+        hasInitialMapFitRef.current = false;
+        lastZoomLevelRef.current = null;
     }, [effectiveRequestId]);
 
     // Animation for waiting state
@@ -1911,6 +1980,44 @@ export default function LiveOffersScreen() {
         }
     }, [effectiveRequestId, isRefreshingLocation, dispatch, showToast]);
 
+    // Handle "I'm Coming" button - notify vendor that customer is coming
+    const handleImComing = useCallback(async () => {
+        if (!effectiveRequestId || isSendingComingAck || hasSentComingAck) return;
+
+        try {
+            setIsSendingComingAck(true);
+
+            // Send acknowledgement via WebSocket
+            socketService.send('customer.coming', {
+                service_request_id: effectiveRequestId,
+            });
+
+            // Mark as sent (assume success - backend will send error if failed)
+            setHasSentComingAck(true);
+
+            showToast({
+                type: 'success',
+                title: 'Notification Sent',
+                message: 'The vendor has been notified that you are coming.',
+                duration: 3000,
+            });
+
+            if (__DEV__) {
+                console.log('[LiveOffers] Sent customer.coming acknowledgement for request:', effectiveRequestId);
+            }
+        } catch (error) {
+            console.error('[LiveOffers] Failed to send coming acknowledgement:', error);
+            showToast({
+                type: 'error',
+                title: 'Failed',
+                message: 'Could not notify the vendor. Please try again.',
+                duration: 3000,
+            });
+        } finally {
+            setIsSendingComingAck(false);
+        }
+    }, [effectiveRequestId, isSendingComingAck, hasSentComingAck, showToast]);
+
     // Open cancel modal
     const handleCancelRequest = useCallback(() => {
         setShowCancelModal(true);
@@ -2069,35 +2176,41 @@ export default function LiveOffersScreen() {
     }, [originalRequestParams, router, showToast]);
 
     /**
-     * Renders map markers - inDrive style with pulsing destination and rotating car
+     * Renders map markers - styled circular markers with icons
+     * Uses collapsable={false} for Android rendering and tracksViewChanges={false} for memory optimization
      */
     function renderMarkers(): React.ReactNode {
         if (!serviceLocation) return null;
 
         return (
             <>
-                {/* Service Address Marker - Simple location icon */}
+                {/* Service Address Marker - Styled pin with tail */}
                 <Marker
                     key="service-location"
                     coordinate={serviceLocation}
                     anchor={{ x: 0.5, y: 1 }}
+                    tracksViewChanges={false}
                 >
-                    <View collapsable={false}>
-                        <Ionicons name="location" size={36} color={COLORS.accent} />
+                    <View collapsable={false} style={styles.destinationMarkerContainer}>
+                        <View collapsable={false} style={styles.destinationPin}>
+                            <Ionicons name="location" size={22} color={COLORS.white} />
+                        </View>
+                        <View style={styles.destinationPinTail} />
                     </View>
                 </Marker>
 
-                {/* Vendor Car Marker - Simple car icon */}
+                {/* Vendor Marker - Person icon in styled circle */}
                 {acceptedProposal && vendorLocation && !serviceCancelledByVendor && (
                     <Marker
                         key={`vendor-${acceptedProposal.id}`}
                         coordinate={vendorLocation}
                         anchor={{ x: 0.5, y: 0.5 }}
+                        tracksViewChanges={false}
                     >
-                        <View collapsable={false}>
-                            <FontAwesome5
-                                name="car"
-                                size={24}
+                        <View collapsable={false} style={vendorHasArrived ? styles.carMarkerArrived : styles.carMarkerContainer}>
+                            <Ionicons
+                                name="person"
+                                size={22}
                                 color={vendorHasArrived ? COLORS.success : COLORS.primary}
                             />
                         </View>
@@ -2144,6 +2257,41 @@ export default function LiveOffersScreen() {
             default: return 'Almost ready...';
         }
     }, [serviceLocation, initStage]);
+
+    // =========================================================================
+    // MEMOIZED ROUTE POLYLINES
+    // IMPORTANT: Moved outside JSX to prevent "rendered more hooks" error
+    // This useMemo MUST be called before the early return to maintain hook order
+    // =========================================================================
+    const routePolylines = useMemo(() => {
+        // Hide route when vendor has arrived (status = 'arrived') or service started (status = 'in_progress')
+        const vendorHasArrivedOrServiceStarted = currentRequest?.status === 'arrived' || currentRequest?.status === 'in_progress';
+        if (routeCoords.length === 0 || serviceCancelledByVendor || vendorHasArrivedOrServiceStarted) {
+            return null;
+        }
+        return (
+            <>
+                {/* Shadow/glow layer */}
+                <Polyline
+                    coordinates={routeCoords}
+                    strokeColor={routeColors.shadow}
+                    strokeWidth={routeWidths.shadow}
+                />
+                {/* Middle layer */}
+                <Polyline
+                    coordinates={routeCoords}
+                    strokeColor={routeColors.middle}
+                    strokeWidth={routeWidths.middle}
+                />
+                {/* Main route line */}
+                <Polyline
+                    coordinates={routeCoords}
+                    strokeColor={routeColors.main}
+                    strokeWidth={routeWidths.main}
+                />
+            </>
+        );
+    }, [routeCoords, serviceCancelledByVendor, currentRequest?.status]);
 
     // =========================================================================
     // STAGED LOADING SCREEN
@@ -2221,47 +2369,53 @@ export default function LiveOffersScreen() {
                     longitudeDelta: CONSTANTS.MAP_DELTA,
                 }}
             >
-                {/* Gradient Route - 3 layer polylines for glow effect (inDrive style) - Memoized to prevent jerk */}
-                {/* Hide route when vendor cancels OR when vendor has arrived (in_progress) */}
-                {useMemo(() =>
-                    routeCoords.length > 0 && !serviceCancelledByVendor && currentRequest?.status !== 'in_progress' ? (
-                        <>
-                            {/* Shadow/glow layer */}
-                            <Polyline
-                                coordinates={routeCoords}
-                                strokeColor={routeColors.shadow}
-                                strokeWidth={routeWidths.shadow}
-                            />
-                            {/* Middle layer */}
-                            <Polyline
-                                coordinates={routeCoords}
-                                strokeColor={routeColors.middle}
-                                strokeWidth={routeWidths.middle}
-                            />
-                            {/* Main route line */}
-                            <Polyline
-                                coordinates={routeCoords}
-                                strokeColor={routeColors.main}
-                                strokeWidth={routeWidths.main}
-                            />
-                        </>
-                    ) : null
-                , [routeCoords, serviceCancelledByVendor, currentRequest?.status])}
+                {/* Gradient Route - 3 layer polylines for glow effect (inDrive style) */}
+                {/* Memoized outside JSX to prevent "rendered more hooks" error */}
+                {routePolylines}
                 {renderMarkers()}
             </MapView>
 
             {/* Vendor Tracking Info (when route is being tracked) - hide when vendor cancels */}
             {acceptedProposal && vendorLocation && !serviceCancelledByVendor && (
                 <View style={styles.trackingInfoCard}>
-                    {/* Show "Vendor has arrived" when status is in_progress */}
-                    {currentRequest?.status === 'in_progress' ? (
-                        <View style={styles.trackingInfoRow}>
-                            <View style={styles.trackingInfoItem}>
-                                <Ionicons name="checkmark-circle" size={22} color={COLORS.success} />
-                                <Text type="bodySemiBold" style={[styles.trackingInfoValue, { color: COLORS.success, marginLeft: scale(8) }]}>
-                                    Vendor has arrived
-                                </Text>
+                    {/* Show arrival/service status when vendor has arrived or service started */}
+                    {(currentRequest?.status === 'arrived' || currentRequest?.status === 'in_progress') ? (
+                        <View>
+                            <View style={styles.trackingInfoRow}>
+                                <View style={styles.trackingInfoItem}>
+                                    <Ionicons name="checkmark-circle" size={22} color={COLORS.success} />
+                                    <Text type="bodySemiBold" style={[styles.trackingInfoValue, { color: COLORS.success, marginLeft: scale(8) }]}>
+                                        {currentRequest?.status === 'arrived'
+                                            ? 'Vendor has arrived'
+                                            : 'Service in progress'}
+                                    </Text>
+                                </View>
                             </View>
+                            {/* "I'm Coming" button - only show when status is 'arrived' */}
+                            {currentRequest?.status === 'arrived' && !hasSentComingAck && (
+                                <TouchableOpacity
+                                    style={styles.imComingButton}
+                                    onPress={handleImComing}
+                                    disabled={isSendingComingAck}
+                                    activeOpacity={0.7}
+                                >
+                                    {isSendingComingAck ? (
+                                        <ActivityIndicator size="small" color={COLORS.white} />
+                                    ) : (
+                                        <>
+                                            <Ionicons name="walk" size={18} color={COLORS.white} />
+                                            <Text type="bodySemiBold" style={styles.imComingButtonText}>I'm Coming</Text>
+                                        </>
+                                    )}
+                                </TouchableOpacity>
+                            )}
+                            {/* Show confirmation when already sent */}
+                            {currentRequest?.status === 'arrived' && hasSentComingAck && (
+                                <View style={styles.comingAckSent}>
+                                    <Ionicons name="checkmark-circle" size={16} color={COLORS.success} />
+                                    <Text type="body" style={styles.comingAckSentText}>Vendor notified</Text>
+                                </View>
+                            )}
                         </View>
                     ) : (
                         <>
@@ -2346,13 +2500,17 @@ export default function LiveOffersScreen() {
                             <Text type="subtitle" style={styles.sheetTitle}>
                                 {serviceCancelledByVendor
                                     ? 'Request Cancelled'
-                                    : acceptedProposal
-                                        ? 'Vendor on the way'
-                                        : requestExpired
-                                            ? 'Request Expired'
-                                            : activeProposals.length === 0
-                                                ? 'Waiting for proposals...'
-                                                : `${activeProposals.length} Proposal${activeProposals.length > 1 ? 's' : ''} Received`
+                                    : currentRequest?.status === 'in_progress'
+                                        ? 'Service in progress'
+                                        : currentRequest?.status === 'arrived'
+                                            ? 'Vendor has arrived'
+                                            : acceptedProposal
+                                                ? 'Vendor on the way'
+                                                : requestExpired
+                                                    ? 'Request Expired'
+                                                    : activeProposals.length === 0
+                                                        ? 'Waiting for proposals...'
+                                                        : `${activeProposals.length} Proposal${activeProposals.length > 1 ? 's' : ''} Received`
                                 }
                             </Text>
                         </LinearGradient>
@@ -2681,21 +2839,30 @@ const styles = StyleSheet.create({
         shadowRadius: 6,
         elevation: 8,
     },
-    // Destination pin marker - fully rounded circle
+    // Destination pin marker container - explicit dimensions for Android
     destinationMarkerContainer: {
+        width: 50,
+        height: 60, // Taller to accommodate tail
         alignItems: 'center',
-        justifyContent: 'center',
+        justifyContent: 'flex-start',
     },
 
     destinationPin: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
+        width: 46,
+        height: 46,
+        borderRadius: 23,
         backgroundColor: COLORS.accent,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 2,
+        borderWidth: 3,
         borderColor: COLORS.white,
+        // Shadow for iOS
+        shadowColor: COLORS.black,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 4,
+        // Elevation for Android
+        elevation: 6,
     },
 
     destinationPinTail: {
@@ -2709,26 +2876,41 @@ const styles = StyleSheet.create({
         borderTopColor: COLORS.accent,
         marginTop: -2,
     },
-    // Car marker - fully rounded circle
+    // Vendor person marker - fully rounded circle with shadow
+    // Note: This is used directly without a container wrapper
     carMarkerContainer: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
+        width: 50,
+        height: 50,
+        borderRadius: 25,
         backgroundColor: COLORS.white,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 2,
+        borderWidth: 3,
         borderColor: COLORS.primary,
+        // Shadow for iOS
+        shadowColor: COLORS.black,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 4,
+        // Elevation for Android
+        elevation: 6,
     },
     carMarkerArrived: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
+        width: 50,
+        height: 50,
+        borderRadius: 25,
         backgroundColor: '#E8F5E9',
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 2,
+        borderWidth: 3,
         borderColor: COLORS.success,
+        // Shadow for iOS
+        shadowColor: COLORS.black,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 4,
+        // Elevation for Android
+        elevation: 6,
     },
 
     // Tracking info card
@@ -2771,6 +2953,38 @@ const styles = StyleSheet.create({
         padding: scale(8),
         backgroundColor: COLORS.primary + '15',
         borderRadius: moderateScale(8),
+    },
+
+    // "I'm Coming" button (customer response to vendor arrival)
+    imComingButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: scale(8),
+        marginTop: verticalScale(12),
+        paddingVertical: verticalScale(12),
+        paddingHorizontal: scale(20),
+        backgroundColor: COLORS.primary,
+        borderRadius: moderateScale(10),
+    },
+    imComingButtonText: {
+        color: COLORS.white,
+        fontSize: moderateScale(14),
+    },
+    comingAckSent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: scale(6),
+        marginTop: verticalScale(10),
+        paddingVertical: verticalScale(8),
+        paddingHorizontal: scale(16),
+        backgroundColor: COLORS.success + '15',
+        borderRadius: moderateScale(8),
+    },
+    comingAckSentText: {
+        color: COLORS.success,
+        fontSize: moderateScale(13),
     },
 
     // Cancel button

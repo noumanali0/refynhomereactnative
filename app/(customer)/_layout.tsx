@@ -1,10 +1,75 @@
 // app/(customer)/_layout.tsx
-import { Tabs, useSegments } from "expo-router";
+import { Tabs, useRouter, useSegments } from "expo-router";
 import GradientIcon from "@/components/common/GradientIcon";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { moderateScale, verticalScale } from "react-native-size-matters";
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { AppDispatch, RootState } from "@/store";
+import {
+    selectCompletedService,
+    clearCompletedService,
+} from "@/store/slices/dispatchSlice";
+import { clearReviewState } from "@/store/slices/reviewSlice";
+import RatingModal from "@/components/common/RatingModal";
+import { resetArrivalNotification } from "@/utils/notifications";
 
+/**
+ * Global Rating Modal Component
+ * Shows rating modal on any customer screen when vendor completes service
+ */
+function GlobalRatingModal() {
+    const dispatch = useDispatch<AppDispatch>();
+    const router = useRouter();
+    const segments = useSegments();
+    const completedService = useSelector(selectCompletedService);
+    const [showModal, setShowModal] = useState(false);
+
+    // Check if user is on live-offers screen (which has its own rating modal)
+    const isOnLiveOffers = useMemo(() => {
+        return segments.includes('live-offers');
+    }, [segments]);
+
+    // Show modal when service is completed and NOT on live-offers
+    // (live-offers has its own local modal to avoid duplicate)
+    useEffect(() => {
+        if (completedService && !isOnLiveOffers) {
+            setShowModal(true);
+            if (__DEV__) {
+                console.log('[GlobalRatingModal] Service completed, showing rating modal:', {
+                    requestId: completedService.requestId,
+                    vendorName: completedService.vendorName,
+                    currentScreen: segments.join('/'),
+                });
+            }
+        }
+    }, [completedService, isOnLiveOffers, segments]);
+
+    const handleClose = useCallback(() => {
+        setShowModal(false);
+        if (completedService) {
+            resetArrivalNotification(completedService.requestId);
+        }
+        dispatch(clearCompletedService());
+        dispatch(clearReviewState());
+        // Navigate to home after rating
+        router.replace('/(customer)/(home)/');
+    }, [completedService, dispatch, router]);
+
+    if (!completedService || !showModal) {
+        return null;
+    }
+
+    return (
+        <RatingModal
+            visible={showModal}
+            onClose={handleClose}
+            onSuccess={handleClose}
+            serviceRequestId={completedService.requestId}
+            vendorName={completedService.vendorName}
+        />
+    );
+}
 
 export default function CustomerTabsLayout() {
     const segments = useSegments();
@@ -103,6 +168,8 @@ export default function CustomerTabsLayout() {
                 }}
             />
         </Tabs>
+            {/* Global Rating Modal - shows on any customer screen when vendor completes service */}
+            <GlobalRatingModal />
         </ErrorBoundary>
     );
 }

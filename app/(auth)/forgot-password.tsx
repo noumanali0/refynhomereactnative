@@ -353,26 +353,25 @@ export default function ForgotPassword() {
                                 </TouchableOpacity>
 
                                 {/* New Password */}
-                                <View style={styles.inputContainer}>
-                                    <Text type='body2' style={styles.inputLabel}>New Password</Text>
-                                    <PasswordInput
-                                        value={newPassword}
-                                        onChangeText={setNewPassword}
-                                        placeholder="Enter new password"
-                                        style={styles.passwordInput}
-                                    />
-                                </View>
+                                <PasswordInput
+                                    value={newPassword}
+                                    onChangeText={setNewPassword}
+                                    placeholder="Enter new password"
+                                    label="New Password"
+                                    showStrengthIndicator={true}
+                                    autoComplete="password-new"
+                                    textContentType="newPassword"
+                                />
 
                                 {/* Confirm Password */}
-                                <View style={styles.inputContainer}>
-                                    <Text type='body2' style={styles.inputLabel}>Confirm Password</Text>
-                                    <PasswordInput
-                                        value={confirmPassword}
-                                        onChangeText={setConfirmPassword}
-                                        placeholder="Confirm new password"
-                                        style={styles.passwordInput}
-                                    />
-                                </View>
+                                <PasswordInput
+                                    value={confirmPassword}
+                                    onChangeText={setConfirmPassword}
+                                    placeholder="Confirm new password"
+                                    label="Confirm Password"
+                                    autoComplete="password-new"
+                                    textContentType="newPassword"
+                                />
 
                                 <View style={styles.buttonContainer}>
                                     <TouchableOpacity
@@ -566,13 +565,6 @@ const styles = StyleSheet.create({
         color: '#0f172a',
         letterSpacing: 8,
         textAlign: 'center',
-    },
-    passwordInput: {
-        height: moderateScale(56),
-        borderRadius: 16,
-        backgroundColor: '#f8fafc',
-        borderWidth: 1.6,
-        borderColor: '#e2e8f0',
     },
     resendContainer: {
         alignItems: 'center',

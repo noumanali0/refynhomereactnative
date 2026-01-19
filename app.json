@@ -21,6 +21,7 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "RefynHome needs your location to show nearby service vendors and provide accurate arrival times.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "We need your location to provide real-time service tracking even when the app is in the background.",
+        "NSCameraUsageDescription": "RefynHome needs camera access to scan and capture your NIC document for verification.",
         "UIBackgroundModes": ["location", "fetch"]
       }
     },
@@ -32,7 +33,8 @@
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_LOCATION",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA"
       ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",

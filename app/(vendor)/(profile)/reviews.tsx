@@ -283,7 +283,7 @@ export default function ReviewsScreen() {
                         <Ionicons name="arrow-back" size={24} color={COLORS.white} />
                     </TouchableOpacity>
                     <View style={styles.headerTextContainer}>
-                        <Text type="title" style={styles.headerTitle}>Reviews</Text>
+                        <Text type="headerTitle" style={styles.headerTitle}>Reviews</Text>
                         <Text type="subtitle" style={styles.headerSubtitle}>
                             {totalCount > 0 ? `${totalCount} total reviews` : 'No reviews yet'}
                         </Text>
@@ -452,8 +452,6 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     headerTitle: {
-        fontSize: moderateScale(24),
-        fontWeight: '800',
         color: COLORS.white,
         marginBottom: verticalScale(2),
     },

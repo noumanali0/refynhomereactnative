@@ -39,6 +39,8 @@ import {
     selectProposalsByRequestId,
     sendProposal,
     completeService,
+    markVendorArrived,
+    startService,
     updateLocation,
     cleanupCompletedService,
     selectCancelledService,
@@ -57,44 +59,12 @@ import {
     flushLocationQueue,
 } from '@/services/backgroundLocationService';
 import { getDistance } from '@/utils/distanceCache';
-import { simplifyRoute } from '@/utils/polylineSimplify';
 import { activeJobService } from '@/services/activeJobService';
 import { haversineDistanceKm } from '@/utils/geo';
-// Google Routes API service - ready for integration when client enables the API
-// import { googleDirectionsService, type RouteInfo } from '@/services/googleDirectionsService';
+import { useRouteTracking } from '@/hooks/useRouteTracking';
 
-interface RouteInfo {
-    distance: number;
-    duration: number;
-    coordinates: Coordinates[];
-}
-
-// ============================================================================
-// Constants for Route Optimization
-// ============================================================================
-
-const ROUTE_CONSTANTS = {
-    /** Minimum time between route API calls in milliseconds */
-    THROTTLE_MS: 15000, // 15 seconds (optimized for low-end devices)
-    /** Minimum distance change in meters to trigger route refetch */
-    SIGNIFICANT_DISTANCE_M: 100,
-} as const;
-
-/**
- * Calculate distance between two coordinates using Haversine formula.
- * Returns distance in meters.
- */
-function getDistanceInMeters(
-    coord1: Coordinates,
-    coord2: Coordinates
-): number {
-    return haversineDistanceKm(
-        coord1.latitude,
-        coord1.longitude,
-        coord2.latitude,
-        coord2.longitude
-    ) * 1000; // Convert km to meters
-}
+// NOTE: Route fetching is now handled by useRouteTracking hook
+// This ensures consistent distance/ETA with customer side
 
 export default function WebSocketRequestDetailsScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
@@ -114,6 +84,12 @@ export default function WebSocketRequestDetailsScreen() {
     );
     const isPendingComplete = useSelector((s: RootState) =>
         selectIsPending(s, `route_complete_${requestId}`)
+    );
+    const isPendingArrived = useSelector((s: RootState) =>
+        selectIsPending(s, `vendor_arrived_${requestId}`)
+    );
+    const isPendingStartService = useSelector((s: RootState) =>
+        selectIsPending(s, `service_start_${requestId}`)
     );
     const cancelledService = useSelector(selectCancelledService);
 
@@ -135,7 +111,8 @@ export default function WebSocketRequestDetailsScreen() {
         // 2. Check if there's an accepted proposal (from proposal.updated event)
         if (acceptedProposal) return true;
         // 3. Check request status (from service_request.updated event)
-        if (request.status === 'en_route' || request.status === 'in_progress') return true;
+        // IMPORTANT: Include 'arrived' status for persistence across app restarts
+        if (request.status === 'en_route' || request.status === 'arrived' || request.status === 'in_progress') return true;
         return false;
     }, [request, acceptedProposal]);
 
@@ -204,7 +181,6 @@ export default function WebSocketRequestDetailsScreen() {
 
     // Local state
     const [vendorLocation, setVendorLocation] = useState<Coordinates | null>(null);
-    const [routeInfo, setRouteInfo] = useState<RouteInfo | null>(null);
     const [proposalAmount, setProposalAmount] = useState<number>(500);
     const [proposalMessage, setProposalMessage] = useState<string>('');
     const [isLoading, setIsLoading] = useState(true);
@@ -227,17 +203,19 @@ export default function WebSocketRequestDetailsScreen() {
     // Track if arrival toast has been shown (prevents duplicate toasts)
     const [hasShownArrivalToast, setHasShownArrivalToast] = useState(false);
 
+    // 5-minute minimum service duration timer state
+    const [serviceStartTime, setServiceStartTime] = useState<string | null>(null);
+    const [minDurationMinutes, setMinDurationMinutes] = useState<number>(5);
+    const [serviceTimeRemaining, setServiceTimeRemaining] = useState<number>(0);
+    const serviceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
     // Refs
     const locationWatchRef = useRef<Location.LocationSubscription | null>(null);
-    const routeFetchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-    const lastRouteFetchRef = useRef<number>(0);
     const isBackgroundTrackingActiveRef = useRef<boolean>(false);
     const appStateRef = useRef<AppStateStatus>(AppState.currentState);
     const isMountedRef = useRef<boolean>(true);
     const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const progressAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
-    // Track previous vendor location for significant distance check
-    const prevVendorLocationForRouteRef = useRef<Coordinates | null>(null);
 
     // Customer location from request
     const customerLocation = useMemo(() => {
@@ -266,6 +244,22 @@ export default function WebSocketRequestDetailsScreen() {
         return `${straightLineDistanceKm.toFixed(1)}km`;
     }, [straightLineDistanceKm]);
 
+    // =========================================================================
+    // Route Tracking - Uses shared useRouteTracking hook for consistent
+    // distance/ETA with customer side
+    // =========================================================================
+    const {
+        routeCoords,
+        roadDistanceFormatted,
+        etaMinutes,
+        etaFormatted,
+        isLoading: isRouteLoading,
+    } = useRouteTracking({
+        vendorLocation,
+        serviceLocation: customerLocation,
+        enabled: isAccepted && !!vendorLocation && !!customerLocation,
+    });
+
     // Cleanup on unmount
     useEffect(() => {
         isMountedRef.current = true;
@@ -278,10 +272,7 @@ export default function WebSocketRequestDetailsScreen() {
                 clearInterval(timerIntervalRef.current);
                 timerIntervalRef.current = null;
             }
-            if (routeFetchTimeoutRef.current) {
-                clearTimeout(routeFetchTimeoutRef.current);
-                routeFetchTimeoutRef.current = null;
-            }
+            // NOTE: routeFetchTimeoutRef removed - route tracking now handled by useRouteTracking hook
 
             // Stop animations
             if (progressAnimationRef.current) {
@@ -358,8 +349,10 @@ export default function WebSocketRequestDetailsScreen() {
 
             if (requestExpiresAt <= now) {
                 // Don't remove if it's an accepted/active service
+                // IMPORTANT: Include 'arrived' status - vendor has marked arrival but may not have started service yet
                 const isActiveService = request.vendor_status === 'accepted' ||
                     request.status === 'en_route' ||
+                    request.status === 'arrived' ||
                     request.status === 'in_progress';
 
                 if (!isActiveService) {
@@ -388,6 +381,57 @@ export default function WebSocketRequestDetailsScreen() {
             setProposalExpired(true);
         }
     }, [timeLeft, request?.already_sent, request?.vendor_status]);
+
+    // Service minimum duration timer - counts down 5 minutes after service starts
+    // Disables "Mark as Complete" button until timer reaches 0
+    // IMPORTANT: Uses backend's service_start_time for persistence across app restarts
+    useEffect(() => {
+        // Determine the start time - prefer backend data (persisted), fall back to local state
+        const effectiveStartTime = request?.service_start_time || serviceStartTime;
+        const effectiveMinDuration = request?.min_duration_minutes || minDurationMinutes;
+
+        // Only run timer when service is in_progress and we have a start time
+        if (request?.status !== 'in_progress' || !effectiveStartTime) {
+            // Clear timer if status changed or no start time
+            if (serviceTimerRef.current) {
+                clearInterval(serviceTimerRef.current);
+                serviceTimerRef.current = null;
+            }
+            setServiceTimeRemaining(0);
+            return;
+        }
+
+        // Calculate remaining time based on backend's service_start_time
+        const calculateRemaining = () => {
+            const startTime = new Date(effectiveStartTime).getTime();
+            const duration = effectiveMinDuration * 60 * 1000;
+            const endTime = startTime + duration;
+            return Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+        };
+
+        // Set initial value
+        setServiceTimeRemaining(calculateRemaining());
+
+        // Start countdown interval
+        serviceTimerRef.current = setInterval(() => {
+            if (!isMountedRef.current) return;
+            const remaining = calculateRemaining();
+            setServiceTimeRemaining(remaining);
+
+            // Stop timer when it reaches 0
+            if (remaining <= 0 && serviceTimerRef.current) {
+                clearInterval(serviceTimerRef.current);
+                serviceTimerRef.current = null;
+            }
+        }, 1000);
+
+        return () => {
+            if (serviceTimerRef.current) {
+                clearInterval(serviceTimerRef.current);
+                serviceTimerRef.current = null;
+            }
+        };
+    }, [request?.status, request?.service_start_time, request?.min_duration_minutes, serviceStartTime, minDurationMinutes]);
 
     // Determine if screen is locked (vendor cannot navigate away)
     const isLocked = useMemo(() => {
@@ -598,11 +642,11 @@ export default function WebSocketRequestDetailsScreen() {
         };
     }, []);
 
-    // Stop location tracking when vendor arrives (status becomes in_progress)
+    // Stop location tracking when vendor marks arrival (status becomes 'arrived')
     // Battery optimization: No need to track location when vendor is already at customer's place
-    // Backend also stops broadcasting location to customer in IN_PROGRESS status
+    // Backend also stops broadcasting location to customer once vendor arrives
     useEffect(() => {
-        if (request?.status === 'in_progress') {
+        if (request?.status === 'arrived' || request?.status === 'in_progress') {
             // Stop foreground location watcher
             if (locationWatchRef.current) {
                 locationWatchRef.current.remove();
@@ -614,7 +658,7 @@ export default function WebSocketRequestDetailsScreen() {
                 isBackgroundTrackingActiveRef.current = false;
             }
             if (__DEV__) {
-                console.log('[VendorDetails] Stopped location tracking - vendor arrived (in_progress)');
+                console.log('[VendorDetails] Stopped location tracking - vendor arrived (status:', request?.status, ')');
             }
         }
     }, [request?.status]);
@@ -734,121 +778,8 @@ export default function WebSocketRequestDetailsScreen() {
         }
     };
 
-    // Fetch route with throttling and significant distance check
-    // Currently using OSRM - Switch to Google Routes API when client enables it:
-    // 1. Uncomment the googleDirectionsService import at the top
-    // 2. Replace the OSRM fetch below with: const route = await googleDirectionsService.getRoute(vendorLocation, customerLocation);
-    useEffect(() => {
-        if (!vendorLocation || !customerLocation || !isMountedRef.current) return;
-
-        // CRITICAL: Only process if vendor location changed significantly (>100m)
-        // This prevents crash on low-end devices from frequent small location updates
-        const isFirstLocation = prevVendorLocationForRouteRef.current === null;
-        if (!isFirstLocation) {
-            const distanceMoved = getDistanceInMeters(
-                prevVendorLocationForRouteRef.current!,
-                vendorLocation
-            );
-
-            if (distanceMoved < ROUTE_CONSTANTS.SIGNIFICANT_DISTANCE_M) {
-                if (__DEV__) {
-                    console.log(
-                        `[VendorDetails] Skipping route fetch - moved only ${distanceMoved.toFixed(0)}m (< ${ROUTE_CONSTANTS.SIGNIFICANT_DISTANCE_M}m)`
-                    );
-                }
-                return; // Skip - location change not significant enough
-            }
-        }
-
-        // Update previous location reference
-        prevVendorLocationForRouteRef.current = vendorLocation;
-
-        const now = Date.now();
-        const timeSinceLastFetch = now - lastRouteFetchRef.current;
-
-        // Clear any pending timeout
-        if (routeFetchTimeoutRef.current) {
-            clearTimeout(routeFetchTimeoutRef.current);
-            routeFetchTimeoutRef.current = null;
-        }
-
-        const fetchRoute = async () => {
-            if (!isMountedRef.current) return;
-
-            try {
-                lastRouteFetchRef.current = Date.now();
-
-                // Using OSRM for now - switch to Google Routes API when enabled
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout
-
-                const res = await fetch(
-                    `https://router.project-osrm.org/route/v1/driving/${vendorLocation.longitude},${vendorLocation.latitude};${customerLocation.longitude},${customerLocation.latitude}?overview=full&geometries=geojson`,
-                    { signal: controller.signal }
-                );
-
-                clearTimeout(timeoutId);
-
-                if (!isMountedRef.current) return;
-
-                const data = await res.json();
-
-                if (data.routes && data.routes[0] && isMountedRef.current) {
-                    const route = data.routes[0];
-                    const rawCoords = route.geometry.coordinates.map(
-                        ([lng, lat]: [number, number]) => ({
-                            latitude: lat,
-                            longitude: lng,
-                        })
-                    );
-
-                    // CRITICAL: Simplify route to max ~80 points to prevent Polyline crash
-                    // OSRM can return 2000+ points which crashes low-end devices
-                    const coords = simplifyRoute(rawCoords);
-
-                    if (__DEV__) {
-                        console.log('[VendorDetails] Route updated (OSRM):', {
-                            distance: route.distance,
-                            duration: route.duration,
-                            rawCoordsCount: rawCoords.length,
-                            simplifiedCoordsCount: coords.length,
-                        });
-                    }
-
-                    setRouteInfo({
-                        distance: route.distance,
-                        duration: route.duration,
-                        coordinates: coords,
-                    });
-                }
-            } catch (error: any) {
-                if (error.name !== 'AbortError') {
-                    console.error('[VendorDetails] Route fetch error:', error);
-                }
-            }
-        };
-
-        // If first fetch or enough time has passed, fetch with InteractionManager defer
-        // This prevents main thread blocking during route processing
-        if (lastRouteFetchRef.current === 0 || timeSinceLastFetch >= ROUTE_CONSTANTS.THROTTLE_MS) {
-            InteractionManager.runAfterInteractions(() => {
-                if (isMountedRef.current) {
-                    fetchRoute();
-                }
-            });
-        } else {
-            // Schedule fetch after remaining throttle time
-            const delay = ROUTE_CONSTANTS.THROTTLE_MS - timeSinceLastFetch;
-            routeFetchTimeoutRef.current = setTimeout(fetchRoute, delay);
-        }
-
-        return () => {
-            if (routeFetchTimeoutRef.current) {
-                clearTimeout(routeFetchTimeoutRef.current);
-                routeFetchTimeoutRef.current = null;
-            }
-        };
-    }, [vendorLocation, customerLocation]);
+    // NOTE: Route fetching is now handled by useRouteTracking hook above
+    // This ensures consistent distance/ETA with customer side
 
     // Auto-zoom to fit both markers when locations are available
     useEffect(() => {
@@ -870,19 +801,8 @@ export default function WebSocketRequestDetailsScreen() {
         return () => clearTimeout(timer);
     }, [vendorLocation, customerLocation]);
 
-    // Format helpers
-    const formatDistance = (meters: number): string => {
-        if (meters < 1000) return `${Math.round(meters)}m`;
-        return `${(meters / 1000).toFixed(1)}km`;
-    };
-
-    const formatDuration = (seconds: number): string => {
-        const mins = Math.round(seconds / 60);
-        if (mins < 60) return `${mins} min`;
-        const hours = Math.floor(mins / 60);
-        const remainingMins = mins % 60;
-        return `${hours}h ${remainingMins}m`;
-    };
+    // NOTE: formatDistance and formatDuration removed - now using roadDistanceFormatted
+    // and etaFormatted from useRouteTracking hook for consistency with customer side
 
     // Handle send proposal
     const handleSendProposal = useCallback(async () => {
@@ -903,7 +823,7 @@ export default function WebSocketRequestDetailsScreen() {
                 serviceRequestId: requestId,
                 priceQuote: proposalAmount,
                 message: proposalMessage || undefined,
-                etaMinutes: routeInfo ? Math.round(routeInfo.duration / 60) : undefined,
+                etaMinutes: etaMinutes ?? undefined,
                 // COMMENTED OUT for testing - location should be initialized on socket connect now
                 // vendorLatitude: vendorLocation?.latitude,
                 // vendorLongitude: vendorLocation?.longitude,
@@ -921,7 +841,79 @@ export default function WebSocketRequestDetailsScreen() {
                 message: error.message || 'Failed to send proposal. Please try again.',
             });
         }
-    }, [dispatch, requestId, proposalAmount, proposalMessage, routeInfo, showToast]);
+    }, [dispatch, requestId, proposalAmount, proposalMessage, etaMinutes, showToast]);
+
+    // Handle marking arrival at customer location (NEW FLOW)
+    const handleMarkArrival = useCallback(async () => {
+        if (!vendorLocation) {
+            showToast({
+                type: 'error',
+                title: 'Location Required',
+                message: 'Unable to get your current location. Please ensure location services are enabled.',
+            });
+            return;
+        }
+
+        try {
+            await dispatch(markVendorArrived({
+                serviceRequestId: requestId,
+                latitude: vendorLocation.latitude,
+                longitude: vendorLocation.longitude,
+            })).unwrap();
+
+            showToast({
+                type: 'success',
+                title: 'Arrival Confirmed',
+                message: 'You have marked your arrival. You can now start the service.',
+            });
+        } catch (error: any) {
+            showToast({
+                type: 'error',
+                title: 'Arrival Failed',
+                message: error.message || 'Failed to mark arrival. Please try again.',
+            });
+        }
+    }, [dispatch, requestId, vendorLocation, showToast]);
+
+    // Handle starting service after arrival (NEW FLOW)
+    const handleStartService = useCallback(async () => {
+        try {
+            const rawResult = await dispatch(startService(requestId)).unwrap();
+
+            // Cast to expected type from backend ACK response
+            // Backend sends: { service_request_id, service_start_time, min_duration_minutes }
+            const result = rawResult as unknown as {
+                service_request_id: number;
+                service_start_time?: string;
+                min_duration_minutes?: number;
+            } | null;
+
+            // Store service start time and min duration from ACK response
+            if (result?.service_start_time) {
+                setServiceStartTime(result.service_start_time);
+                if (result.min_duration_minutes) {
+                    setMinDurationMinutes(result.min_duration_minutes);
+                }
+                // Calculate initial remaining time
+                const startTime = new Date(result.service_start_time).getTime();
+                const duration = (result.min_duration_minutes || 5) * 60 * 1000;
+                const remaining = Math.max(0, Math.ceil((startTime + duration - Date.now()) / 1000));
+                setServiceTimeRemaining(remaining);
+            }
+
+            showToast({
+                type: 'success',
+                title: 'Service Started',
+                message: 'Service has begun. Complete the work and mark it done when finished.',
+            });
+        } catch (error: any) {
+            showToast({
+                type: 'error',
+                title: 'Start Failed',
+                message: error.message || 'Failed to start service. Please try again.',
+            });
+        }
+    }, [dispatch, requestId, showToast]);
 
     // Open complete modal
     const handleComplete = useCallback(() => {
@@ -1091,6 +1083,62 @@ export default function WebSocketRequestDetailsScreen() {
         setHasShownArrivalToast(false);
     }, [requestId]);
 
+    // Listen for customer.coming.notification from backend (customer is coming to meet vendor)
+    useEffect(() => {
+        if (!requestId) return;
+
+        const unsubscribe = socketService.on('customer.coming.notification', (data: any) => {
+            if (data.service_request_id === requestId) {
+                showToast({
+                    type: 'info',
+                    title: 'Customer Is Coming',
+                    message: data.message || 'The customer is coming to meet you.',
+                    duration: 5000,
+                });
+
+                if (__DEV__) {
+                    console.log('[VendorDetails] Received customer.coming.notification:', data);
+                }
+            }
+        });
+
+        return () => unsubscribe();
+    }, [requestId, showToast]);
+
+    // =========================================================================
+    // MEMOIZED ROUTE POLYLINES
+    // IMPORTANT: Moved outside JSX to prevent "rendered more hooks" error
+    // This useMemo MUST be called before the early returns to maintain hook order
+    // Now uses routeCoords from useRouteTracking hook for consistency with customer side
+    // =========================================================================
+    const routePolylines = useMemo(() => {
+        if (routeCoords.length === 0) {
+            return null;
+        }
+        return (
+            <>
+                {/* Shadow/glow layer */}
+                <Polyline
+                    coordinates={routeCoords}
+                    strokeColor="rgba(29, 78, 216, 0.15)"
+                    strokeWidth={10}
+                />
+                {/* Middle layer */}
+                <Polyline
+                    coordinates={routeCoords}
+                    strokeColor="rgba(29, 78, 216, 0.4)"
+                    strokeWidth={6}
+                />
+                {/* Main route line */}
+                <Polyline
+                    coordinates={routeCoords}
+                    strokeColor={COLORS.primary}
+                    strokeWidth={4}
+                />
+            </>
+        );
+    }, [routeCoords]);
+
     // Show loader when navigating after completion (prevents "not found" flash)
     if (isCompletionNavigating) {
         return (
@@ -1220,13 +1268,16 @@ export default function WebSocketRequestDetailsScreen() {
                         shouldReplaceMapContent={true}
                     />
                 )} */}
-                {/* Vendor Car Marker */}
+                {/* Vendor Marker - Person icon */}
                 <Marker
                     coordinate={vendorLocation}
                     anchor={{ x: 0.5, y: 0.5 }}
+                    tracksViewChanges={false}
                 >
-                    <View collapsable={false} style={styles.vendorMarker}>
-                        <FontAwesome5 name="car" size={18} color={COLORS.primary} />
+                    <View collapsable={false} style={styles.vendorMarkerContainer}>
+                        <View collapsable={false} style={styles.vendorMarker}>
+                            <Ionicons name="person" size={22} color={COLORS.primary} />
+                        </View>
                     </View>
                 </Marker>
 
@@ -1234,6 +1285,7 @@ export default function WebSocketRequestDetailsScreen() {
                 <Marker
                     coordinate={customerLocation}
                     anchor={{ x: 0.5, y: 1 }}
+                    tracksViewChanges={false}
                 >
                     <View collapsable={false} style={styles.customerMarkerContainer}>
                         <View collapsable={false} style={styles.customerMarker}>
@@ -1243,31 +1295,9 @@ export default function WebSocketRequestDetailsScreen() {
                     </View>
                 </Marker>
 
-                {/* Route with 3-layer gradient effect - Memoized to prevent jerk */}
-                {useMemo(() =>
-                    routeInfo && routeInfo.coordinates.length > 0 ? (
-                        <>
-                            {/* Shadow/glow layer */}
-                            <Polyline
-                                coordinates={routeInfo.coordinates}
-                                strokeColor="rgba(29, 78, 216, 0.15)"
-                                strokeWidth={10}
-                            />
-                            {/* Middle layer */}
-                            <Polyline
-                                coordinates={routeInfo.coordinates}
-                                strokeColor="rgba(29, 78, 216, 0.4)"
-                                strokeWidth={6}
-                            />
-                            {/* Main route line */}
-                            <Polyline
-                                coordinates={routeInfo.coordinates}
-                                strokeColor={COLORS.primary}
-                                strokeWidth={4}
-                            />
-                        </>
-                    ) : null
-                , [routeInfo?.coordinates])}
+                {/* Route with 3-layer gradient effect */}
+                {/* Memoized outside JSX to prevent "rendered more hooks" error */}
+                {routePolylines}
             </MapView>
 
             {/* Back Button */}
@@ -1297,17 +1327,17 @@ export default function WebSocketRequestDetailsScreen() {
                 <Ionicons name="arrow-back" size={22} color={COLORS.gray800} />
             </TouchableOpacity>
 
-            {/* ETA Card - Compact */}
-            {routeInfo && (
+            {/* ETA Card - Compact - Uses values from useRouteTracking hook */}
+            {(roadDistanceFormatted || etaFormatted) && (
                 <View style={styles.etaCard}>
                     <View style={styles.etaItem}>
                         <Ionicons name="navigate" size={16} color={COLORS.primary} />
-                        <Text type="caption" style={styles.etaValue}>{formatDistance(routeInfo.distance)}</Text>
+                        <Text type="caption" style={styles.etaValue}>{roadDistanceFormatted || 'Calculating...'}</Text>
                     </View>
                     <View style={styles.etaDivider} />
                     <View style={styles.etaItem}>
                         <Ionicons name="time" size={16} color={COLORS.accent} />
-                        <Text type="caption" style={styles.etaValue}>{formatDuration(routeInfo.duration)}</Text>
+                        <Text type="caption" style={styles.etaValue}>{etaFormatted || 'Calculating...'}</Text>
                     </View>
                 </View>
             )}
@@ -1533,31 +1563,31 @@ export default function WebSocketRequestDetailsScreen() {
                         </View>
                     )}
 
-                    {/* Mark as Complete - shows after proposal accepted */}
-                    {isAccepted && request?.status !== 'completed' && (
+                    {/* STEP 1: I Have Arrived - shows when en_route and within range */}
+                    {isAccepted && request?.status === 'en_route' && (
                         <TouchableOpacity
-                            style={[styles.actionButton, (isPendingComplete || !isWithinRange) && styles.buttonDisabled]}
-                            onPress={handleComplete}
-                            disabled={isPendingComplete || !isWithinRange}
+                            style={[styles.actionButton, (isPendingArrived || !isWithinRange) && styles.buttonDisabled]}
+                            onPress={handleMarkArrival}
+                            disabled={isPendingArrived || !isWithinRange}
                         >
                             <LinearGradient
-                                colors={isWithinRange ? [COLORS.success, '#059669'] : [COLORS.gray400, COLORS.gray500]}
+                                colors={isWithinRange ? [COLORS.primary, COLORS.accent] : [COLORS.gray400, COLORS.gray500]}
                                 start={{ x: 0, y: 0 }}
                                 end={{ x: 1, y: 0 }}
                                 style={styles.gradientButton}
                             >
-                                {isPendingComplete ? (
+                                {isPendingArrived ? (
                                     <ActivityIndicator color={COLORS.white} size="small" />
                                 ) : (
                                     <>
                                         <Ionicons
-                                            name={isWithinRange ? "checkmark-circle" : "navigate"}
+                                            name={isWithinRange ? "location" : "navigate"}
                                             size={24}
                                             color={COLORS.white}
                                         />
                                         <Text type="button" style={styles.actionButtonText}>
                                             {isWithinRange
-                                                ? 'Mark as Complete'
+                                                ? 'I Have Arrived'
                                                 : `${formattedStraightLineDistance || 'Calculating...'} away`
                                             }
                                         </Text>
@@ -1567,7 +1597,69 @@ export default function WebSocketRequestDetailsScreen() {
                         </TouchableOpacity>
                     )}
 
-                    {/* Cancel Job Button - shows after proposal accepted, but not in_progress */}
+                    {/* STEP 2: Start Service - shows when arrived */}
+                    {isAccepted && request?.status === 'arrived' && (
+                        <TouchableOpacity
+                            style={[styles.actionButton, isPendingStartService && styles.buttonDisabled]}
+                            onPress={handleStartService}
+                            disabled={isPendingStartService}
+                        >
+                            <LinearGradient
+                                colors={[COLORS.primary, COLORS.accent]}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 0 }}
+                                style={styles.gradientButton}
+                            >
+                                {isPendingStartService ? (
+                                    <ActivityIndicator color={COLORS.white} size="small" />
+                                ) : (
+                                    <>
+                                        <Ionicons name="play-circle" size={24} color={COLORS.white} />
+                                        <Text type="button" style={styles.actionButtonText}>
+                                            Start Service
+                                        </Text>
+                                    </>
+                                )}
+                            </LinearGradient>
+                        </TouchableOpacity>
+                    )}
+
+                    {/* STEP 3: Mark as Complete - shows when in_progress */}
+                    {/* Disabled until 5-minute minimum service duration is reached (server-side enforced) */}
+                    {isAccepted && request?.status === 'in_progress' && (
+                        <TouchableOpacity
+                            style={[styles.actionButton, (isPendingComplete || serviceTimeRemaining > 0) && styles.buttonDisabled]}
+                            onPress={handleComplete}
+                            disabled={isPendingComplete || serviceTimeRemaining > 0}
+                        >
+                            <LinearGradient
+                                colors={serviceTimeRemaining > 0 ? [COLORS.gray400, COLORS.gray500] : [COLORS.success, '#059669']}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 0 }}
+                                style={styles.gradientButton}
+                            >
+                                {isPendingComplete ? (
+                                    <ActivityIndicator color={COLORS.white} size="small" />
+                                ) : serviceTimeRemaining > 0 ? (
+                                    <>
+                                        <Ionicons name="time" size={24} color={COLORS.white} />
+                                        <Text type="button" style={styles.actionButtonText}>
+                                            Wait {Math.floor(serviceTimeRemaining / 60)}:{String(serviceTimeRemaining % 60).padStart(2, '0')}
+                                        </Text>
+                                    </>
+                                ) : (
+                                    <>
+                                        <Ionicons name="checkmark-circle" size={24} color={COLORS.white} />
+                                        <Text type="button" style={styles.actionButtonText}>
+                                            Mark as Complete
+                                        </Text>
+                                    </>
+                                )}
+                            </LinearGradient>
+                        </TouchableOpacity>
+                    )}
+
+                    {/* Cancel Job Button - shows when en_route or arrived (before in_progress) */}
                     {isAccepted && request?.status !== 'completed' && request?.status !== 'in_progress' && (
                         <TouchableOpacity
                             style={styles.cancelJobButton}
@@ -1644,31 +1736,54 @@ const styles = StyleSheet.create({
     map: {
         flex: 1,
     },
-    // Vendor car marker - fully rounded circle
+    // Vendor marker container - explicit dimensions required for Android
+    vendorMarkerContainer: {
+        width: 50,
+        height: 50,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    // Vendor person marker - fully rounded circle with shadow
     vendorMarker: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
+        width: 46,
+        height: 46,
+        borderRadius: 23,
         backgroundColor: COLORS.white,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 2,
+        borderWidth: 3,
         borderColor: COLORS.primary,
+        // Shadow for iOS
+        shadowColor: COLORS.black,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 4,
+        // Elevation for Android
+        elevation: 6,
     },
-    // Customer destination marker - fully rounded circle
+    // Customer destination marker container - explicit dimensions for Android
     customerMarkerContainer: {
+        width: 50,
+        height: 60, // Taller to accommodate tail
         alignItems: 'center',
-        justifyContent: 'center',
+        justifyContent: 'flex-start',
     },
     customerMarker: {
-        width: 44,
-        height: 44,
-        borderRadius: 22,
+        width: 46,
+        height: 46,
+        borderRadius: 23,
         backgroundColor: COLORS.accent,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 2,
+        borderWidth: 3,
         borderColor: COLORS.white,
+        // Shadow for iOS
+        shadowColor: COLORS.black,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 4,
+        // Elevation for Android
+        elevation: 6,
     },
     customerMarkerTail: {
         width: 0,

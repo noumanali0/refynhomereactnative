@@ -135,11 +135,15 @@ export default function CustomerHomeScreen() {
           }
           const isExpired = await isActiveServiceExpired();
           if (__DEV__) {
-            console.log('[CustomerHome] isExpired:', isExpired, 'activeService.status !== accepted:', activeService.status !== 'accepted');
-            console.log('[CustomerHome] Condition result:', isExpired && activeService.status !== 'accepted');
+            const isActiveState = ['accepted', 'en_route', 'arrived', 'in_progress'].includes(activeService.status);
+            console.log('[CustomerHome] isExpired:', isExpired, 'isActiveServiceState:', isActiveState);
+            console.log('[CustomerHome] Will clear storage:', isExpired && !isActiveState);
           }
 
-          if (isExpired && activeService.status !== 'accepted') {
+          // Only clear storage if expired AND not in an active service state
+          // For accepted, en_route, arrived, in_progress - keep the data even if expiresAt has passed
+          const isActiveServiceState = ['accepted', 'en_route', 'arrived', 'in_progress'].includes(activeService.status);
+          if (isExpired && !isActiveServiceState) {
             // Request expired and no proposal was accepted - clear storage
             if (__DEV__) {
               console.log('[CustomerHome] Active service expired, clearing storage');
@@ -153,7 +157,7 @@ export default function CustomerHomeScreen() {
           // Update Redux state with full display fields (for OngoingServiceCard fallback)
           dispatch(setCustomerActiveServiceFull({
             requestId: activeService.requestId,
-            status: activeService.status as 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'expired',
+            status: activeService.status as 'pending' | 'accepted' | 'en_route' | 'arrived' | 'in_progress' | 'expired',
             categoryName: activeService.problemTitle ? undefined : undefined, // TODO: Get from category
             problemTitle: activeService.problemTitle,
             vendorName: activeService.acceptedVendor?.full_name,

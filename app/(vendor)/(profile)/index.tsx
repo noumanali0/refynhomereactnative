@@ -299,7 +299,7 @@ export default function VendorProfileScreen() {
                 end={{ x: 1, y: 1 }}
                 style={styles.headerGradient}
             >
-                <Text type="title" style={styles.headerTitle}>My Profile</Text>
+                <Text type="headerTitle" style={styles.headerTitle}>My Profile</Text>
                 <Text type="subtitle" style={styles.headerSubtitle}>Manage your professional information</Text>
             </LinearGradient>
 
@@ -604,7 +604,7 @@ const styles = StyleSheet.create({
         color: COLORS.gray600,
     },
     headerGradient: {
-        paddingTop: verticalScale(20),
+        paddingTop: verticalScale(14),
         paddingBottom: verticalScale(35),
         paddingHorizontal: scale(20),
         borderBottomLeftRadius: moderateScale(24),

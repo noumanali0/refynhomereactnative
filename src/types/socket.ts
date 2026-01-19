@@ -67,6 +67,12 @@ export interface SocketServiceRequest {
   cancellation_reason_code?: string;
   cancellation_reason?: string;
   cancelled_at?: string;
+  // Service timing fields (optional - present when status is 'arrived' or 'in_progress')
+  arrival_time?: string;
+  service_start_time?: string;
+  min_duration_minutes?: number;
+  // Customer acknowledgement tracking (for "I'm Coming" button persistence)
+  customer_coming_acknowledged?: boolean;
 }
 
 export interface SocketProposal {
@@ -165,6 +171,10 @@ export interface ServiceCompletePayload {
   service_request_id: number;
 }
 
+export interface CustomerComingPayload {
+  service_request_id: number;
+}
+
 // Action type union
 export type SocketAction =
   | 'ping'
@@ -180,6 +190,7 @@ export type SocketAction =
   | 'service.start'
   | 'service.complete'
   | 'vendor.cancel'
+  | 'customer.coming'
   | 'proposal.check_expiry'
   | 'service_request.check_expiry';
 
@@ -313,6 +324,19 @@ export interface ServiceCompletedAckEvent {
   message: string;
 }
 
+export interface CustomerComingAckEvent {
+  event: 'customer.coming.ack';
+  service_request_id: number;
+  message: string;
+}
+
+export interface CustomerComingNotificationEvent {
+  event: 'customer.coming.notification';
+  service_request_id: number;
+  message: string;
+  customer_name: string;
+}
+
 export interface SocketErrorEvent {
   event: 'error';
   code: string;
@@ -351,6 +375,8 @@ export type SocketEvent =
   | VendorArrivedNotificationEvent
   | ServiceStartedAckEvent
   | ServiceCompletedAckEvent
+  | CustomerComingAckEvent
+  | CustomerComingNotificationEvent
   | SocketErrorEvent;
 
 // ============================================

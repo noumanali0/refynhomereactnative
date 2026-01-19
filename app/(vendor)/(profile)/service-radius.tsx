@@ -118,7 +118,7 @@ export default function ServiceRadiusScreen() {
                     <Ionicons name="arrow-back" size={24} color={COLORS.white} />
                 </TouchableOpacity>
                 <View style={styles.headerContent}>
-                    <Text type="title" style={styles.headerTitle}>Service Radius</Text>
+                    <Text type="headerTitle" style={styles.headerTitle}>Service Radius</Text>
                     <Text type="body2" style={styles.headerSubtitle}>
                         Set your coverage area
                     </Text>

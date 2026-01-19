@@ -21,15 +21,16 @@ import { serviceRequestApi } from './serviceRequestApi';
 // ============================================================================
 
 /** Active status values that indicate customer has an ongoing request */
-const ACTIVE_STATUSES = ['pending', 'accepted', 'en_route', 'in_progress'];
+const ACTIVE_STATUSES = ['pending', 'accepted', 'en_route', 'arrived', 'in_progress'];
 
 /**
  * Status values that BLOCK creating new requests.
  * Note: 'in_progress' is NOT included - customer CAN create new request
  * when vendor is already working (in_progress status).
  * This allows customer to book multiple vendors for different tasks.
+ * 'arrived' is included - vendor has arrived but not started service yet.
  */
-const BLOCKING_STATUSES = ['pending', 'accepted', 'en_route'];
+const BLOCKING_STATUSES = ['pending', 'accepted', 'en_route', 'arrived'];
 
 /** Single storage key for atomic operations */
 const STORAGE_KEY = 'customer_active_service';
@@ -44,7 +45,7 @@ export const REQUEST_TIMEOUT_SECONDS = 300;
 // Types
 // ============================================================================
 
-export type ActiveServiceStatus = 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'expired';
+export type ActiveServiceStatus = 'pending' | 'accepted' | 'en_route' | 'arrived' | 'in_progress' | 'expired';
 
 export interface CustomerActiveServiceData {
     /** Request ID - mandatory */
@@ -220,7 +221,7 @@ export async function markCustomerActiveServiceExpired(): Promise<void> {
  * Called when service status changes (e.g., to 'in_progress' when vendor arrives)
  */
 export async function updateCustomerActiveServiceStatus(
-    status: 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'expired'
+    status: 'pending' | 'accepted' | 'en_route' | 'arrived' | 'in_progress' | 'expired'
 ): Promise<void> {
     try {
         const existing = await getCustomerActiveService();
@@ -508,6 +509,9 @@ function mapBackendStatusToLocal(backendStatus: string): ActiveServiceStatus {
     }
     if (backendStatus === 'en_route') {
         return 'en_route';
+    }
+    if (backendStatus === 'arrived') {
+        return 'arrived';
     }
     if (backendStatus === 'in_progress') {
         return 'in_progress';

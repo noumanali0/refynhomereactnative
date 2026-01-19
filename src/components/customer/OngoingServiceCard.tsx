@@ -22,7 +22,7 @@ import { COLORS } from '@/constants/colors';
 // TYPES
 // ============================================================================
 
-export type OngoingServiceStatus = 'pending' | 'accepted' | 'en_route' | 'in_progress';
+export type OngoingServiceStatus = 'pending' | 'accepted' | 'en_route' | 'arrived' | 'in_progress';
 
 export interface OngoingServiceCardProps {
   requestId: number;
@@ -54,6 +54,11 @@ const getStatusConfig = (status: OngoingServiceStatus) => {
       return {
         label: 'Vendor En Route',
         color: COLORS.primary,
+      };
+    case 'arrived':
+      return {
+        label: 'Vendor Has Arrived',
+        color: COLORS.success,
       };
     case 'in_progress':
       return {

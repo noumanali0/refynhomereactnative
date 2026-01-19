@@ -250,7 +250,7 @@ export default function AccountSettingsScreen() {
                     <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
                         <Ionicons name="arrow-back" size={24} color={COLORS.white} />
                     </TouchableOpacity>
-                    <Text type="title" style={styles.headerTitle}>Account Settings</Text>
+                    <Text type="headerTitle" style={styles.headerTitle}>Account Settings</Text>
                     <View style={styles.headerSpacer} />
                 </View>
             </LinearGradient>

@@ -402,7 +402,7 @@ export default function WebSocketServiceRequestsScreen() {
             >
                 <View style={styles.headerContent}>
                     <View style={styles.headerTextContainer}>
-                        <Text type="title" style={styles.screenTitle}>Service Requests</Text>
+                        <Text type="headerTitle" style={styles.screenTitle}>Service Requests</Text>
                         <Text type="body" style={styles.screenSubtitle}>
                             {isConnected
                                 ? `${serviceRequests.length} active request${serviceRequests.length !== 1 ? 's' : ''}`

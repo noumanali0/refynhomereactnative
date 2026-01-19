@@ -323,7 +323,7 @@ export default function VendorEditProfileScreen() {
           <TouchableOpacity onPress={handleBack} style={styles.backButton}>
             <Ionicons name="arrow-back" size={24} color={COLORS.white} />
           </TouchableOpacity>
-          <Text type="title" style={styles.headerTitle}>Edit Profile</Text>
+          <Text type="headerTitle" style={styles.headerTitle}>Edit Profile</Text>
           <TouchableOpacity
             onPress={handleSave}
             disabled={!hasChanges() || isSaving}

@@ -279,7 +279,7 @@ export default function HistoryScreen() {
                 end={{ x: 1, y: 1 }}
                 style={styles.header}
             >
-                <Text type="title" style={styles.headerTitle}>Service History</Text>
+                <Text type="headerTitle" style={styles.headerTitle}>Service History</Text>
                 <Text type="subtitle" style={styles.headerSubtitle}>Track your completed jobs</Text>
 
                 {/* Stats Cards */}
@@ -363,7 +363,7 @@ export default function HistoryScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.gray50 },
     header: {
-        paddingTop: verticalScale(60),
+        paddingTop: verticalScale(14),
         paddingBottom: verticalScale(24),
         paddingHorizontal: scale(16),
         borderBottomLeftRadius: moderateScale(24),

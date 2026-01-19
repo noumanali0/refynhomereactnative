@@ -210,7 +210,7 @@ interface DispatchState {
   // Customer Active Service (for logout restriction and home screen card)
   customerActiveService: {
     requestId: number | null;
-    status: 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'expired' | null;
+    status: 'pending' | 'accepted' | 'en_route' | 'arrived' | 'in_progress' | 'expired' | null;
     // Display fields for OngoingServiceCard
     categoryName?: string;
     problemTitle?: string;
@@ -522,8 +522,9 @@ export const connectSocket = createAsyncThunk(
         // NEW: Update customerActiveService if there's an active request
         // This ensures OngoingServiceCard shows after app restart
         // Note: Backend sends 'assigned' status after proposal acceptance (not 'accepted')
+        // IMPORTANT: Include 'arrived' - vendor has marked arrival but hasn't started service yet
         const activeRequest = transformedRequests.find(r =>
-          ['pending', 'accepted', 'assigned', 'en_route', 'in_progress', 'waiting'].includes(r.status)
+          ['pending', 'accepted', 'assigned', 'en_route', 'arrived', 'in_progress', 'waiting'].includes(r.status)
         );
 
         if (activeRequest) {
@@ -531,12 +532,13 @@ export const connectSocket = createAsyncThunk(
           const categoryName = (activeRequest as SocketServiceRequest & { category_detail?: { name: string } }).category_detail?.name;
 
           // Map backend status to OngoingServiceCard status
-          // Backend sends: pending, assigned, en_route, in_progress, waiting
-          // OngoingServiceCard expects: pending, accepted, en_route, in_progress
-          const mapStatus = (backendStatus: string): 'pending' | 'accepted' | 'en_route' | 'in_progress' => {
+          // Backend sends: pending, assigned, en_route, arrived, in_progress, waiting
+          // OngoingServiceCard expects: pending, accepted, en_route, arrived, in_progress
+          const mapStatus = (backendStatus: string): 'pending' | 'accepted' | 'en_route' | 'arrived' | 'in_progress' => {
             if (backendStatus === 'pending') return 'pending';
             if (['assigned', 'waiting', 'accepted'].includes(backendStatus)) return 'accepted';
             if (backendStatus === 'en_route') return 'en_route';
+            if (backendStatus === 'arrived') return 'arrived';
             if (backendStatus === 'in_progress') return 'in_progress';
             return 'pending'; // fallback
           };
@@ -622,7 +624,7 @@ export const connectSocket = createAsyncThunk(
         } else {
           dispatch(clearCustomerActiveServiceState());
           if (__DEV__) {
-            console.log('[Dispatch] proposals.synced: No active request found in statuses [pending, accepted, en_route, in_progress]');
+            console.log('[Dispatch] proposals.synced: No active request found in statuses [pending, accepted, en_route, arrived, in_progress]');
           }
         }
       })
@@ -656,7 +658,14 @@ export const connectSocket = createAsyncThunk(
           return;
         }
 
-        if (__DEV__) console.log('[Dispatch] service_request.updated:', request.id, request.status);
+        if (__DEV__) {
+          console.log('[Dispatch] service_request.updated:', request.id, request.status);
+          const state = getState() as RootState;
+          console.log('[Dispatch] service_request.updated - Current customerActiveService:', {
+            requestId: state.dispatch.customerActiveService.requestId,
+            status: state.dispatch.customerActiveService.status,
+          });
+        }
 
         // Check if service was completed - trigger review flow for customer
         if (request.status === 'completed') {
@@ -782,8 +791,50 @@ export const connectSocket = createAsyncThunk(
           }
         }
 
+        // Handle vendor arrived (arrived status)
+        // Update customerActiveService status when vendor marks arrival
+        if (request.status === 'arrived') {
+          const state = getState() as RootState;
+          const isCustomerRequest = !!state.dispatch.customerRequestsById[request.id];
+          const isCurrentRequest = state.dispatch.currentCustomerRequestId === request.id;
+          const isActiveService = state.dispatch.customerActiveService.requestId === request.id;
+
+          if (__DEV__) {
+            console.log('[Dispatch] Vendor arrived event received:', {
+              requestId: request.id,
+              status: request.status,
+              isCustomerRequest,
+              isCurrentRequest,
+              isActiveService,
+              currentCustomerRequestId: state.dispatch.currentCustomerRequestId,
+              customerActiveServiceRequestId: state.dispatch.customerActiveService.requestId,
+            });
+          }
+
+          if (isCustomerRequest || isCurrentRequest || isActiveService) {
+            // Update Redux state to 'arrived'
+            dispatch(setCustomerActiveService({
+              requestId: request.id,
+              status: 'arrived',
+            }));
+
+            // Persist to SecureStore
+            const { updateCustomerActiveServiceStatus } = require('@/services/customerActiveServiceService');
+            updateCustomerActiveServiceStatus('arrived').catch((err: Error) => {
+              if (__DEV__) console.warn('[Dispatch] Failed to persist arrived status:', err);
+            });
+
+            if (__DEV__) {
+              console.log('[Dispatch] Vendor arrived - status changed to arrived:', request.id);
+            }
+          } else if (__DEV__) {
+            console.warn('[Dispatch] Vendor arrived event for unknown request:', request.id,
+              '- Not in customerRequestsById, currentCustomerRequestId, or customerActiveService');
+          }
+        }
+
         // Handle service started (in_progress status)
-        // Update customerActiveService status when vendor arrives and service starts
+        // Update customerActiveService status when vendor starts service work
         if (request.status === 'in_progress') {
           const state = getState() as RootState;
           const isCustomerRequest = !!state.dispatch.customerRequestsById[request.id];
@@ -1518,7 +1569,166 @@ export const startRoute = createAsyncThunk(
 );
 
 /**
- * Vendor: Arrive at location
+ * Vendor: Mark arrival at customer location (NEW FLOW)
+ *
+ * This uses the new `vendor.arrived` action which:
+ * - Requires GPS coordinates for validation (vendor must be within 100m)
+ * - Transitions status: EN_ROUTE → ARRIVED
+ * - Customer receives real-time notification
+ * - After this, vendor can call `startService` to begin work
+ */
+export const markVendorArrived = createAsyncThunk(
+  'dispatch/markVendorArrived',
+  async (
+    { serviceRequestId, latitude, longitude }: { serviceRequestId: number; latitude: number; longitude: number },
+    { dispatch }
+  ) => {
+    const pendingKey = `vendor_arrived_${serviceRequestId}`;
+
+    dispatch(setPendingAction({ key: pendingKey, value: true }));
+
+    // Track cleanup functions at thunk scope
+    let unsub: (() => void) | null = null;
+    let errorUnsub: (() => void) | null = null;
+    let timeout: NodeJS.Timeout | null = null;
+
+    // Cleanup helper - ALWAYS cleans up everything
+    const cleanup = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
+      if (unsub) {
+        unsub();
+        unsub = null;
+      }
+      if (errorUnsub) {
+        errorUnsub();
+        errorUnsub = null;
+      }
+      dispatch(setPendingAction({ key: pendingKey, value: false }));
+    };
+
+    try {
+      socketService.send('vendor.arrived', {
+        service_request_id: serviceRequestId,
+        latitude,
+        longitude,
+      });
+
+      return await new Promise((resolve, reject) => {
+        let resolved = false;
+
+        timeout = setTimeout(() => {
+          if (resolved) return;
+          resolved = true;
+          cleanup();
+          reject(new Error('Arrival confirmation timeout'));
+        }, ACK_TIMEOUT);
+
+        // Listen for success
+        unsub = socketService.on('vendor.arrived.ack', (data: any) => {
+          if (data.service_request_id === serviceRequestId && !resolved) {
+            resolved = true;
+            cleanup();
+            resolve(data);
+          }
+        });
+
+        // Listen for errors (e.g., not within range)
+        errorUnsub = socketService.on('error', (data: any) => {
+          if (!resolved && (data.code === 'too_far' || data.code === 'invalid_state' || data.code === 'not_allowed')) {
+            resolved = true;
+            cleanup();
+            reject(new Error(data.message || 'Failed to mark arrival'));
+          }
+        });
+      });
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+  }
+);
+
+/**
+ * Vendor: Start service after arrival (NEW FLOW)
+ *
+ * This uses the `service.start` action which:
+ * - Can only be called after vendor has marked arrival (status: ARRIVED)
+ * - Transitions status: ARRIVED → IN_PROGRESS
+ * - Starts the 5-minute minimum timer before completion
+ */
+export const startService = createAsyncThunk(
+  'dispatch/startService',
+  async (serviceRequestId: number, { dispatch }) => {
+    const pendingKey = `service_start_${serviceRequestId}`;
+
+    dispatch(setPendingAction({ key: pendingKey, value: true }));
+
+    // Track cleanup functions at thunk scope
+    let unsub: (() => void) | null = null;
+    let errorUnsub: (() => void) | null = null;
+    let timeout: NodeJS.Timeout | null = null;
+
+    // Cleanup helper
+    const cleanup = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
+      if (unsub) {
+        unsub();
+        unsub = null;
+      }
+      if (errorUnsub) {
+        errorUnsub();
+        errorUnsub = null;
+      }
+      dispatch(setPendingAction({ key: pendingKey, value: false }));
+    };
+
+    try {
+      socketService.send('service.start', { service_request_id: serviceRequestId });
+
+      return await new Promise((resolve, reject) => {
+        let resolved = false;
+
+        timeout = setTimeout(() => {
+          if (resolved) return;
+          resolved = true;
+          cleanup();
+          reject(new Error('Start service timeout'));
+        }, ACK_TIMEOUT);
+
+        // Listen for success
+        unsub = socketService.on('service.started.ack', (data: any) => {
+          if (data.service_request_id === serviceRequestId && !resolved) {
+            resolved = true;
+            cleanup();
+            resolve(data);
+          }
+        });
+
+        // Listen for errors
+        errorUnsub = socketService.on('error', (data: any) => {
+          if (!resolved && (data.code === 'invalid_state' || data.code === 'not_allowed')) {
+            resolved = true;
+            cleanup();
+            reject(new Error(data.message || 'Failed to start service'));
+          }
+        });
+      });
+    } catch (error) {
+      cleanup();
+      throw error;
+    }
+  }
+);
+
+/**
+ * Vendor: Arrive at location (LEGACY - for backward compatibility)
+ * @deprecated Use markVendorArrived + startService instead
  */
 export const arriveAtLocation = createAsyncThunk(
   'dispatch/arrive',
@@ -1639,14 +1849,66 @@ const dispatchSlice = createSlice({
       state.serviceRequestIds.unshift(request.id); // Add to beginning
     },
 
-    // Vendor: Update service request
+    // Update service request (works for both vendor and customer)
     updateServiceRequest: (state, action: PayloadAction<SocketServiceRequest>) => {
       const request = action.payload;
+
+      // Update vendor's view
       state.serviceRequestsById[request.id] = request;
 
-      // Add to list if not present
+      // Add to vendor list if not present
       if (!state.serviceRequestIds.includes(request.id)) {
         state.serviceRequestIds.unshift(request.id);
+      }
+
+      // Check if this is the customer's active request
+      // This handles edge cases where request was removed from customerRequestsById
+      // (e.g., sync issues, race conditions) but it's still the active service
+      const isCurrentCustomerRequest = state.currentCustomerRequestId === request.id;
+      const isActiveCustomerService = state.customerActiveService.requestId === request.id;
+      const isCustomerActiveRequest = isCurrentCustomerRequest || isActiveCustomerService;
+
+      // Update customer's view if request exists there
+      // This ensures customer UI updates when backend sends service_request.updated
+      // (e.g., when vendor marks arrival, status changes to 'arrived')
+      if (state.customerRequestsById[request.id]) {
+        // Preserve existing proposals array when updating
+        const existingProposals = state.customerRequestsById[request.id].proposals || [];
+        state.customerRequestsById[request.id] = {
+          ...request,
+          proposals: existingProposals,
+        };
+      } else if (isCustomerActiveRequest) {
+        // Request is customer's active request but not in customerRequestsById
+        // Add it back to ensure UI updates correctly
+        // This can happen after sync clears stale requests or due to race conditions
+        state.customerRequestsById[request.id] = {
+          ...request,
+          proposals: [], // Will be populated by proposal events
+        };
+
+        // Also add to customerRequestIds if not present
+        if (!state.customerRequestIds.includes(request.id)) {
+          state.customerRequestIds.unshift(request.id);
+        }
+
+        if (__DEV__) {
+          console.log('[Dispatch] Re-added active request to customerRequestsById:', request.id, request.status);
+        }
+      }
+
+      // CRITICAL FIX: Also update customerActiveService.status when request matches
+      // This ensures status changes (like 'arrived') propagate to home screen card
+      // even when the event arrives before proposals.synced sets up the state
+      if (state.customerActiveService.requestId === request.id) {
+        const validStatuses = ['pending', 'accepted', 'en_route', 'arrived', 'in_progress'];
+        if (validStatuses.includes(request.status)) {
+          state.customerActiveService.status = request.status as 'pending' | 'accepted' | 'en_route' | 'arrived' | 'in_progress';
+          state.customerActiveService.lastSyncAt = Date.now();
+          if (__DEV__) {
+            console.log('[Dispatch] updateServiceRequest: Updated customerActiveService.status to:', request.status);
+          }
+        }
       }
     },
 
@@ -2109,7 +2371,7 @@ const dispatchSlice = createSlice({
     // Customer Active Service (for logout restriction and home screen card)
     setCustomerActiveService: (
       state,
-      action: PayloadAction<{ requestId: number; status: 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'expired' }>
+      action: PayloadAction<{ requestId: number; status: 'pending' | 'accepted' | 'en_route' | 'arrived' | 'in_progress' | 'expired' }>
     ) => {
       state.customerActiveService = {
         ...state.customerActiveService,
@@ -2125,7 +2387,7 @@ const dispatchSlice = createSlice({
       state,
       action: PayloadAction<{
         requestId: number;
-        status: 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'expired';
+        status: 'pending' | 'accepted' | 'en_route' | 'arrived' | 'in_progress' | 'expired';
         categoryName?: string;
         problemTitle?: string;
         vendorName?: string;
@@ -2524,9 +2786,10 @@ export const selectCustomerHasActiveJob = (state: RootState): {
     };
   }
 
-  // Block logout for 'accepted', 'en_route', 'in_progress' status (service in progress)
+  // Block logout for 'accepted', 'en_route', 'arrived', 'in_progress' status (service in progress)
   if (customerActiveService.status === 'accepted' ||
       customerActiveService.status === 'en_route' ||
+      customerActiveService.status === 'arrived' ||
       customerActiveService.status === 'in_progress') {
     return {
       hasActiveJob: true,
@@ -2559,7 +2822,7 @@ export const selectCustomerActiveServiceForDisplay = (state: RootState) => {
 
   return {
     requestId: customerActiveService.requestId,
-    status: customerActiveService.status as 'pending' | 'accepted' | 'en_route' | 'in_progress',
+    status: customerActiveService.status as 'pending' | 'accepted' | 'en_route' | 'arrived' | 'in_progress',
     categoryName: customerActiveService.categoryName,
     problemTitle: customerActiveService.problemTitle,
     vendorName: customerActiveService.vendorName,

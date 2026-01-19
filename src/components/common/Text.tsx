@@ -14,6 +14,7 @@ export type ThemedTextProps = TextProps & {
     | "bodySemiBold"
     | "subtitle2"
     | "title"
+    | "headerTitle"
     | "subtitle"
     | "link"
     | "caption"
@@ -72,6 +73,11 @@ const typeStyles = StyleSheet.create({
         lineHeight: moderateScale(27),
         fontFamily: "Poppins-Bold",
         color: COLORS.black,
+    },
+    headerTitle: {
+        fontSize: moderateScale(28),
+        lineHeight: moderateScale(34),
+        fontFamily: "Poppins-ExtraBold",
     },
     subtitle: {
         fontSize: moderateScale(14),
