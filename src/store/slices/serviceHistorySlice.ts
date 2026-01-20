@@ -252,7 +252,7 @@ export const selectFilteredHistory = createSelector(
 
     if (filter === 'active') {
       return requests.filter(r =>
-        ['pending', 'accepted', 'en_route', 'in_progress'].includes(r.status)
+        ['pending', 'accepted', 'en_route', 'arrived', 'in_progress'].includes(r.status)
       );
     }
 
@@ -281,7 +281,7 @@ export const selectHistoryStats = createSelector(
     }).length;
 
     const activeCount = requests.filter(r =>
-      ['pending', 'accepted', 'en_route', 'in_progress'].includes(r.status)
+      ['pending', 'accepted', 'en_route', 'arrived', 'in_progress'].includes(r.status)
     ).length;
     const completedCount = requests.filter(r => r.status === 'completed').length;
 

@@ -687,8 +687,8 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.gray50,
   },
   header: {
-    paddingTop: verticalScale(50),
-    paddingBottom: verticalScale(16),
+    paddingTop: verticalScale(14),
+    paddingBottom: verticalScale(26),
     paddingHorizontal: scale(16),
     borderBottomLeftRadius: moderateScale(24),
     borderBottomRightRadius: moderateScale(24),

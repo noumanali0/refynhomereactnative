@@ -228,7 +228,7 @@ const styles = StyleSheet.create({
         backgroundColor: COLORS.gray50,
     },
     header: {
-        paddingTop: verticalScale(50),
+        paddingTop: verticalScale(14),
         paddingBottom: verticalScale(24),
         paddingHorizontal: scale(20),
         borderBottomLeftRadius: moderateScale(24),
@@ -247,8 +247,6 @@ const styles = StyleSheet.create({
         marginLeft: scale(4),
     },
     headerTitle: {
-        fontSize: moderateScale(28),
-        fontWeight: '800',
         color: COLORS.white,
         marginBottom: verticalScale(4),
     },

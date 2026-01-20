@@ -138,6 +138,7 @@ export interface Review {
   comment: string;
   createdAt: string;
   customerName: string;
+  customerPhoto?: string;
 }
 
 export interface ChatMessage {

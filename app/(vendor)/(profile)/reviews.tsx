@@ -424,7 +424,7 @@ const styles = StyleSheet.create({
         backgroundColor: COLORS.gray50,
     },
     header: {
-        paddingTop: verticalScale(50),
+        paddingTop: verticalScale(14),
         paddingBottom: verticalScale(20),
         paddingHorizontal: scale(16),
         borderBottomLeftRadius: moderateScale(24),

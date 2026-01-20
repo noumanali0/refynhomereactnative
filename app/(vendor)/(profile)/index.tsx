@@ -611,8 +611,6 @@ const styles = StyleSheet.create({
         borderBottomRightRadius: moderateScale(24),
     },
     headerTitle: {
-        fontSize: moderateScale(28),
-        fontWeight: '800',
         color: COLORS.white,
         marginBottom: verticalScale(4),
     },

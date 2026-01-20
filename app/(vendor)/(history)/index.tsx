@@ -369,7 +369,7 @@ const styles = StyleSheet.create({
         borderBottomLeftRadius: moderateScale(24),
         borderBottomRightRadius: moderateScale(24),
     },
-    headerTitle: { fontSize: moderateScale(28), color: COLORS.white, marginBottom: verticalScale(4) },
+    headerTitle: { color: COLORS.white, marginBottom: verticalScale(4) },
     headerSubtitle: { color: 'rgba(255,255,255,0.9)', marginBottom: verticalScale(20) },
     statsContainer: { flexDirection: 'row', gap: scale(12) },
     statCard: {

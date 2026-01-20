@@ -723,8 +723,8 @@ export default function AccountSettingsScreen() {
 const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: COLORS.gray50 },
     header: {
-        paddingTop: verticalScale(50),
-        paddingBottom: verticalScale(16),
+        paddingTop: verticalScale(14),
+        paddingBottom: verticalScale(26),
         paddingHorizontal: scale(16),
         borderBottomLeftRadius: moderateScale(24),
         borderBottomRightRadius: moderateScale(24),
@@ -738,7 +738,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    headerTitle: { flex: 1, textAlign: 'center', color: COLORS.white },
+    headerTitle: { flex: 1, textAlign: 'center', color: COLORS.white, fontSize:verticalScale(24) },
     headerSpacer: { width: moderateScale(40) },
     content: { flex: 1 },
     contentContainer: { paddingBottom: verticalScale(32) },

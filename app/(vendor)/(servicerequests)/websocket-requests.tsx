@@ -58,6 +58,7 @@ export default function WebSocketServiceRequestsScreen() {
     // WebSocket selectors
     const connectionStatus = useSelector(selectConnectionStatus);
     const isConnected = useSelector(selectIsConnected);
+    console.log("🚀 ~ WebSocketServiceRequestsScreen ~ isConnected:", isConnected)
     const serviceRequests = useSelector(selectServiceRequests);
 
     // Active job selector - if vendor has active service, redirect to it

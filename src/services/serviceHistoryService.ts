@@ -53,7 +53,7 @@ export interface ServiceHistoryRequest {
   address_line: string;
   latitude: number;
   longitude: number;
-  status: 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'completed' | 'cancelled' | 'expired';
+  status: 'pending' | 'accepted' | 'en_route' | 'arrived' | 'in_progress' | 'completed' | 'cancelled' | 'expired';
   // Backend returns assigned_vendor_detail (not assigned_vendor)
   assigned_vendor_detail: ServiceHistoryVendor | null;
   accepted_proposal: ServiceHistoryProposal | null;
@@ -85,7 +85,7 @@ export interface ServiceHistoryResponse {
 }
 
 export interface ServiceHistoryFilters {
-  status?: 'pending' | 'accepted' | 'en_route' | 'in_progress' | 'completed' | 'cancelled' | 'expired';
+  status?: 'pending' | 'accepted' | 'en_route' | 'arrived' | 'in_progress' | 'completed' | 'cancelled' | 'expired';
   page?: number;
   page_size?: number;
   limit?: number; // Alias for page_size, used for home screen recent services
