@@ -60,6 +60,12 @@ export default function ProfileScreen() {
     // Check if customer has active service (blocks logout)
     const { hasActiveJob, reason: activeJobReason } = useAppSelector(selectCustomerHasActiveJob);
 
+    // Get user display info
+    const userName = user?.name || `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'User';
+    const userPhone = user?.phone || user?.phoneNumber || '';
+    // Use profilePhoto (camelCase from authService) with snake_case fallback
+    const userProfilePhoto = user?.profilePhoto || (user as any)?.profile_photo_url || (user as any)?.profile_photo || imageUri;
+
     // Fetch latest profile on mount
     useEffect(() => {
         dispatch(fetchUserProfile());
@@ -69,12 +75,6 @@ export default function ProfileScreen() {
     useEffect(() => {
         setImageLoadError(false);
     }, [userProfilePhoto]);
-
-    // Get user display info
-    const userName = user?.name || `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'User';
-    const userPhone = user?.phone || user?.phoneNumber || '';
-    // Use profilePhoto (camelCase from authService) with snake_case fallback
-    const userProfilePhoto = user?.profilePhoto || (user as any)?.profile_photo_url || (user as any)?.profile_photo || imageUri;
 
     const handleLogout = () => {
         // Block logout if customer has active service
@@ -618,7 +618,7 @@ const styles = StyleSheet.create({
         flex: 1,
         borderRadius: moderateScale(56),
         overflow: "hidden",
-        backgroundColor: "#fff",
+        // backgroundColor: "#fff",
     },
     avatar: {
         width: "100%",
@@ -629,7 +629,7 @@ const styles = StyleSheet.create({
         height: "100%",
         justifyContent: "center",
         alignItems: "center",
-        borderRadius: moderateScale(56),
+        // borderRadius handled by parent's overflow: "hidden"
     },
     editIcon: {
         position: "absolute",

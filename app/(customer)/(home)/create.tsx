@@ -771,13 +771,7 @@ const FormContent = memo(function FormContent({
 
                 {/* Buttons */}
                 <View style={styles.buttonContainer}>
-                    <TouchableOpacity
-                        style={styles.cancelButton}
-                        onPress={onGoBack}
-                        activeOpacity={0.7}
-                    >
-                        <Text type="bodySemiBold" style={styles.cancelButtonText}>Cancel</Text>
-                    </TouchableOpacity>
+                    
 
                     <TouchableOpacity
                         disabled={!values.isAgreed || isSubmitting}
@@ -812,6 +806,13 @@ const FormContent = memo(function FormContent({
                             )}
                         </LinearGradient>
                     </TouchableOpacity>
+                    {/* <TouchableOpacity
+                        style={styles.cancelButton}
+                        onPress={onGoBack}
+                        activeOpacity={0.7}
+                    >
+                        <Text type="bodySemiBold" style={styles.cancelButtonText}>Cancel</Text>
+                    </TouchableOpacity> */}
                 </View>
             </ScrollView>
         </View>
@@ -1426,40 +1427,40 @@ const styles = StyleSheet.create({
     },
     buttonContainer: {
         flexDirection: 'row',
-        gap: scale(2),
+        alignItems: 'center',
+        gap: scale(12),
         marginTop: verticalScale(8),
-        // backgroundColor:"green"
+        // backgroundColor:"red"
     },
     cancelButton: {
-        // flex: 1,
+        flex: 1,
         borderWidth: 1.5,
         borderColor: COLORS.primary,
         borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
-        paddingVertical: verticalScale(12),
-        paddingHorizontal: scale(12),
+        paddingVertical: verticalScale(14),
+        paddingHorizontal: scale(10),
         justifyContent: 'center',
         alignItems: 'center',
         backgroundColor: COLORS.white,
-        width:moderateScale(150)
     },
     cancelButtonText: {
         color: COLORS.primary,
         fontSize: moderateScale(13),
     },
     submitButtonWrapper: {
-        // flex: 1,
+        flex: 1,
         borderRadius: FORM_CONSTANTS.INPUT_BORDER_RADIUS,
         overflow: 'hidden',
-        marginLeft:moderateScale(20)
+        alignSelf:"center"
+        
     },
     submitButton: {
+        flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        // gap: scale(8),
         paddingVertical: verticalScale(14),
         paddingHorizontal: scale(14),
-        width:moderateScale(150)
     },
     submitButtonText: {
         color: COLORS.white,
