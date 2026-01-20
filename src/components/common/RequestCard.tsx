@@ -25,6 +25,7 @@ import type { LiveRequest, CustomerRequestInfo } from '@/services/types';
 import { useRequestTimer } from '@/hooks/useRequestTimer';
 import { formatDistance, calculateETA } from '@/utils/distanceCache';
 import { COLORS } from '@/constants/colors';
+import { formatCountdownTime } from '@/utils/dateFormatters';
 
 interface Props {
     request: LiveRequest;
@@ -204,7 +205,7 @@ const RequestCardInner = ({ request, distance, onPress, isNew = false }: Props) 
                                 size={14}
                                 color={COLORS.white}
                             />
-                            <Text style={styles.timerText}>{timer.timeLeftSeconds}s</Text>
+                            <Text style={styles.timerText}>{formatCountdownTime(timer.timeLeftSeconds)}</Text>
                         </View>
                     </View>
 

@@ -297,3 +297,59 @@ export function formatDuration(milliseconds: number): string {
     }
     return `${seconds}s`;
 }
+
+// ============================================================================
+// Countdown Timer Formatting
+// ============================================================================
+
+/**
+ * Format countdown time for request/proposal timers
+ * - >= 60 seconds: Shows M:SS format (e.g., "5:00", "1:30")
+ * - < 60 seconds: Shows just seconds (e.g., "45s")
+ * - 0 or negative: Shows "0s"
+ *
+ * @param seconds - Remaining time in seconds
+ * @returns Formatted countdown string
+ *
+ * @example
+ * formatCountdownTime(300) // "5:00"
+ * formatCountdownTime(90)  // "1:30"
+ * formatCountdownTime(45)  // "45s"
+ * formatCountdownTime(5)   // "5s"
+ * formatCountdownTime(0)   // "0s"
+ */
+export function formatCountdownTime(seconds: number): string {
+    // Handle edge cases
+    if (seconds <= 0) return '0s';
+
+    // Less than 60 seconds - show just seconds
+    if (seconds < 60) {
+        return `${Math.floor(seconds)}s`;
+    }
+
+    // 60+ seconds - show M:SS format
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = Math.floor(seconds % 60);
+    const paddedSeconds = remainingSeconds.toString().padStart(2, '0');
+
+    return `${minutes}:${paddedSeconds}`;
+}
+
+/**
+ * Format countdown time with urgency indicator
+ * Returns both formatted time and urgency status
+ *
+ * @param seconds - Remaining time in seconds
+ * @param urgencyThreshold - Seconds below which is considered urgent (default: 30)
+ * @returns Object with formatted time, isUrgent flag, and raw seconds
+ */
+export function formatCountdownWithUrgency(
+    seconds: number,
+    urgencyThreshold: number = 30
+): { formatted: string; isUrgent: boolean; seconds: number } {
+    return {
+        formatted: formatCountdownTime(seconds),
+        isUrgent: seconds > 0 && seconds <= urgencyThreshold,
+        seconds: Math.max(0, Math.floor(seconds)),
+    };
+}

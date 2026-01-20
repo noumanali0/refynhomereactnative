@@ -24,7 +24,7 @@ import {
 import Text from '@/components/common/Text';
 import CancelJobModal from '@/components/vendor/CancelJobModal';
 import CompleteServiceModal from '@/components/vendor/CompleteServiceModal';
-import MapView, { Marker, Polyline, PROVIDER_DEFAULT, UrlTile } from 'react-native-maps';
+import MapView, { Marker, Polyline, PROVIDER_DEFAULT, UrlTile, AnimatedRegion } from 'react-native-maps';
 import * as Location from 'expo-location';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { useSelector, useDispatch } from 'react-redux';
@@ -48,6 +48,7 @@ import {
     removeServiceRequest,
 } from '@/store/slices/dispatchSlice';
 import { COLORS } from '@/constants/colors';
+import { formatCountdownTime } from '@/utils/dateFormatters';
 import type { Coordinates } from '@/types/socket';
 import { serviceRequestApi, type VendorCancelReasonCode } from '@/services/serviceRequestApi';
 import { socketService } from '@/services/socketService';
@@ -216,6 +217,46 @@ export default function WebSocketRequestDetailsScreen() {
     const isMountedRef = useRef<boolean>(true);
     const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const progressAnimationRef = useRef<Animated.CompositeAnimation | null>(null);
+    // Track last rendered location to prevent unnecessary UI updates (prevents marker blinking)
+    const lastRenderedLocationRef = useRef<Coordinates | null>(null);
+
+    // Animated marker coordinate (prevents blinking, smooth movement like InDrive)
+    const animatedVendorCoord = useRef(new AnimatedRegion({
+        latitude: 0,
+        longitude: 0,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+    })).current;
+
+    // Helper: Check if location changed significantly (> 5 meters)
+    const hasLocationChangedSignificantly = useCallback((newCoords: Coordinates): boolean => {
+        if (!lastRenderedLocationRef.current) return true;
+
+        const lat1 = lastRenderedLocationRef.current.latitude;
+        const lon1 = lastRenderedLocationRef.current.longitude;
+        const lat2 = newCoords.latitude;
+        const lon2 = newCoords.longitude;
+
+        // Quick Haversine approximation for small distances
+        const R = 6371000; // Earth radius in meters
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        const distance = R * c;
+
+        return distance > 5; // Only update UI if moved > 5 meters
+    }, []);
+
+    // Update vendor location with throttling (prevents marker blinking)
+    const updateVendorLocationThrottled = useCallback((newCoords: Coordinates) => {
+        if (hasLocationChangedSignificantly(newCoords)) {
+            lastRenderedLocationRef.current = newCoords;
+            setVendorLocation(newCoords);
+        }
+    }, [hasLocationChangedSignificantly]);
 
     // Customer location from request
     const customerLocation = useMemo(() => {
@@ -565,7 +606,16 @@ export default function WebSocketRequestDetailsScreen() {
                         latitude: location.coords.latitude,
                         longitude: location.coords.longitude,
                     };
+                    // Set initial location (update state, ref, and animated coord)
+                    lastRenderedLocationRef.current = coords;
                     setVendorLocation(coords);
+                    // Initialize animated marker position
+                    animatedVendorCoord.setValue({
+                        latitude: coords.latitude,
+                        longitude: coords.longitude,
+                        latitudeDelta: 0.01,
+                        longitudeDelta: 0.01,
+                    });
                     setIsLoading(false);
 
                     // Send location to backend immediately (required for proposal validation)
@@ -710,8 +760,18 @@ export default function WebSocketRequestDetailsScreen() {
                             console.log('[VendorDetails] Location updated (foreground with bg backup):', newCoords);
                         }
 
-                        // Update local state for UI
-                        setVendorLocation(newCoords);
+                        // Animate marker smoothly to new position (InDrive-like)
+                        animatedVendorCoord.timing({
+                            latitude: newCoords.latitude,
+                            longitude: newCoords.longitude,
+                            latitudeDelta: 0.01,
+                            longitudeDelta: 0.01,
+                            duration: 500,
+                            useNativeDriver: false,
+                        }).start();
+
+                        // Update local state for UI (throttled for distance calculations)
+                        updateVendorLocationThrottled(newCoords);
 
                         // CRITICAL: Also dispatch to server via WebSocket
                         // This ensures location updates work even with mock locations
@@ -748,7 +808,18 @@ export default function WebSocketRequestDetailsScreen() {
                             console.log('[VendorDetails] Location updated (foreground):', newCoords);
                         }
 
-                        setVendorLocation(newCoords);
+                        // Animate marker smoothly to new position (InDrive-like)
+                        animatedVendorCoord.timing({
+                            latitude: newCoords.latitude,
+                            longitude: newCoords.longitude,
+                            latitudeDelta: 0.01,
+                            longitudeDelta: 0.01,
+                            duration: 500,
+                            useNativeDriver: false,
+                        }).start();
+
+                        // Update local state for UI (throttled for distance calculations)
+                        updateVendorLocationThrottled(newCoords);
                         dispatch(updateLocation(newCoords));
                     }
                 );
@@ -1106,38 +1177,61 @@ export default function WebSocketRequestDetailsScreen() {
     }, [requestId, showToast]);
 
     // =========================================================================
-    // MEMOIZED ROUTE POLYLINES
-    // IMPORTANT: Moved outside JSX to prevent "rendered more hooks" error
-    // This useMemo MUST be called before the early returns to maintain hook order
-    // Now uses routeCoords from useRouteTracking hook for consistency with customer side
+    // MEMOIZED MAP MARKERS (prevents blinking on re-renders)
+    // AnimatedRegion handles smooth movement without re-renders
     // =========================================================================
+
+    // Vendor marker uses Marker.Animated for smooth movement (no blinking)
+    const vendorMarker = useMemo(() => {
+        if (!vendorLocation) return null;
+        return (
+            <Marker.Animated
+                key="vendor-marker"
+                coordinate={animatedVendorCoord}
+                anchor={{ x: 0.5, y: 0.5 }}
+            >
+                <FontAwesome5 name="user-tie" size={24} color={COLORS.primary} />
+            </Marker.Animated>
+        );
+    }, [vendorLocation, animatedVendorCoord]);
+
+    const customerMarker = useMemo(() => {
+        if (!customerLocation) return null;
+        return (
+            <Marker
+                key="customer-marker"
+                coordinate={customerLocation}
+                anchor={{ x: 0.5, y: 1 }}
+            >
+                <Ionicons name="location" size={36} color={COLORS.accent} />
+            </Marker>
+        );
+    }, [customerLocation]);
+
+    // =========================================================================
+    // MEMOIZED ROUTE POLYLINES (Memory Optimized)
+    // - Single polyline instead of 3 layers (reduces memory 3x)
+    // - Route points limited to 100 max (prevents memory growth)
+    // =========================================================================
+    const optimizedRouteCoords = useMemo(() => {
+        if (routeCoords.length <= 100) return routeCoords;
+        // Downsample: take every nth point to get ~100 points
+        const step = Math.ceil(routeCoords.length / 100);
+        return routeCoords.filter((_, i) => i % step === 0 || i === routeCoords.length - 1);
+    }, [routeCoords]);
+
     const routePolylines = useMemo(() => {
-        if (routeCoords.length === 0) {
+        if (optimizedRouteCoords.length === 0) {
             return null;
         }
         return (
-            <>
-                {/* Shadow/glow layer */}
-                <Polyline
-                    coordinates={routeCoords}
-                    strokeColor="rgba(29, 78, 216, 0.15)"
-                    strokeWidth={10}
-                />
-                {/* Middle layer */}
-                <Polyline
-                    coordinates={routeCoords}
-                    strokeColor="rgba(29, 78, 216, 0.4)"
-                    strokeWidth={6}
-                />
-                {/* Main route line */}
-                <Polyline
-                    coordinates={routeCoords}
-                    strokeColor={COLORS.primary}
-                    strokeWidth={4}
-                />
-            </>
+            <Polyline
+                coordinates={optimizedRouteCoords}
+                strokeColor={COLORS.primary}
+                strokeWidth={4}
+            />
         );
-    }, [routeCoords]);
+    }, [optimizedRouteCoords]);
 
     // Show loader when navigating after completion (prevents "not found" flash)
     if (isCompletionNavigating) {
@@ -1268,32 +1362,9 @@ export default function WebSocketRequestDetailsScreen() {
                         shouldReplaceMapContent={true}
                     />
                 )} */}
-                {/* Vendor Marker - Person icon */}
-                <Marker
-                    coordinate={vendorLocation}
-                    anchor={{ x: 0.5, y: 0.5 }}
-                    tracksViewChanges={false}
-                >
-                    <View collapsable={false} style={styles.vendorMarkerContainer}>
-                        <View collapsable={false} style={styles.vendorMarker}>
-                            <Ionicons name="person" size={22} color={COLORS.primary} />
-                        </View>
-                    </View>
-                </Marker>
-
-                {/* Customer Location Marker */}
-                <Marker
-                    coordinate={customerLocation}
-                    anchor={{ x: 0.5, y: 1 }}
-                    tracksViewChanges={false}
-                >
-                    <View collapsable={false} style={styles.customerMarkerContainer}>
-                        <View collapsable={false} style={styles.customerMarker}>
-                            <Ionicons name="location" size={22} color={COLORS.white} />
-                        </View>
-                        <View style={styles.customerMarkerTail} />
-                    </View>
-                </Marker>
+                {/* Memoized markers - prevents blinking on re-renders */}
+                {vendorMarker}
+                {customerMarker}
 
                 {/* Route with 3-layer gradient effect */}
                 {/* Memoized outside JSX to prevent "rendered more hooks" error */}
@@ -1357,7 +1428,7 @@ export default function WebSocketRequestDetailsScreen() {
                         />
                     </View>
                     <Text type="body" style={styles.timerText}>
-                        Request expires in {timeLeft}s
+                        Request expires in {formatCountdownTime(timeLeft)}
                     </Text>
                 </View>
             )}
@@ -1378,7 +1449,7 @@ export default function WebSocketRequestDetailsScreen() {
                         Waiting for customer response...
                     </Text>
                     <View style={styles.lockTimerBadge}>
-                        <Text type="bodySemiBold" style={styles.lockTimerText}>{timeLeft}s</Text>
+                        <Text type="bodySemiBold" style={styles.lockTimerText}>{formatCountdownTime(timeLeft)}</Text>
                     </View>
                 </View>
             )}
@@ -1546,7 +1617,7 @@ export default function WebSocketRequestDetailsScreen() {
                                 <View style={styles.waitingBanner}>
                                     <Ionicons name="time-outline" size={18} color={COLORS.warning} />
                                     <Text type="body" style={styles.waitingText}>
-                                        Waiting for customer response... {timeLeft}s
+                                        Waiting for customer response... {formatCountdownTime(timeLeft)}
                                     </Text>
                                 </View>
                             )}
@@ -1735,55 +1806,33 @@ const styles = StyleSheet.create({
     },
     map: {
         flex: 1,
+        // backgroundColor:"red"
     },
-    // Vendor marker container - explicit dimensions required for Android
-    vendorMarkerContainer: {
+    // Vendor car marker - fully rounded circle
+    vendorMarker: {
         width: 50,
         height: 50,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    // Vendor person marker - fully rounded circle with shadow
-    vendorMarker: {
-        width: 46,
-        height: 46,
-        borderRadius: 23,
+        borderRadius: 25,
         backgroundColor: COLORS.white,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 3,
+        borderWidth: 2,
         borderColor: COLORS.primary,
-        // Shadow for iOS
-        shadowColor: COLORS.black,
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 4,
-        // Elevation for Android
-        elevation: 6,
     },
-    // Customer destination marker container - explicit dimensions for Android
+    // Customer destination marker - fully rounded circle
     customerMarkerContainer: {
-        width: 50,
-        height: 60, // Taller to accommodate tail
         alignItems: 'center',
-        justifyContent: 'flex-start',
+        justifyContent: 'center',
     },
     customerMarker: {
-        width: 46,
-        height: 46,
-        borderRadius: 23,
+        width: 50,
+        height: 50,
+        borderRadius: 25,
         backgroundColor: COLORS.accent,
         justifyContent: 'center',
         alignItems: 'center',
-        borderWidth: 3,
+        borderWidth: 2,
         borderColor: COLORS.white,
-        // Shadow for iOS
-        shadowColor: COLORS.black,
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.25,
-        shadowRadius: 4,
-        // Elevation for Android
-        elevation: 6,
     },
     customerMarkerTail: {
         width: 0,

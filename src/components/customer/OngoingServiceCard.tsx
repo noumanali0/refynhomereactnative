@@ -17,6 +17,7 @@ import { moderateScale, scale, verticalScale } from 'react-native-size-matters';
 
 import Text from '@/components/common/Text';
 import { COLORS } from '@/constants/colors';
+import { formatCountdownTime } from '@/utils/dateFormatters';
 
 // ============================================================================
 // TYPES
@@ -73,12 +74,7 @@ const getStatusConfig = (status: OngoingServiceStatus) => {
   }
 };
 
-const formatTimeLeft = (seconds: number): string => {
-  if (seconds <= 0) return '0:00';
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
-};
+// formatTimeLeft removed - using centralized formatCountdownTime from dateFormatters
 
 // ============================================================================
 // COMPONENT
@@ -148,7 +144,7 @@ export const OngoingServiceCard: React.FC<OngoingServiceCardProps> = ({
         {timeLeft !== null && timeLeft > 0 && (
           <View style={styles.timerContainer}>
             <Ionicons name="time-outline" size={14} color={COLORS.gray600} />
-            <Text style={styles.timerText}>{formatTimeLeft(timeLeft)}</Text>
+            <Text style={styles.timerText}>{formatCountdownTime(timeLeft)}</Text>
           </View>
         )}
       </View>

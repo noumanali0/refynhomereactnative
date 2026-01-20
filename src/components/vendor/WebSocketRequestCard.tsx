@@ -14,6 +14,7 @@ import { moderateScale, scale, verticalScale } from 'react-native-size-matters';
 import { LinearGradient } from 'expo-linear-gradient';
 import type { SocketServiceRequest } from '@/types/socket';
 import { COLORS } from '@/constants/colors';
+import { formatCountdownTime } from '@/utils/dateFormatters';
 
 interface Props {
     request: SocketServiceRequest;
@@ -215,7 +216,7 @@ const WebSocketRequestCardInner = ({ request, onPress, isNew = false }: Props) =
                                     size={14}
                                     color={COLORS.white}
                                 />
-                                <Text style={styles.timerText}>{timeLeft}s</Text>
+                                <Text style={styles.timerText}>{formatCountdownTime(timeLeft)}</Text>
                             </View>
                         )}
                     </View>

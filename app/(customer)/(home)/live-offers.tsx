@@ -24,6 +24,7 @@ import MapView, {
     Marker,
     PROVIDER_DEFAULT,
     Polyline,
+    AnimatedRegion,
 } from "react-native-maps";
 import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -40,6 +41,7 @@ import RatingModal from "@/components/common/RatingModal";
 import CancelRequestModal from "@/components/customer/CancelRequestModal";
 import ErrorBoundary from "@/components/common/ErrorBoundary";
 import { COLORS } from "@/constants/colors";
+import { formatCountdownTime } from "@/utils/dateFormatters";
 import { lightMapStyle, routeColors, routeWidths, calculateBearing } from "@/constants/mapStyles";
 import { serviceRequestApi, type CreateServiceRequestParams, type CustomerCancelReasonCode } from "@/services/serviceRequestApi";
 import { socketService } from "@/services/socketService";
@@ -459,7 +461,7 @@ const ProposalCard = React.memo(({
                 {isPending ? (
                     <View style={[styles.timerBadge, isUrgent && styles.timerBadgeUrgent]}>
                         <Ionicons name={isUrgent ? 'timer' : 'time'} size={14} color={COLORS.white} />
-                        <Text style={styles.proposalTimerText}>{timeLeft}s</Text>
+                        <Text style={styles.proposalTimerText}>{formatCountdownTime(timeLeft)}</Text>
                     </View>
                 ) : statusBadge ? (
                     <View style={[styles.statusBadge, { backgroundColor: statusBadge.color + '20' }]}>
@@ -635,6 +637,14 @@ export default function LiveOffersScreen() {
     // Refs to track map initialization state (prevents blinking/jerking)
     const hasInitialMapFitRef = useRef(false);
     const lastZoomLevelRef = useRef<string | null>(null);
+
+    // Animated vendor marker coordinate (prevents blinking, smooth movement like InDrive)
+    const animatedVendorCoord = useRef(new AnimatedRegion({
+        latitude: 0,
+        longitude: 0,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+    })).current;
 
     // Redux state
     const connectionStatus = useSelector(selectConnectionStatus);
@@ -941,6 +951,21 @@ export default function LiveOffersScreen() {
             console.log('[LiveOffers] Vendor location updated from Redux:', vendorLocation);
         }
     }, [vendorLocation]);
+
+    // Animate vendor marker smoothly when location changes (prevents blinking)
+    useEffect(() => {
+        if (!vendorLocation) return;
+
+        // Animate marker smoothly to new position (InDrive-like)
+        animatedVendorCoord.timing({
+            latitude: vendorLocation.latitude,
+            longitude: vendorLocation.longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+            duration: 500,
+            useNativeDriver: false,
+        }).start();
+    }, [vendorLocation, animatedVendorCoord]);
 
     // Debug: Log route updates
     useEffect(() => {
@@ -2176,45 +2201,36 @@ export default function LiveOffersScreen() {
     }, [originalRequestParams, router, showToast]);
 
     /**
-     * Renders map markers - styled circular markers with icons
-     * Uses collapsable={false} for Android rendering and tracksViewChanges={false} for memory optimization
+     * Renders map markers - simple icon markers
+     * AnimatedRegion handles smooth movement without re-renders
      */
     function renderMarkers(): React.ReactNode {
         if (!serviceLocation) return null;
 
         return (
             <>
-                {/* Service Address Marker - Styled pin with tail */}
+                {/* Service Address Marker - Simple location icon */}
                 <Marker
                     key="service-location"
                     coordinate={serviceLocation}
                     anchor={{ x: 0.5, y: 1 }}
-                    tracksViewChanges={false}
                 >
-                    <View collapsable={false} style={styles.destinationMarkerContainer}>
-                        <View collapsable={false} style={styles.destinationPin}>
-                            <Ionicons name="location" size={22} color={COLORS.white} />
-                        </View>
-                        <View style={styles.destinationPinTail} />
-                    </View>
+                    <Ionicons name="location" size={36} color={COLORS.accent} />
                 </Marker>
 
-                {/* Vendor Marker - Person icon in styled circle */}
+                {/* Vendor Marker - Animated for smooth movement (InDrive-like) */}
                 {acceptedProposal && vendorLocation && !serviceCancelledByVendor && (
-                    <Marker
-                        key={`vendor-${acceptedProposal.id}`}
-                        coordinate={vendorLocation}
+                    <Marker.Animated
+                        key="vendor-marker"
+                        coordinate={animatedVendorCoord}
                         anchor={{ x: 0.5, y: 0.5 }}
-                        tracksViewChanges={false}
                     >
-                        <View collapsable={false} style={vendorHasArrived ? styles.carMarkerArrived : styles.carMarkerContainer}>
-                            <Ionicons
-                                name="person"
-                                size={22}
-                                color={vendorHasArrived ? COLORS.success : COLORS.primary}
-                            />
-                        </View>
-                    </Marker>
+                        <Ionicons
+                            name="construct"
+                            size={28}
+                            color={vendorHasArrived ? COLORS.success : COLORS.primary}
+                        />
+                    </Marker.Animated>
                 )}
             </>
         );
@@ -2259,39 +2275,31 @@ export default function LiveOffersScreen() {
     }, [serviceLocation, initStage]);
 
     // =========================================================================
-    // MEMOIZED ROUTE POLYLINES
-    // IMPORTANT: Moved outside JSX to prevent "rendered more hooks" error
-    // This useMemo MUST be called before the early return to maintain hook order
+    // MEMOIZED ROUTE POLYLINES (Memory Optimized)
+    // - Single polyline instead of 3 layers (reduces memory 3x)
+    // - Route points limited to 100 max (prevents memory growth)
     // =========================================================================
+    const optimizedRouteCoords = useMemo(() => {
+        if (routeCoords.length <= 100) return routeCoords;
+        // Downsample: take every nth point to get ~100 points
+        const step = Math.ceil(routeCoords.length / 100);
+        return routeCoords.filter((_, i) => i % step === 0 || i === routeCoords.length - 1);
+    }, [routeCoords]);
+
     const routePolylines = useMemo(() => {
         // Hide route when vendor has arrived (status = 'arrived') or service started (status = 'in_progress')
         const vendorHasArrivedOrServiceStarted = currentRequest?.status === 'arrived' || currentRequest?.status === 'in_progress';
-        if (routeCoords.length === 0 || serviceCancelledByVendor || vendorHasArrivedOrServiceStarted) {
+        if (optimizedRouteCoords.length === 0 || serviceCancelledByVendor || vendorHasArrivedOrServiceStarted) {
             return null;
         }
         return (
-            <>
-                {/* Shadow/glow layer */}
-                <Polyline
-                    coordinates={routeCoords}
-                    strokeColor={routeColors.shadow}
-                    strokeWidth={routeWidths.shadow}
-                />
-                {/* Middle layer */}
-                <Polyline
-                    coordinates={routeCoords}
-                    strokeColor={routeColors.middle}
-                    strokeWidth={routeWidths.middle}
-                />
-                {/* Main route line */}
-                <Polyline
-                    coordinates={routeCoords}
-                    strokeColor={routeColors.main}
-                    strokeWidth={routeWidths.main}
-                />
-            </>
+            <Polyline
+                coordinates={optimizedRouteCoords}
+                strokeColor={routeColors.main}
+                strokeWidth={routeWidths.main}
+            />
         );
-    }, [routeCoords, serviceCancelledByVendor, currentRequest?.status]);
+    }, [optimizedRouteCoords, serviceCancelledByVendor, currentRequest?.status]);
 
     // =========================================================================
     // STAGED LOADING SCREEN
@@ -2847,6 +2855,7 @@ const styles = StyleSheet.create({
         justifyContent: 'flex-start',
     },
 
+    // Note: Removed elevation as it causes rendering issues with custom map markers on Android
     destinationPin: {
         width: 46,
         height: 46,
@@ -2856,13 +2865,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         borderWidth: 3,
         borderColor: COLORS.white,
-        // Shadow for iOS
+        // Shadow for iOS only
         shadowColor: COLORS.black,
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.25,
         shadowRadius: 4,
-        // Elevation for Android
-        elevation: 6,
     },
 
     destinationPinTail: {
@@ -2876,8 +2883,8 @@ const styles = StyleSheet.create({
         borderTopColor: COLORS.accent,
         marginTop: -2,
     },
-    // Vendor person marker - fully rounded circle with shadow
-    // Note: This is used directly without a container wrapper
+    // Vendor person marker - fully rounded circle
+    // Note: Removed elevation as it causes rendering issues with custom map markers on Android
     carMarkerContainer: {
         width: 50,
         height: 50,
@@ -2887,14 +2894,13 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         borderWidth: 3,
         borderColor: COLORS.primary,
-        // Shadow for iOS
+        // Shadow for iOS only
         shadowColor: COLORS.black,
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.25,
         shadowRadius: 4,
-        // Elevation for Android
-        elevation: 6,
     },
+    // Note: Removed elevation as it causes rendering issues with custom map markers on Android
     carMarkerArrived: {
         width: 50,
         height: 50,
@@ -2904,13 +2910,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         borderWidth: 3,
         borderColor: COLORS.success,
-        // Shadow for iOS
+        // Shadow for iOS only
         shadowColor: COLORS.black,
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.25,
         shadowRadius: 4,
-        // Elevation for Android
-        elevation: 6,
     },
 
     // Tracking info card
