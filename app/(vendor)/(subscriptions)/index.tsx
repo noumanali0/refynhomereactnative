@@ -32,7 +32,7 @@ const SubscriptionsScreen = () => {
               end={{ x: 1, y: 1 }}
               style={styles.iconGradient}
             >
-              <Ionicons name="rocket-outline" size={48} color={COLORS.white} />
+              <Ionicons name="rocket-outline" size={36} color={COLORS.white} />
             </LinearGradient>
           </View>
 
@@ -46,13 +46,13 @@ const SubscriptionsScreen = () => {
           <View style={styles.featuresContainer}>
             <View style={styles.featureItem}>
               <View style={styles.featureIcon}>
-                <Ionicons name="flash" size={20} color={COLORS.primary} />
+                <Ionicons name="flash" size={18} color={COLORS.primary} />
               </View>
               <Text type="body2" style={styles.featureText}>Priority Requests</Text>
             </View>
             <View style={styles.featureItem}>
               <View style={styles.featureIcon}>
-                <Ionicons name="star" size={20} color={COLORS.warning} />
+                <Ionicons name="star" size={18} color={COLORS.warning} />
               </View>
               <Text type="body2" style={styles.featureText}>Premium Badge</Text>
             </View>
@@ -72,7 +72,7 @@ const SubscriptionsScreen = () => {
 
           {/* Stay Tuned Badge */}
           <View style={styles.badge}>
-            <Ionicons name="notifications-outline" size={16} color={COLORS.primary} />
+            <Ionicons name="notifications-outline" size={14} color={COLORS.primary} />
             <Text type="caption" style={styles.badgeText}>Stay tuned for updates!</Text>
           </View>
         </View>
@@ -94,8 +94,6 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: moderateScale(24),
   },
   headerTitle: {
-    fontSize: moderateScale(28),
-    fontWeight: '800',
     color: COLORS.white,
     marginBottom: verticalScale(4),
   },
@@ -107,65 +105,65 @@ const styles = StyleSheet.create({
     flex: 1,
     padding: scale(20),
     justifyContent: 'center',
-    marginTop: verticalScale(-20),
+    marginTop: verticalScale(20),
   },
   card: {
     backgroundColor: COLORS.white,
-    borderRadius: moderateScale(24),
-    padding: scale(32),
+    borderRadius: moderateScale(20),
+    padding: scale(20),
     alignItems: 'center',
     shadowColor: COLORS.black,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.1,
-    shadowRadius: 24,
-    elevation: 8,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 4,
   },
   iconCircle: {
-    marginBottom: verticalScale(24),
+    marginBottom: verticalScale(16),
   },
   iconGradient: {
-    width: moderateScale(100),
-    height: moderateScale(100),
-    borderRadius: moderateScale(50),
+    width: moderateScale(72),
+    height: moderateScale(72),
+    borderRadius: moderateScale(36),
     justifyContent: 'center',
     alignItems: 'center',
   },
   title: {
-    fontSize: moderateScale(28),
-    fontWeight: '800',
+    fontSize: moderateScale(22),
+    fontWeight: '700',
     color: COLORS.gray900,
-    marginBottom: verticalScale(12),
+    marginBottom: verticalScale(8),
     textAlign: 'center',
   },
   description: {
-    fontSize: moderateScale(15),
+    fontSize: moderateScale(13),
     color: COLORS.gray600,
     textAlign: 'center',
-    lineHeight: moderateScale(24),
-    marginBottom: verticalScale(28),
-    paddingHorizontal: scale(8),
+    lineHeight: moderateScale(20),
+    marginBottom: verticalScale(20),
+    paddingHorizontal: scale(4),
   },
   featuresContainer: {
     width: '100%',
-    marginBottom: verticalScale(24),
+    marginBottom: verticalScale(16),
   },
   featureItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: verticalScale(12),
-    paddingHorizontal: scale(16),
+    paddingVertical: verticalScale(10),
+    paddingHorizontal: scale(12),
     backgroundColor: COLORS.gray50,
-    borderRadius: moderateScale(12),
-    marginBottom: verticalScale(10),
+    borderRadius: moderateScale(10),
+    marginBottom: verticalScale(8),
   },
   featureIcon: {
-    width: moderateScale(36),
-    height: moderateScale(36),
-    borderRadius: moderateScale(18),
+    width: moderateScale(32),
+    height: moderateScale(32),
+    borderRadius: moderateScale(16),
     backgroundColor: COLORS.white,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: scale(12),
+    marginRight: scale(10),
     shadowColor: COLORS.black,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.05,
@@ -173,7 +171,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   featureText: {
-    fontSize: moderateScale(14),
+    fontSize: moderateScale(13),
     color: COLORS.gray700,
     fontWeight: '500',
   },
@@ -181,13 +179,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.primary + '10',
-    paddingVertical: verticalScale(10),
-    paddingHorizontal: scale(20),
-    borderRadius: moderateScale(20),
-    gap: scale(8),
+    paddingVertical: verticalScale(8),
+    paddingHorizontal: scale(16),
+    borderRadius: moderateScale(16),
+    gap: scale(6),
   },
   badgeText: {
-    fontSize: moderateScale(13),
+    fontSize: moderateScale(12),
     color: COLORS.primary,
     fontWeight: '600',
   },
