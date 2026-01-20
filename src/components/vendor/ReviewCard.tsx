@@ -7,12 +7,14 @@
  */
 
 import React, { memo, useState } from 'react';
-import { View, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, TouchableOpacity, StyleSheet, Image } from 'react-native';
 import Text from '@/components/common/Text';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { moderateScale, scale, verticalScale } from 'react-native-size-matters';
 import { RatingStars } from '@/components/common/RatingStars';
 import { COLORS } from '@/constants/colors';
+import { formatTimeOnly } from '@/utils/dateFormatters';
 import type { Review } from '@/types';
 
 // ============================================================================
@@ -37,28 +39,30 @@ const ReviewCardComponent = ({
     const [isExpanded, setIsExpanded] = useState(false);
     const [showExpandButton, setShowExpandButton] = useState(false);
 
-    // Format date to relative time
+    // Format date to relative time with time of day
     const formatDate = (dateString: string): string => {
         const date = new Date(dateString);
         const now = new Date();
-        const diffInMs = now.getTime() - date.getTime();
-        const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
+        const time = formatTimeOnly(date);
 
-        if (diffInDays === 0) return 'Today';
-        if (diffInDays === 1) return 'Yesterday';
-        if (diffInDays < 7) return `${diffInDays} days ago`;
-        if (diffInDays < 30) return `${Math.floor(diffInDays / 7)} weeks ago`;
-        if (diffInDays < 365) return `${Math.floor(diffInDays / 30)} months ago`;
-        return `${Math.floor(diffInDays / 365)} years ago`;
-    };
+        // Compare calendar dates (not just 24-hour periods)
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const reviewDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+        const diffInCalendarDays = Math.floor((today.getTime() - reviewDate.getTime()) / (1000 * 60 * 60 * 24));
 
-    // Get initials from customer name
-    const getInitials = (name: string): string => {
-        const parts = name.trim().split(' ');
-        if (parts.length >= 2) {
-            return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+        if (diffInCalendarDays === 0) return `Today at ${time}`;
+        if (diffInCalendarDays === 1) return `Yesterday at ${time}`;
+        if (diffInCalendarDays < 7) return `${diffInCalendarDays} days ago at ${time}`;
+        if (diffInCalendarDays < 30) {
+            const weeks = Math.floor(diffInCalendarDays / 7);
+            return `${weeks} ${weeks === 1 ? 'week' : 'weeks'} ago`;
         }
-        return name.substring(0, 2).toUpperCase();
+        if (diffInCalendarDays < 365) {
+            const months = Math.floor(diffInCalendarDays / 30);
+            return `${months} ${months === 1 ? 'month' : 'months'} ago`;
+        }
+        const years = Math.floor(diffInCalendarDays / 365);
+        return `${years} ${years === 1 ? 'year' : 'years'} ago`;
     };
 
     // Handle text layout to determine if truncation happened
@@ -73,10 +77,22 @@ const ReviewCardComponent = ({
         <View style={styles.card}>
             {/* Customer Info Row */}
             <View style={styles.header}>
-                {/* Avatar with Initials */}
-                <View style={styles.avatar}>
-                    <Text type="bodySemiBold" style={styles.avatarText}>{getInitials(review.customerName)}</Text>
-                </View>
+                {/* Avatar - Profile Pic or User Icon */}
+                {review.customerPhoto ? (
+                    <Image
+                        source={{ uri: review.customerPhoto }}
+                        style={styles.avatarImage}
+                    />
+                ) : (
+                    <LinearGradient
+                        colors={[COLORS.primary, COLORS.accent]}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.avatar}
+                    >
+                        <Ionicons name="person" size={moderateScale(22)} color={COLORS.white} />
+                    </LinearGradient>
+                )}
 
                 {/* Customer Name and Date */}
                 <View style={styles.customerInfo}>
@@ -156,13 +172,13 @@ const styles = StyleSheet.create({
         width: moderateScale(44),
         height: moderateScale(44),
         borderRadius: moderateScale(22),
-        backgroundColor: COLORS.primary50,
         justifyContent: 'center',
         alignItems: 'center',
     },
-    avatarText: {
-        fontSize: moderateScale(16),
-        color: COLORS.primary,
+    avatarImage: {
+        width: moderateScale(44),
+        height: moderateScale(44),
+        borderRadius: moderateScale(22),
     },
     customerInfo: {
         flex: 1,
